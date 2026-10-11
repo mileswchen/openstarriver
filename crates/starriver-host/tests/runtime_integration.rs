@@ -4542,10 +4542,10 @@ fn session_messages_project_file_changes_from_persisted_log() {
 }
 
 mod vision_degrade_e2e {
-    //! Text-only gating: sending an image to a text-only model
-    //! (supports_vision=false) → images never ride the wire (cold metadata
-    //! placeholders, WI-152); vision-capable models still receive Image
-    //! blocks as usual.
+    //! Text-only gating: a route that rejects image content records in the
+    //! runtime error memory (WI-152 S4) and every later request degrades to
+    //! cold metadata placeholders (WI-152 S2) instead of putting image data
+    //! back on the wire; vision-capable models still receive Image blocks.
 
     use base64::Engine as _;
     use futures::stream::{BoxStream, StreamExt};
@@ -4557,6 +4557,10 @@ mod vision_degrade_e2e {
     pub struct CapturingAdapter {
         pub provider: String,
         pub captured: Arc<Mutex<Vec<Vec<Message>>>>,
+        /// Fail any request carrying an Image block with the exact
+        /// GLM/bigmodel validation error (code 1210) — the rejection whose
+        /// Chinese wording no English keyword probe could match.
+        pub reject_images: bool,
     }
 
     impl LlmAdapter for CapturingAdapter {
@@ -4569,6 +4573,20 @@ mod vision_degrade_e2e {
             options: GenerateOptions,
         ) -> BoxStream<'static, Result<StreamChunk, LlmError>> {
             self.captured.lock().unwrap().push(options.messages.clone());
+            if self.reject_images
+                && options
+                    .messages
+                    .iter()
+                    .any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::Image { .. })))
+            {
+                return Box::pin(futures::stream::iter(vec![Err(LlmError::Call {
+                    code: "INVALID_REQUEST".into(),
+                    message: "{\"error\":{\"code\":\"1210\",\"message\":\"messages.content.type 参数非法，取值范围 ['text']\"}}".into(),
+                    status: Some(400),
+                    provider_retry_after_ms: None,
+                    request_id: None,
+                })]));
+            }
             Box::pin(futures::stream::iter(vec![
                 Ok(StreamChunk::TextDelta {
                     index: 0,
@@ -4600,7 +4618,6 @@ mod vision_degrade_e2e {
 
 #[test]
 fn text_only_model_never_receives_image_blocks() {
-    use starriver_host::CODING_AGENT_NAME;
     with_temp_home(|dir| {
         let host = host_in(dir);
         host.add_model(
@@ -4620,13 +4637,14 @@ fn text_only_model_never_receives_image_blocks() {
             Some("openai-chat".into()),
             None,
             None,
-            Some(false),
+            None,
         )
         .expect("add model");
         let captured = Arc::new(Mutex::new(Vec::new()));
         host.debug_register_adapter(Arc::new(vision_degrade_e2e::CapturingAdapter {
             provider: "text-prov".into(),
             captured: Arc::clone(&captured),
+            reject_images: true,
         }));
 
         let admitted = host
@@ -4638,6 +4656,9 @@ fn text_only_model_never_receives_image_blocks() {
         assert!(!admitted.is_empty(), "image must be admitted");
         let ref_id = admitted[0].id.clone();
 
+        // Turn 1: the undeclared route rejects the image with GLM's Chinese
+        // validation error (code 1210) — no English keyword anywhere in the
+        // text, so this turn fails and only the error memory can adapt.
         let rx = host
             .execute(
                 format!("look at ![shot]({ref_id})"),
@@ -4646,7 +4667,35 @@ fn text_only_model_never_receives_image_blocks() {
                 None,
                 None,
                 None,
-            
+
+                None,)
+            .expect("execute");
+        wait_terminal(&host, rx);
+
+        // WI-152 S4: the runtime error memory records the route as text-only
+        // (this execute carries no explicit model, so the route key holds the
+        // empty model — the same key the next execute's precheck reads).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while host.active_model_supports_vision_for("text-prov", "") != Some(false) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the GLM 1210 rejection must mark the route text-only"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // Turn 2: same route, same image — the request degrades to text-only
+        // placeholders and the adapter (still rejecting images) succeeds.
+        captured.lock().unwrap().clear();
+        let rx = host
+            .execute(
+                format!("look again ![shot]({ref_id})"),
+                Some("degrade-2".into()),
+                None,
+                None,
+                None,
+                None,
+
                 None,)
             .expect("execute");
         wait_terminal(&host, rx);
@@ -4719,6 +4768,7 @@ fn vision_model_still_receives_image_blocks() {
         host.debug_register_adapter(Arc::new(vision_degrade_e2e::CapturingAdapter {
             provider: "vision-prov".into(),
             captured: Arc::clone(&captured),
+            reject_images: false,
         }));
 
         let admitted = host
@@ -5726,6 +5776,7 @@ fn five_small_images_in_one_message_all_ride() {
         host.debug_register_adapter(Arc::new(vision_degrade_e2e::CapturingAdapter {
             provider: "five-prov".into(),
             captured: Arc::clone(&captured),
+            reject_images: false,
         }));
 
         let mut refs = Vec::new();
@@ -5799,6 +5850,7 @@ fn byte_budget_sheds_oldest_images_e2e() {
         host.debug_register_adapter(Arc::new(vision_degrade_e2e::CapturingAdapter {
             provider: "budget-prov".into(),
             captured: Arc::clone(&captured),
+            reject_images: false,
         }));
 
         let mut refs = Vec::new();
@@ -6168,6 +6220,7 @@ fn zero_byte_budget_disables_images_e2e() {
         host.debug_register_adapter(Arc::new(vision_degrade_e2e::CapturingAdapter {
             provider: "zero-prov".into(),
             captured: Arc::clone(&captured),
+            reject_images: false,
         }));
 
         let payload = image_projection_e2e::png_base64(99);

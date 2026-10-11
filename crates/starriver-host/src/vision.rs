@@ -3,9 +3,10 @@
 //! Replaces the per-provider "supports_vision" checkbox as the primary source
 //! of truth: cloud providers whose current model families accept image input
 //! are declared `Some(true)` here, text-only families `Some(false)`, and
-//! local/self-hosted providers stay undeclared (`None`, decided per model by
-//! the user). The user's explicit UI declaration always wins over this table
-//! (WI-152 S1, /`inputModalities` alignment).
+//! mixed/local/self-hosted providers stay undeclared (`None`) — permissive,
+//! with the runtime error memory (WI-152 S4) correcting a route that rejects
+//! images in practice. Resolution is fully automatic (WI-152 v2); the stored
+//! `supports_vision` declaration is legacy and ignored.
 
 /// Built-in vision declaration for one provider id.
 ///
@@ -14,12 +15,46 @@
 /// `None` = undeclared (local/self-hosted, per-model).
 pub fn builtin_vision(provider_id: &str) -> Option<bool> {
     match provider_id {
-        "deepseek" | "zhipu" | "qwen" | "gemini" | "openai" | "anthropic" | "openrouter" => {
-            Some(true)
-        }
+        // zhipu stays undeclared: the family mixes text-only routes (the GLM
+        // Coding Plan endpoints reject every non-text content block with
+        // `messages.content.type 参数非法，取值范围 ['text']`) with vision
+        // models (glm-*-v). A table-backed `Some(true)` made the route
+        // unlearnable — image turns failed on the coding endpoints and the
+        // runtime error memory could never correct it. Undeclared routes are
+        // permissive but learn from rejections (WI-152 S4).
+        "deepseek" | "qwen" | "gemini" | "openai" | "anthropic" | "openrouter" => Some(true),
         "moonshot" => Some(false),
         _ => None,
     }
+}
+
+/// Whether a turn error message is a provider rejecting non-text content
+/// (the text-only rejection probe for the runtime error memory, WI-152 S4).
+/// Matches the phrasings observed from major providers — English keyword
+/// families plus the GLM/bigmodel validation error (`content.type` /
+/// allowed-range-to-text wording), which the English-only list could never
+/// see, leaving such routes failing on every image turn.
+pub fn is_text_only_rejection(message: &str) -> bool {
+    let msg = message.to_lowercase();
+    [
+        "image",
+        "vision",
+        "multimodal",
+        "multi-modal",
+        "not supported",
+        "unsupported",
+        "does not support",
+        "text-only",
+        // GLM/bigmodel 1210: `messages.content.type 参数非法，取值范围 ['text']`
+        "content.type",
+        "取值范围 ['text']",
+        "仅支持文本",
+        "只支持文本",
+        "不支持图片",
+        "不支持图像",
+    ]
+    .iter()
+    .any(|k| msg.contains(k))
 }
 
 /// Effective vision support for one provider route (WI-152 v2: fully
@@ -41,7 +76,6 @@ mod tests {
     fn builtin_table_covers_the_cloud_presets() {
         for id in [
             "deepseek",
-            "zhipu",
             "qwen",
             "gemini",
             "openai",
@@ -51,8 +85,32 @@ mod tests {
             assert_eq!(builtin_vision(id), Some(true), "{id} should declare vision");
         }
         assert_eq!(builtin_vision("moonshot"), Some(false));
+        // Mixed family (text-only coding endpoints + vision models): must stay
+        // undeclared so the runtime error memory can learn per route.
+        assert_eq!(builtin_vision("zhipu"), None);
         assert_eq!(builtin_vision("ollama"), None);
         assert_eq!(builtin_vision("custom-endpoint"), None);
+    }
+
+    /// The exact GLM/bigmodel rejection that used to slip past the
+    /// English-only probe — no "image"/"vision"/"unsupported" token in it,
+    /// so the runtime never recorded the route as text-only and every image
+    /// turn failed identically.
+    #[test]
+    fn glm_content_type_rejection_is_detected() {
+        assert!(is_text_only_rejection(
+            "model call failed: INVALID_REQUEST: {\"error\":{\"code\":\"1210\",\"message\":\"messages.content.type 参数非法，取值范围 ['text']\"}}"
+        ));
+        assert!(is_text_only_rejection(
+            "messages[0].content.type 参数非法，取值范围 ['text']"
+        ));
+        assert!(is_text_only_rejection("该模型仅支持文本输入"));
+        assert!(is_text_only_rejection("Input image not supported by this model"));
+        assert!(is_text_only_rejection("MODEL IS TEXT-ONLY"));
+        // Unrelated failures must not poison the route.
+        assert!(!is_text_only_rejection("rate limit exceeded"));
+        assert!(!is_text_only_rejection("max_tokens 取值范围非法"));
+        assert!(!is_text_only_rejection("invalid api key"));
     }
 
     #[test]

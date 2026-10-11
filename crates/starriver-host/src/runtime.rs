@@ -1804,18 +1804,14 @@ impl HostRuntime {
                         .await
                         {
                             Ok(Ok(ev)) if ev["type"] == "turnError" => {
-                                let msg = ev["error"].as_str().unwrap_or("").to_lowercase();
-                                let keywords = [
-                                    "image",
-                                    "vision",
-                                    "multimodal",
-                                    "multi-modal",
-                                    "not supported",
-                                    "unsupported",
-                                    "does not support",
-                                ];
+                                let msg = ev["error"].as_str().unwrap_or("");
+                                // GLM/bigmodel's Chinese validation error
+                                // (`messages.content.type 参数非法，取值范围
+                                // ['text']`) matched none of the English
+                                // keywords, so the route never learned and
+                                // every image turn failed identically.
                                 if vision_memory_eligible
-                                    && keywords.iter().any(|k| msg.contains(k))
+                                    && crate::vision::is_text_only_rejection(msg)
                                 {
                                     Self::text_only_providers()
                                         .lock()
