@@ -1,0 +1,43 @@
+target/
+node_modules/
+*.node
+release/
+dist/
+.tmp-build/
+.DS_Store
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.superpowers/
+.worktrees/
+starriver-desktop.db
+# Compiled binaries / static libraries
+mobile/Sources/CStarriver/libstarriver_mobile.a
+xcuserdata/
+xcshareddata/
+project.xcworkspace/
+xcuserdata/
+xcshareddata/
+project.xcworkspace/
+
+# ZCode local session state
+.zcode/
+/crates/starriver-host/out.txt
+
+# session scratch
+.tmp-cargo/
+.tmp-test/
+.tmp-logos/
+.tmp-css-hunk.patch
+.tmp-build/
+.nexplan/
+
+# Generated from TypeScript by tsc + esbuild (start-electron.sh / package-mac.sh
+# rebuild them; committing them caused the preload.ts/preload.js desync class).
+desktop/electron/main.js
+desktop/electron/preload.js
+desktop/electron/daemon.js
+desktop/electron/legacyBridge.js
+desktop/electron/*.js.map
+desktop/electron/renderer/bundle.js

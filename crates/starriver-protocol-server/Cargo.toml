@@ -1,0 +1,28 @@
+[package]
+name = "starriver-protocol-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Starriver 协议目录与 loopback HTTP/SSE 服务器（desktop / daemon 共用）"
+
+[lib]
+name = "starriver_protocol_server"
+path = "src/lib.rs"
+
+[dependencies]
+starriver-host = { path = "../starriver-host" }
+starriver-protocol = { path = "../starriver-protocol" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+sha1 = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true }
+tempfile = { workspace = true }
+futures = { workspace = true }

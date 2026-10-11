@@ -1,0 +1,15 @@
+{
+  "name": "@starriver/tui",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "main": "src/app.tsx",
+  "scripts": {
+    "start": "node --watch src/app.tsx",
+    "build:rust": "cd ../../ && cargo build -p starriver-desktop --release"
+  },
+  "dependencies": {
+    "ink": "^5.0.0",
+    "react": "^19.0.0"
+  }
+}

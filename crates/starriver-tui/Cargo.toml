@@ -1,0 +1,25 @@
+[package]
+name = "starriver-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Starriver 终端 TUI（直连 starriver-host）"
+
+[dependencies]
+starriver-host = { path = "../starriver-host" }
+starriver-kernel = { path = "../starriver-kernel" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+unicode-width = "0.2"
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
+starriver-session = { path = "../starriver-session" }
+tempfile = "3"

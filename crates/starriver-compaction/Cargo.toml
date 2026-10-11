@@ -1,0 +1,19 @@
+[package]
+name = "starriver-compaction"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Compaction capability: pressure/overflow-triggered conversation condensation"
+
+[lib]
+name = "starriver_compaction"
+path = "src/lib.rs"
+
+[dependencies]
+futures = { workspace = true }
+starriver-kernel = { path = "../starriver-kernel" }
+tracing = { workspace = true }
+
+[dev-dependencies]
+cordis-rslite = { path = "../cordis-rslite" }

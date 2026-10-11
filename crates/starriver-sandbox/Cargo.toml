@@ -1,0 +1,43 @@
+[package]
+name = "starriver-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Starriver OS 沙箱后端 — Seatbelt (macOS) / bubblewrap + Landlock (Linux) / write-restricted token (Windows)"
+
+[lib]
+name = "starriver_sandbox"
+path = "src/lib.rs"
+
+# Windows helper (WI-73): tokio/std cannot spawn a process with a custom
+# token, so confined runs wrap argv with this helper (CreateProcessAsUserW +
+# Job Object), the same shape as Seatbelt's sandbox-exec wrapper. It builds
+# on every platform as an empty main so the workspace stays cross-platform;
+# the real body is `#[cfg(target_os = "windows")]` in the lib.
+[[bin]]
+name = "starriver-sbx-helper"
+path = "src/bin/starriver_sbx_helper.rs"
+
+[dependencies]
+starriver-kernel = { path = "../starriver-kernel" }
+tracing = { workspace = true }
+tokio = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3"

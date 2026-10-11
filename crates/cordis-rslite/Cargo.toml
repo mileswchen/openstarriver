@@ -1,0 +1,23 @@
+[package]
+name = "cordis-rslite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A lightweight plugin framework (a Cordis lite) — Context / EventBus / Fiber / Effect / Plugin"
+
+[lib]
+name = "cordis_rslite"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }

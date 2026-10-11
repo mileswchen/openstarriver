@@ -1,0 +1,96 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/starriver-host",
+    "crates/starriver-desktop",
+    "crates/starriver-protocol",
+    "crates/starriver-protocol-server",
+    "crates/starriver-api-macro",
+    "crates/starriver-tui",
+    "crates/starriverd",
+    "crates/cordis-rslite",
+    "crates/starriver-secrets",
+    "crates/starriver-skills",
+    "crates/starriver-kernel",
+    "crates/starriver-session",
+    "crates/starriver-tools",
+    "crates/starriver-llm",
+    "crates/starriver-llm-openai",
+    "crates/starriver-llm-ollama",
+    "crates/starriver-llm-anthropic",
+    "crates/starriver-agent-loop",
+    "crates/starriver-compaction",
+    "crates/starriver-session-persistence",
+    "crates/starriver-memory",
+    "crates/starriver-memory-server",
+    "crates/starriver-mcp-bridge",
+    "crates/starriver-sandbox",
+    "crates/starriver-acp",
+    "crates/starriver-acp-client",
+]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+thiserror = "2"
+anyhow = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json", "hickory-dns"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex-lite = "0.1"
+dashmap = "6"
+async-stream = "0.3"
+jsonrepair = "0.1"
+ratatui = "0.29"
+crossterm = "0.28"
+tempfile = "3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+sha2 = "0.10"
+base64 = "0.22"
+sha1 = "0.10"
+portable-pty = "0.9"
+zstd = "0.13"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/starriver/starriver"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+# On macOS cargo strip shells out to llvm-objcopy; rustc ≤ 1.97.x (rust#157750) emits a
+# mis-aligned LINKEDIT string pool that macOS 27 dyld rejects ("mis-aligned LINKEDIT string pool").
+# Fixed in #158410 — requires rustc ≥ 1.98.0. package.sh's strip -x fallback stays.
+strip = true
+panic = "abort"
+codegen-units = 1
+
+# Test/dev iteration speed (WI-48 session):
+# - test binaries link with line-tables only — full debuginfo was dominating
+#   link time (~60s for the host test binary alone);
+# - macOS unpacked split-debuginfo keeps incremental links incremental.
+[profile.test]
+debug = "line-tables-only"
+
+# Image decode/resize/encode is 50-100x slower unoptimized: the attachment
+# normalize tests spent 25s+17s in debug-build pixel math alone. Optimizing
+# just the codec crates keeps everything else linking fast.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.test.package.image]
+opt-level = 3
+
+[profile.dev]
+split-debuginfo = "unpacked"

@@ -1,0 +1,39 @@
+[package]
+name = "starriver-mcp-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP bridge: discover MCP servers and adapt tools/resources/prompts onto the kernel tool seam"
+
+[lib]
+name = "starriver_mcp_bridge"
+path = "src/lib.rs"
+
+[dependencies]
+cordis-rslite = { path = "../cordis-rslite" }
+starriver-kernel = { path = "../starriver-kernel" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+# oauth.rs stores MCP tokens in the OS keychain on every supported platform,
+# so keyring must be declared per target (the unconditional `keyring::` calls
+# in oauth.rs never compiled on Linux before 2026-09-11's first Linux build).
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }

@@ -1,0 +1,90 @@
+# Starriver Desktop configuration
+version: 1
+
+# Inference engines
+inference:
+  engines:
+    # Local Ollama (preferred)
+    - id: local
+      type: ollama
+      base_url: "http://localhost:11434"
+      default_model: "qwen3-coder:7b"
+
+    # DeepSeek cloud (cheap + strong coding)
+    - id: deepseek
+      type: openai-compat
+      base_url: "https://api.deepseek.com"
+      api_key: "${DEEPSEEK_API_KEY}"
+      default_model: "deepseek-v4-pro"
+
+    # GLM cloud (strongest Chinese reasoning)
+    - id: glm
+      type: openai-compat
+      base_url: "https://open.bigmodel.cn/api/paas/v4"
+      api_key: "${GLM_API_KEY}"
+      default_model: "glm-4.7-flash"
+
+# Agent Loop
+agent:
+  max_turns: 50
+  compaction_threshold: 0.92
+  turn_timeout_secs: 300
+  no_progress_turns: 3
+  max_wall_time_secs: 300
+
+# Tools
+tools:
+  enabled:
+    - read
+    - write
+    - edit
+    - bash
+    - grep
+
+  output_budget:
+    defaults:
+      max_bytes: 8000
+      strategy: head
+    per_tool:
+      bash:
+        max_bytes: 12000
+        strategy: head_tail
+        head_lines: 200
+        tail_lines: 200
+      grep:
+        max_bytes: 10000
+        strategy: head_tail
+        head_lines: 100
+        tail_lines: 50
+
+# Permissions
+permissions:
+  rules:
+    - tool: "read"
+      action: allow
+    - tool: "grep"
+      action: allow
+    - tool: "edit"
+      action: ask
+    - tool: "write"
+      action: ask
+    - tool: "bash"
+      action: ask
+
+# Server (Client/Server architecture)
+server:
+  port: 8801
+  host: "127.0.0.1"
+
+# System prompt
+system_prompt: |
+  你是一个 Coding Agent。你可以:
+  - 读取、编辑、创建文件
+  - 搜索代码库
+  - 执行 shell 命令
+
+  规则:
+  1. 使用 edit 工具做精确编辑，不要重写整个文件
+  2. 修改后自动验证（编译/测试）
+  3. 不确定时先读代码再改
+  4. 解释每一步操作

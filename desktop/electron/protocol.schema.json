@@ -1,0 +1,2882 @@
+{
+  "protocolVersion": 1,
+  "methods": [
+    {
+      "name": "session.list",
+      "params": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.messages",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "before": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.fork",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sourceId": {
+            "type": "string"
+          },
+          "beforeMsgId": {
+            "type": "integer"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceId",
+          "beforeMsgId",
+          "task"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.delete",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.rename",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.archive",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.unarchive",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.attachWorkspace",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "workspaceId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.listArchived",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.execute",
+      "params": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "executionMode": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "isolation": {
+            "type": "boolean"
+          },
+          "agentPreset": {
+            "type": "string"
+          },
+          "permissionPreset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscription"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": true
+    },
+    {
+      "name": "session.cancel",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.steer",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "task"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.queueList",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.queueAdd",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.queueUpdate",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "messageId",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "updated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "updated"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.queueRemove",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "messageId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.queueFlush",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "flushed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flushed"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.queueFlushNow",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "flushed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flushed"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "terminal.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "terminal.kill",
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "doctor.run",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "review.run",
+      "params": {
+        "type": "object",
+        "properties": {
+          "target": {},
+          "dimensions": {},
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "goal.set",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "objective": {
+            "type": "string"
+          },
+          "tokenBudget": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sessionId",
+          "objective"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "goal.get",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "goal.clear",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:execute"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.setExecutionMode",
+      "params": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.getExecutionMode",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.setApprovalMode",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.setPermissionPreset",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "preset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "preset"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.getPermission",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "settings.get",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "settings.update",
+      "params": {
+        "type": "object",
+        "properties": {
+          "patch": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "patch"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "models:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.confirmPlan",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.search",
+      "params": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "sessions.running",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.timeline",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.trace",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.compact",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "keepRecent": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.usage",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.export",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "approval.respond",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "allowed": {
+            "type": "boolean"
+          },
+          "remember": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sessionId",
+          "allowed"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "approval:respond"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "plan.reviewDecision",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "approved": {
+            "type": "boolean"
+          },
+          "feedback": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "approved"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "interaction.respond",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "questionId": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "questionId",
+          "answer"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "approval:respond"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "approval.listRules",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "approval.revokeRule",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "ruleId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "ruleId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "agentPresets.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "presets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "agent": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "broken": {
+                  "type": "string"
+                },
+                "isDefault": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "agent",
+                "name",
+                "description",
+                "source",
+                "isDefault"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "default": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "presets",
+          "default"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "agents:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "tools.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "tools:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "agents.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "agents:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "agents.scan",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "agents:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "agents.create",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "agents:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "agents.export",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "agents:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "agents.bindings",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "models:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "agents.bindings.setActive",
+      "params": {
+        "type": "object",
+        "properties": {
+          "agentName": {
+            "type": "string"
+          },
+          "providerId": {
+            "type": "string"
+          },
+          "variantId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentName",
+          "providerId",
+          "variantId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "models:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "agents.bindings.setReasoningEffort",
+      "params": {
+        "type": "object",
+        "properties": {
+          "agentName": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentName",
+          "effort"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "models:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "skills.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "skills:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "skills.scan",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "skills:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "skills.create",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "skills:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "skills.update",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "skills:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "skills.delete",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "skills:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "skills.setAlwaysOn",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "alwaysOn": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "alwaysOn"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "skills:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "skills.usage",
+      "params": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "skills:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "hooks.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "hooks:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "hooks.read",
+      "params": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "hooks:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "hooks.write",
+      "params": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "name",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "hooks:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "hooks.delete",
+      "params": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "hooks:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "plugins.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "plugins:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "plugins.install",
+      "params": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "plugins:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "plugins.uninstall",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "plugins:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "models.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "models:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "models.providers.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "models:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "models.add",
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "modelType": {
+            "type": "string"
+          },
+          "providerType": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "modelPath": {
+            "type": "string"
+          },
+          "defaultModel": {
+            "type": "string"
+          },
+          "variants": {
+            "type": "array",
+            "items": {}
+          },
+          "concurrency": {
+            "type": "integer"
+          },
+          "maxTokens": {
+            "type": "integer"
+          },
+          "contextWindow": {
+            "type": "integer"
+          },
+          "temperature": {
+            "type": "number"
+          },
+          "apiFormat": {
+            "type": "string"
+          },
+          "reasoningEffort": {
+            "type": "string"
+          },
+          "modelLabel": {
+            "type": "string"
+          },
+          "supportsVision": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "modelType",
+          "providerType",
+          "defaultModel"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "models:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "models.remove",
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "models:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "configurableProviders.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "models:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "subagents.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "agents:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "subagents.set",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "agents:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "credentials.describe",
+      "params": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "credentials:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "credentials.read",
+      "params": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "string"
+      },
+      "permissions": [
+        "credentials:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "credentials.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "credentials:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "credentials.setApiKey",
+      "params": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "credentials:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "credentials.unset",
+      "params": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "credentials:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "memory.list",
+      "params": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "memory:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "memory.recall",
+      "params": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "memory:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "memory.upsert",
+      "params": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "memory:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "memory.delete",
+      "params": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "memory:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "memory.clear",
+      "params": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "memory:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "memory.ingest",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "memory:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "memory.status",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "memory:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "memory.export",
+      "params": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "memory:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "mcp.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "mcp:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "mcp.add",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {},
+          "url": {
+            "type": "string"
+          },
+          "oauth": {}
+        },
+        "required": [
+          "name",
+          "transport"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "mcp:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "mcp.remove",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "mcp:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "mcp.refresh",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "mcp:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "mcp.oauth.connect",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "mcp:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "mcp.oauth.disconnect",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "mcp:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "mcp.testServer",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "mcp:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "mcp.testTool",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "toolName"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "mcp:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "scheduled.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "scheduled:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "scheduled.add",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "mode": {},
+          "prompt": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "endDate": {
+            "type": "string"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "mode",
+          "prompt"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "scheduled:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "scheduled.update",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "mode": {},
+          "prompt": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "startDate": {
+            "type": "string"
+          },
+          "endDate": {
+            "type": "string"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "scheduled:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "scheduled.remove",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "scheduled:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "scheduled.runNow",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "scheduled:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "jobs.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "jobs:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "jobs.taskRuns",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "jobs:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "jobs.taskRun.history",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "jobs:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "market.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "market:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspace.instructions",
+      "params": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspaceId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspace.diff",
+      "params": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspace.diffStat",
+      "params": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspace.worktreeStatus",
+      "params": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "project.agents.init",
+      "params": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "project:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "review.start",
+      "params": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "review:start"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "attachments.admit",
+      "params": {
+        "type": "object",
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {}
+          }
+        },
+        "required": [
+          "images"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "attachments:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "attachments.read",
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "attachments:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "feedback.record",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "comment": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "session:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "fs.suggest",
+      "params": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspaceId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspaces.list",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "workspaces:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspaces.create",
+      "params": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspaces.rename",
+      "params": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspaceId",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspaces.active",
+      "params": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspaces.delete",
+      "params": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspaceId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "workspaces.activate",
+      "params": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:write"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "protocol.info",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [],
+      "streaming": false
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+[package]
+name = "starriver-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Starriver 共享执行运行时（desktop / tui 共用）"
+
+[lib]
+name = "starriver_host"
+path = "src/lib.rs"
+
+[dependencies]
+cordis-rslite = { path = "../cordis-rslite" }
+starriver-agent-loop = { path = "../starriver-agent-loop" }
+starriver-memory = { path = "../starriver-memory" }
+starriver-kernel = { path = "../starriver-kernel" }
+starriver-skills = { path = "../starriver-skills" }
+starriver-secrets = { path = "../starriver-secrets" }
+starriver-llm = { path = "../starriver-llm" }
+starriver-llm-ollama = { path = "../starriver-llm-ollama" }
+starriver-llm-anthropic = { path = "../starriver-llm-anthropic" }
+starriver-llm-openai = { path = "../starriver-llm-openai" }
+starriver-session = { path = "../starriver-session" }
+starriver-acp-client = { path = "../starriver-acp-client" }
+starriver-session-persistence = { path = "../starriver-session-persistence" }
+starriver-tools = { path = "../starriver-tools" }
+starriver-api-macro = { path = "../starriver-api-macro" }
+starriver-protocol = { path = "../starriver-protocol" }
+starriver-mcp-bridge = { path = "../starriver-mcp-bridge" }
+starriver-sandbox = { path = "../starriver-sandbox" }
+libc = "0.2"
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+regex-lite = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+reqwest = { workspace = true }
+rusqlite = { workspace = true }
+regex = "1"
+walkdir = "2"
+cron = "0.13"
+lsp-types = "0.97"
+similar = "2"
+base64 = { workspace = true }
+sha2 = { workspace = true }
+portable-pty = { workspace = true }
+htmd = "0.5"
+encoding_rs = "0.8"
+ignore = "0.4.33"
+grep-searcher = "0.1.17"
+grep-matcher = "0.1.9"
+grep-regex = "0.1.14"
+globset = "0.4.20"
+
+image = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }

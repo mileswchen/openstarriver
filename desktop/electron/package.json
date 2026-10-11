@@ -1,0 +1,49 @@
+{
+  "name": "starriver-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Starriver Desktop — Electron shell",
+  "author": "Starriver <dev@starriver.example>",
+  "homepage": "https://github.com/starriver/starriver",
+  "main": "main.js",
+  "scripts": {
+    "build:daemon": "cargo build -p starriverd",
+    "build:host": "node scripts/ensure-host.mjs",
+    "start": "npm run build:host && npm run bundle && tsc && npm run bundle:preload && npm run sync-napi && electron .",
+    "bundle": "esbuild renderer/app.tsx --bundle --format=iife --jsx=transform --jsx-factory=React.createElement --jsx-fragment=React.Fragment --outfile=renderer/bundle.js --external:electron",
+    "bundle:preload": "esbuild preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=preload.js",
+    "gen:client": "node scripts/gen-client.mjs",
+    "sync-napi": "test -f ../../target/release/libstarriver_desktop.dylib && cp ../../target/release/libstarriver_desktop.dylib ../../target/release/starriver_desktop.node && (uname -s 2>/dev/null | grep -qi darwin && codesign --force --sign - ../../target/release/starriver_desktop.node && echo 'NAPI: signed .node' || echo 'NAPI: no macOS codesign (skipped)') && echo 'NAPI: synced dylib -> .node' || echo 'NAPI: skipping (dylib not found, run cargo build first)'",
+    "build": "npm run build:host && npm run bundle && tsc && npm run bundle:preload",
+    "test": "node scripts/with-workspace-tmp.mjs vitest run",
+    "test:watch": "node scripts/with-workspace-tmp.mjs vitest",
+    "test:e2e": "cargo build --release -p starriver-desktop && npm run sync-napi && npm run bundle && playwright test -c e2e/playwright.config.ts",
+    "package:mac": "bash ../scripts/package.sh mac",
+    "package:linux": "bash ../scripts/package.sh linux",
+    "package:win": "bash ../scripts/package.sh win",
+    "package:all": "bash ../scripts/package.sh all"
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.0",
+    "esbuild": "^0.28.1",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.3.0",
+    "vitest": "^4.1.10"
+  }
+}

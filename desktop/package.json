@@ -1,0 +1,17 @@
+{
+  "name": "starriver-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["packages/tui", "packages/gui", "packages/sdk"],
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "setup:release": "bash scripts/setup.sh release",
+    "build:rust": "cd .. && cargo build -p starriver-desktop",
+    "build:rust:release": "cd .. && cargo build -p starriver-desktop --release",
+    "electron": "bash scripts/start-electron.sh",
+    "gui": "bash scripts/start-gui.sh",
+    "package:mac": "bash scripts/package-mac.sh",
+    "dev": "bun run packages/gui/server.ts",
+    "test": "cd .. && cargo nextest run --package starriver-desktop --lib"
+  }
+}

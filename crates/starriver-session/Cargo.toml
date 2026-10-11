@@ -1,0 +1,25 @@
+[package]
+name = "starriver-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Default in-memory session backend for Starriver"
+
+[lib]
+name = "starriver_session"
+path = "src/lib.rs"
+
+[dependencies]
+cordis-rslite = { path = "../cordis-rslite" }
+starriver-kernel = { path = "../starriver-kernel" }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }

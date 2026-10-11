@@ -1,0 +1,17 @@
+[package]
+name = "starriver-secrets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "File-backed credential records + secret reference resolution"
+
+[dependencies]
+anyhow = { workspace = true }
+keyring = { version = "3", features = ["apple-native"] }
+serde_json = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }

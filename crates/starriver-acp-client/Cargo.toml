@@ -1,0 +1,22 @@
+[package]
+name = "starriver-acp-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "starriver_acp_client"
+path = "src/lib.rs"
+
+# A minimal scripted ACP agent used by the e2e tests (and by other crates'
+# tests via CARGO_BIN_EXE whenfeature-gated out — kept unconditional so the
+# binary is always built alongside tests).
+[[bin]]
+name = "acp-mock-agent"
+path = "src/bin/acp_mock_agent.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

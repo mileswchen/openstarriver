@@ -1,0 +1,36 @@
+[package]
+name = "starriver-agent-loop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Default agent-loop driver for Starriver"
+
+[lib]
+name = "starriver_agent_loop"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+cordis-rslite = { path = "../cordis-rslite" }
+futures = { workspace = true }
+serde_json = { workspace = true }
+starriver-compaction = { path = "../starriver-compaction" }
+starriver-kernel = { path = "../starriver-kernel" }
+starriver-session-persistence = { path = "../starriver-session-persistence" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+rusqlite = { workspace = true }
+starriver-llm = { path = "../starriver-llm" }
+starriver-session = { path = "../starriver-session" }
+starriver-tools = { path = "../starriver-tools" }
+uuid = { workspace = true }
+tempfile = { workspace = true }
+# start_paused in the retry e2e tests: the backoff ladder (~15.5s) costs
+# nothing under a paused clock.
+tokio = { workspace = true, features = ["test-util"] }

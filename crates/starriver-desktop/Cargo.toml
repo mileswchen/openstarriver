@@ -1,0 +1,36 @@
+[package]
+name = "starriver-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Starriver Desktop — Coding Agent (napi-rs)"
+
+[lib]
+name = "starriver_desktop"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+tracing = { workspace = true }
+starriver-host = { path = "../starriver-host" }
+starriver-protocol = { path = "../starriver-protocol" }
+starriver-protocol-server = { path = "../starriver-protocol-server" }
+napi = { version = "3", features = ["async", "tokio_rt", "serde-json"] }
+napi-derive = "3"
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+dashmap = { workspace = true }
+
+[dev-dependencies]
+starriver-kernel = { path = "../starriver-kernel" }
+tempfile = "3"
+reqwest = { workspace = true }
+futures = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"

@@ -1,0 +1,30 @@
+[package]
+name = "starriverd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Starriver headless daemon（P4b）：单实例 + loopback HTTP/SSE 协议服务"
+
+[lib]
+name = "starriverd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "starriverd"
+path = "src/main.rs"
+
+[dependencies]
+starriver-host = { path = "../starriver-host" }
+starriver-protocol = { path = "../starriver-protocol" }
+starriver-protocol-server = { path = "../starriver-protocol-server" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "json"] }

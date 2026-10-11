@@ -1,0 +1,23 @@
+[package]
+name = "starriver-llm-openai"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+bytes = "1"
+async-trait = { workspace = true }
+cordis-rslite = { path = "../cordis-rslite" }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+starriver-kernel = { path = "../starriver-kernel" }
+starriver-llm = { path = "../starriver-llm" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

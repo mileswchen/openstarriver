@@ -1,0 +1,17 @@
+[package]
+name = "starriver-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Starriver 前台协议：版本化线格式、方法注册表、权限目录、JSON Schema 子集"
+
+[lib]
+name = "starriver_protocol"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

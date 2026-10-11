@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Goal 预算 · 交互改版 Demo v2（WI-94）</title>
+<style>
+  /* ── Starriver design tokens（与 styles.css 一致的浅色主题） ── */
+  :root {
+    --bg: #ffffff; --bg-soft: #eceef4; --panel-bg: #fafbfd; --bg-inset: #f4f5f5;
+    --sidebar-bg: #ededed; --border: #e4e6ee; --border-strong: #d2d6e1;
+    --text: #1c1e26; --text-secondary: #5b6172; --text-muted: #979eac;
+    --accent: #2f3442; --accent-hover: #1f242e; --accent-soft: #eef0f3; --on-accent: #fff;
+    --success: #16a34a; --success-soft: #e8f7ee;
+    --warning: #b45309; --warning-soft: #fdf1df;
+    --danger: #dc2626; --danger-soft: #fff0f0;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: #e9ebf1; color: var(--text); font-size: 13px; padding-bottom: 40px;
+  }
+  button { font: inherit; cursor: pointer; }
+  input, select { font: inherit; }
+
+  /* ── Demo 控制条（非产品 UI） ── */
+  .demo-bar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    background: #23262f; color: #d7dae2; padding: 10px 16px;
+  }
+  .demo-tag {
+    font-size: 10px; font-weight: 800; letter-spacing: .08em;
+    background: #4ade80; color: #10240f; border-radius: 4px; padding: 2px 7px;
+  }
+  .demo-bar button {
+    background: #343947; color: #d7dae2; border: 1px solid #4a5064;
+    border-radius: 6px; padding: 4px 10px; font-size: 12px;
+  }
+  .demo-bar button.active { background: #4ade80; color: #10240f; border-color: #4ade80; font-weight: 600; }
+  .demo-bar .spacer { flex: 1; }
+  .demo-bar label { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .demo-bar select { background: #343947; color: #d7dae2; border: 1px solid #4a5064; border-radius: 6px; padding: 3px 6px; }
+
+  /* ── 仿应用窗口 ── */
+  .window {
+    max-width: 920px; margin: 18px auto; border-radius: 10px; overflow: hidden;
+    border: 1px solid var(--border-strong); box-shadow: 0 12px 40px rgba(28,30,38,.16);
+    background: var(--bg); position: relative;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 10px; padding: 9px 14px;
+    background: var(--sidebar-bg); border-bottom: 1px solid var(--border);
+    font-size: 12.5px; color: var(--text-secondary); font-weight: 500;
+  }
+  .main { background: var(--bg); }
+  .msgs { padding: 14px 16px 4px; display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
+  .msg { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--text-secondary); }
+  .msg .who { font-weight: 700; color: var(--text); white-space: nowrap; }
+  .msg .meta { color: var(--text-muted); font-size: 11px; margin-left: 6px; }
+  .msg.tool { color: var(--text-secondary); }
+  .goal-zone { min-height: 8px; }
+
+  /* ── ① 预算参数条（goal 未设定时出现在 composer 上方；没有输入框、没有按钮） ── */
+  .goal-param-strip {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 5px 16px; font-size: 12px; color: var(--text-secondary);
+  }
+  .gp-label { white-space: nowrap; font-weight: 600; color: var(--text); }
+  .gp-budget { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .gp-budget input {
+    width: 110px; text-align: right; padding: 3px 8px; font-size: 12px;
+    border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg);
+    color: var(--text); font-variant-numeric: tabular-nums;
+  }
+  .gp-budget.disabled input { background: var(--bg-inset); color: var(--text-muted); border-color: var(--border); }
+  .gp-unlimited { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .gp-hint { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 120px; }
+  .gp-hint b { color: var(--text-secondary); font-weight: 600; }
+
+  /* ── ② 运行中：goal status card + budget card ── */
+  .goal-status-card { display: flex; align-items: center; gap: 10px; padding: 6px 16px 2px; font-size: 12px; color: var(--text-secondary); }
+  .goal-status-card .obj { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .goal-status-badge { font-size: 10px; font-weight: 700; padding: 1px 8px; border-radius: 4px; background: var(--success-soft); color: var(--success); white-space: nowrap; }
+  .goal-status-card.paused .goal-status-badge { background: var(--warning-soft); color: var(--warning); }
+  .goal-status-card.budgetLimited .goal-status-badge { background: var(--danger-soft); color: var(--danger); }
+  .goal-status-actions { margin-left: auto; display: flex; gap: 10px; white-space: nowrap; }
+  .goal-budget-card { display: flex; align-items: center; gap: 10px; padding: 4px 16px 8px; font-size: 12px; color: var(--text-secondary); }
+  .goal-budget-card.over80 { color: var(--warning); }
+  .goal-budget-card.over95 { color: var(--danger); }
+  .goal-budget-label { white-space: nowrap; }
+  .goal-budget-nums { font-variant-numeric: tabular-nums; }
+  .goal-budget-bar { flex: 1; max-width: 220px; height: 5px; border-radius: 3px; background: var(--bg-soft); overflow: hidden; }
+  .goal-budget-fill { height: 100%; background: var(--success); border-radius: 3px; transition: width .3s; }
+  .goal-budget-card.over80 .goal-budget-fill { background: var(--warning); }
+  .goal-budget-card.over95 .goal-budget-fill { background: var(--danger); }
+  .goal-budget-warn { color: var(--danger); font-weight: 500; }
+  .link { border: none; background: transparent; color: var(--accent); padding: 0; font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
+  .link.danger { color: var(--danger); }
+  .gb-actions { display: flex; gap: 10px; white-space: nowrap; }
+  .btn-mini {
+    border: 1px solid var(--border-strong); background: var(--bg); color: var(--text);
+    border-radius: 6px; padding: 2px 10px; font-size: 12px; white-space: nowrap;
+  }
+  .btn-mini:hover { background: var(--accent-soft); }
+  .inline-budget { display: flex; align-items: center; gap: 6px; }
+  .inline-budget input { width: 110px; text-align: right; padding: 2px 8px; font-size: 12px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); color: var(--text); }
+
+  /* ── Composer（唯一的输入框 + 唯一的主按钮） ── */
+  .composer { display: flex; align-items: center; gap: 10px; padding: 10px 14px 6px; }
+  .mode-pill {
+    display: flex; align-items: center; gap: 6px; position: relative;
+    border: 1px solid var(--border-strong); background: var(--bg); border-radius: 8px;
+    padding: 7px 10px; font-size: 12.5px; color: var(--text); white-space: nowrap; user-select: none;
+  }
+  .mode-menu {
+    position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 132px; z-index: 30;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(28,30,38,.14); padding: 4px; display: none;
+  }
+  .mode-menu.open { display: block; }
+  .mode-menu button { display: flex; width: 100%; align-items: center; gap: 8px; border: none; background: transparent; padding: 6px 10px; border-radius: 6px; font-size: 12.5px; color: var(--text); text-align: left; }
+  .mode-menu button:hover { background: var(--accent-soft); }
+  .mode-menu button.on { font-weight: 600; }
+  .composer-input {
+    flex: 1; border: 1px solid var(--border-strong); border-radius: 10px;
+    padding: 9px 12px; background: var(--bg); color: var(--text); font-size: 12.5px;
+  }
+  .composer-input::placeholder { color: var(--text-muted); }
+  .composer-input:focus { outline: 2px solid #4a5260; outline-offset: -1px; border-color: transparent; }
+  .composer-send {
+    background: var(--accent); color: var(--on-accent); border: none; border-radius: 8px;
+    padding: 8px 16px; font-weight: 600; white-space: nowrap;
+  }
+  .composer-send:hover:not(:disabled) { background: var(--accent-hover); }
+  .composer-send:disabled { opacity: .45; cursor: not-allowed; }
+  .composer-note { padding: 0 16px 12px; font-size: 11.5px; color: var(--text-muted); }
+
+  /* ── ⑤ 设置页（模态片段） ── */
+  .settings-overlay { position: absolute; inset: 0; background: rgba(28,30,38,.35); display: flex; align-items: center; justify-content: center; z-index: 40; }
+  .settings-panel { width: 560px; max-width: calc(100% - 40px); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 16px 48px rgba(28,30,38,.3); overflow: hidden; }
+  .settings-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel-bg); font-weight: 600; }
+  .settings-body { display: flex; }
+  .settings-nav { width: 130px; background: var(--panel-bg); border-right: 1px solid var(--border); padding: 8px; font-size: 12.5px; color: var(--text-secondary); }
+  .settings-nav div { padding: 6px 10px; border-radius: 6px; }
+  .settings-nav div.on { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+  .settings-main { flex: 1; padding: 14px 16px; }
+  .field-row { display: flex; align-items: center; gap: 10px; }
+  .field-row label { font-weight: 500; color: var(--text); white-space: nowrap; }
+  .field-row input {
+    width: 130px; text-align: right; padding: 6px 8px; font-size: 12.5px;
+    border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg);
+    color: var(--text); font-variant-numeric: tabular-nums;
+  }
+  .field-hint { margin-top: 8px; font-size: 11.5px; color: var(--text-muted); line-height: 1.6; }
+  .settings-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  .btn-ghost { border: 1px solid var(--border-strong); background: var(--bg); border-radius: 6px; padding: 5px 12px; }
+  .btn-primary {
+    background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent);
+    border-radius: 6px; padding: 5px 14px; font-weight: 600;
+  }
+
+  /* ── 变更说明 ── */
+  .notes { max-width: 920px; margin: 0 auto; }
+  .note-card { background: var(--bg); border: 1px dashed var(--border-strong); border-radius: 10px; padding: 12px 16px; }
+  .note-card h4 { margin: 0 0 6px; font-size: 12.5px; color: var(--text); }
+  .note-card ul { margin: 0; padding-left: 18px; font-size: 12px; color: var(--text-secondary); line-height: 1.8; }
+  .note-card code { background: var(--bg-inset); border-radius: 4px; padding: 0 4px; font-size: 11px; }
+
+  .toast {
+    position: fixed; right: 20px; bottom: 20px; z-index: 99;
+    background: #23262f; color: #e8eaf0; border-radius: 8px; padding: 9px 14px;
+    font-size: 12.5px; box-shadow: 0 8px 24px rgba(0,0,0,.25); opacity: 0; transform: translateY(8px);
+    transition: all .25s; pointer-events: none; max-width: 360px;
+  }
+  .toast.show { opacity: 1; transform: none; }
+</style>
+</head>
+<body>
+
+<div class="demo-bar">
+  <span class="demo-tag">DEMO v2</span>
+  <button data-state="setup" class="active">① 启动前（参数条）</button>
+  <button data-state="running">② 运行中</button>
+  <button data-state="warn">③ 80% 预警</button>
+  <button data-state="limited">④ 预算超限</button>
+  <button data-state="settings">⑤ 设置页</button>
+  <span class="spacer"></span>
+  <label>模拟消耗速度
+    <select id="speed">
+      <option value="1">×1</option>
+      <option value="20" selected>×20</option>
+      <option value="100">×100</option>
+    </select>
+  </label>
+</div>
+
+<div class="window" id="win">
+  <div class="titlebar">
+    <span>📁 openstarriver ▾</span>
+    <span>🎯 目标模式 ▾</span>
+  </div>
+  <div class="main">
+    <div class="msgs" id="msgs">
+      <div class="msg"><span class="who">你</span><span>把 WI-94 的 Goal 预算入口整理掉，预算要能跟着目标一起设置</span><span class="meta">09:41</span></div>
+      <div class="msg"><span class="who">Coding</span><span>好的。切到目标模式后：目标直接打在下面的输入框里，回车（或点「🎯 启动」）即开始；预算在输入框上方的参数条里，默认值来自设置页。</span><span class="meta">09:41</span></div>
+    </div>
+    <div class="goal-zone" id="goalZone"></div>
+    <div class="composer">
+      <div class="mode-pill" id="modePill">🎯 目标模式 ▾
+        <div class="mode-menu" id="modeMenu">
+          <button data-mode="standard">⌘ 标准模式</button>
+          <button data-mode="plan">📝 计划模式</button>
+          <button data-mode="goal" class="on">🎯 目标模式</button>
+        </div>
+      </div>
+      <input class="composer-input" id="composerInput" placeholder="描述要达成的目标，回车启动自动循环…">
+      <button class="composer-send" id="sendBtn">🎯 启动</button>
+    </div>
+    <div class="composer-note" id="composerNote"></div>
+  </div>
+
+  <!-- ⑤ 设置页 -->
+  <div class="settings-overlay" id="settingsOverlay" style="display:none">
+    <div class="settings-panel">
+      <div class="settings-head"><span>设置</span><button class="btn-ghost" id="settingsClose">✕</button></div>
+      <div class="settings-body">
+        <div class="settings-nav">
+          <div>通用</div><div class="on">Agent</div><div>模型</div><div>主题</div>
+        </div>
+        <div class="settings-main">
+          <div class="field-row">
+            <label>Goal 默认预算</label>
+            <input id="settingsBudget" inputmode="numeric" value="1,024,000">
+            <span style="color:var(--text-secondary)">token</span>
+          </div>
+          <div class="field-hint">
+            目标启动时参数条的预填值，可单次覆盖；<b>0 = 不限制</b>。<br>
+            仅作为预填默认值，实际生效以每个会话的 <code>goal.set(sessionId, objective, tokenBudget)</code> 为准。
+          </div>
+        </div>
+      </div>
+      <div class="settings-foot">
+        <button class="btn-ghost" id="settingsCancel">取消</button>
+        <button class="btn-primary" id="settingsSave">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notes"><div class="note-card" id="noteCard"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+  // ───────────────────────── state ─────────────────────────
+  const S = {
+    mode: 'goal',              // goal | standard（demo 里 plan 等同 standard）
+    goalSet: false,            // 是否已有生效目标
+    phase: 'normal',           // normal | over80 | over95
+    defaultBudget: 1024000,    // 设置页默认预算（仅预填）
+    stripBudget: 1024000,      // 参数条当前值（未设定目标时的待用预算）
+    objective: '把 WI-94 的 Goal 预算入口整理掉，预算要能跟着目标一起设置',
+    budget: 1024000,           // per-session 生效预算；0 = 不限
+    used: 0,
+    paused: false,
+  };
+  const $ = s => document.querySelector(s);
+  const fmt = n => Math.round(n).toLocaleString('en-US');
+  const zone = $('#goalZone');
+  const msgs = $('#msgs');
+  const composerInput = $('#composerInput');
+  const sendBtn = $('#sendBtn');
+
+  function toast(msg) {
+    const t = $('#toast');
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+  function addMsg(who, text) {
+    const d = document.createElement('div');
+    d.className = 'msg' + (who === '🎯' ? ' tool' : '');
+    const time = new Date().toTimeString().slice(0, 5);
+    d.innerHTML = `<span class="who">${who}</span><span></span><span class="meta">${time}</span>`;
+    d.children[1].textContent = text;
+    msgs.appendChild(d);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  // ───────────────────────── composer：唯一输入 + 唯一主按钮 ─────────────────────────
+  function updateComposer() {
+    const starting = S.mode === 'goal' && !S.goalSet;
+    composerInput.placeholder = starting
+      ? '描述要达成的目标，回车启动自动循环…'
+      : S.mode === 'goal'
+        ? '向目标追加指示，或 /goal pause · /goal clear…'
+        : '输入消息，/ 唤起命令…';
+    sendBtn.textContent = starting ? '🎯 启动' : '发送';
+    sendBtn.disabled = starting && composerInput.value.trim().length === 0;
+  }
+  composerInput.addEventListener('input', updateComposer);
+  composerInput.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    const text = composerInput.value.trim();
+    if (!text) return;
+    if (S.mode === 'goal' && !S.goalSet) startGoal(text);
+    else { addMsg('你', text); composerInput.value = ''; updateComposer(); }
+  });
+  sendBtn.addEventListener('click', () => {
+    const text = composerInput.value.trim();
+    if (!text) return;
+    if (S.mode === 'goal' && !S.goalSet) startGoal(text);
+    else { addMsg('你', text); composerInput.value = ''; updateComposer(); }
+  });
+
+  function startGoal(text) {
+    S.objective = text;
+    S.budget = $('#gpUnlimited')?.checked ? 0 : S.stripBudget;
+    S.used = 0; S.paused = false; S.goalSet = true; S.phase = 'normal';
+    composerInput.value = '';
+    addMsg('🎯', `目标已设定：${text}${S.budget > 0 ? `（预算 ${fmt(S.budget)} token）` : '（不限预算）'}`);
+    toast(`已调用 goal.set(sessionId, objective, ${S.budget > 0 ? fmt(S.budget) : 'undefined(不限)'})`);
+    renderZone(); updateComposer();
+  }
+
+  // ───────────────────────── ① 参数条 ─────────────────────────
+  function renderParamStrip() {
+    zone.innerHTML = `
+      <div class="goal-param-strip" data-testid="goal-param-strip">
+        <span class="gp-label">🎯 目标模式</span>
+        <label class="gp-budget" id="gpBudgetWrap">预算
+          <input id="gpBudget" inputmode="numeric" value="${fmt(S.stripBudget)}"> token
+        </label>
+        <label class="gp-unlimited"><input type="checkbox" id="gpUnlimited"> 不限</label>
+        <span class="gp-hint">默认值来自 <b>设置 → Agent → Goal 默认预算</b>，可修改或选「不限」；预算触达后自动暂停并汇总进展</span>
+      </div>`;
+    const bud = $('#gpBudget'), unl = $('#gpUnlimited'), wrap = $('#gpBudgetWrap');
+    const refresh = () => {
+      wrap.classList.toggle('disabled', unl.checked);
+      bud.disabled = unl.checked;
+      if (unl.checked) bud.value = '';
+      else bud.value = fmt(S.stripBudget);
+    };
+    bud.addEventListener('input', () => { bud.value = bud.value.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ','); });
+    bud.addEventListener('change', () => { S.stripBudget = Number(bud.value.replace(/\D/g, '')) || 0; refresh(); });
+    unl.addEventListener('change', () => {
+      if (unl.checked) S.stripBudget = 0;
+      else S.stripBudget = S.defaultBudget || 1024000;
+      refresh();
+    });
+    composerInput.focus();
+  }
+
+  // ───────────────────────── ② 运行中 ─────────────────────────
+  function pct() { return S.budget > 0 ? Math.min(100, Math.round(S.used / S.budget * 100)) : 0; }
+  function refreshPhase() {
+    if (S.budget <= 0) { S.phase = 'normal'; return; }
+    const p = S.used / S.budget * 100;
+    S.phase = p >= 95 ? 'over95' : p >= 80 ? 'over80' : 'normal';
+  }
+
+  function renderRunning() {
+    const cls = S.phase === 'over95' ? ' over95' : S.phase === 'over80' ? ' over80' : '';
+    const badge = S.paused ? 'PAUSED' : S.phase === 'over95' ? 'BUDGET LIMITED' : 'ACTIVE';
+    const badgeCls = S.paused ? 'goal-status-card paused' : S.phase === 'over95' ? 'goal-status-card budgetLimited' : 'goal-status-card';
+    const limitTxt = S.budget > 0
+      ? `<span class="goal-budget-nums" id="gbNums">${fmt(S.used)} / ${fmt(S.budget)} (${pct()}%)</span>
+         <div class="goal-budget-bar"><div class="goal-budget-fill" id="gbFill" style="width:${Math.min(100, pct())}%"></div></div>
+         ${S.phase === 'over95' ? '<span class="goal-budget-warn">⚠ 预算已超限</span><button class="btn-mini" id="gbTopup">追加 +512,000</button>' : ''}
+         ${S.phase === 'over80' ? '<span style="color:var(--warning)">接近预算上限</span>' : ''}`
+      : `<span class="goal-budget-nums" id="gbNums">不限 · 已用 ${fmt(S.used)}</span>`;
+    zone.innerHTML = `
+      <div class="${badgeCls}" data-testid="goal-status-card">
+        <span class="obj">🎯 ${S.objective}</span>
+        <span class="goal-status-badge">${badge}</span>
+        <span class="goal-status-actions">
+          <button class="link" id="gbPause">${S.paused ? '继续' : '暂停'}</button>
+          <button class="link danger" id="gbClear">清除目标</button>
+        </span>
+      </div>
+      <div class="goal-budget-card${cls}" data-testid="goal-budget-card">
+        <span class="goal-budget-label">🎯 Goal 预算</span>
+        ${limitTxt}
+        <span class="gb-actions"><button class="link" id="gbEdit">编辑预算</button></span>
+      </div>`;
+    $('#gbPause').addEventListener('click', () => {
+      S.paused = !S.paused;
+      toast(S.paused ? '已暂停：goal turn 不再自动继续' : '已继续');
+      renderRunning();
+    });
+    $('#gbClear').addEventListener('click', () => {
+      toast('已调用 clearGoal(sessionId)，回到参数条');
+      S.goalSet = false; S.used = 0; S.paused = false; S.phase = 'normal';
+      renderZone(); updateComposer();
+    });
+    $('#gbEdit').addEventListener('click', startInlineEdit);
+    const top = $('#gbTopup');
+    if (top) top.addEventListener('click', () => {
+      S.budget += 512000; refreshPhase();
+      toast(`已追加预算，同步 goal.set(..., ${fmt(S.budget)})`);
+      renderRunning();
+    });
+  }
+
+  function startInlineEdit() {
+    const nums = $('#gbNums');
+    if (!nums) return;
+    nums.outerHTML = `
+      <span class="inline-budget">
+        <input id="gbInline" inputmode="numeric" value="${S.budget ? fmt(S.budget) : ''}" placeholder="不限填 0">
+        <button class="btn-mini" id="gbOk">✓</button>
+        <button class="btn-mini" id="gbNo">✕</button>
+      </span>`;
+    const input = $('#gbInline');
+    input.focus(); input.select();
+    input.addEventListener('input', () => { input.value = input.value.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ','); });
+    const apply = () => {
+      S.budget = Number(input.value.replace(/\D/g, '')) || 0;
+      refreshPhase();
+      toast(`预算已更新为 ${S.budget ? fmt(S.budget) : '不限'}，同步 goal.set(...)`);
+      renderRunning();
+    };
+    $('#gbOk').addEventListener('click', apply);
+    $('#gbNo').addEventListener('click', renderRunning);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') apply(); if (e.key === 'Escape') renderRunning(); });
+  }
+
+  // 运行中每次 tick 只刷新数字/进度条，避免打断行内编辑
+  function refreshRunningNumbers() {
+    const nums = $('#gbNums'), fill = $('#gbFill'), card = $('.goal-budget-card');
+    if (!nums || !fill || !card) return;
+    if (S.budget > 0) {
+      nums.textContent = `${fmt(S.used)} / ${fmt(S.budget)} (${pct()}%)`;
+      fill.style.width = Math.min(100, pct()) + '%';
+      card.classList.toggle('over80', S.phase === 'over80');
+      card.classList.toggle('over95', S.phase === 'over95');
+    } else {
+      nums.textContent = `不限 · 已用 ${fmt(S.used)}`;
+    }
+  }
+
+  function renderZone() {
+    if (S.mode !== 'goal') { zone.innerHTML = ''; return; }
+    S.goalSet ? renderRunning() : renderParamStrip();
+  }
+
+  // ───────────────────────── ⑤ 设置页 ─────────────────────────
+  const overlay = $('#settingsOverlay');
+  $('#settingsClose').addEventListener('click', () => overlay.style.display = 'none');
+  $('#settingsCancel').addEventListener('click', () => overlay.style.display = 'none');
+  $('#settingsSave').addEventListener('click', () => {
+    const v = Number($('#settingsBudget').value.replace(/\D/g, '')) || 0;
+    S.defaultBudget = v;
+    if (!S.goalSet) S.stripBudget = v;
+    toast(`已保存：Goal 默认预算 = ${v ? fmt(v) + ' token' : '不限'}`);
+    overlay.style.display = 'none';
+    if (!S.goalSet && S.mode === 'goal') renderZone();
+  });
+
+  // ───────────────────────── 状态机 + 说明 ─────────────────────────
+  const NOTES = {
+    setup: { title: '① 启动前（composer 上方只有一条参数条）—— 修复 v1 的重复问题', items: [
+      '<b>目标 = 下方输入框</b>：不新增输入框，placeholder 换成「描述要达成的目标…」，与现有 <code>/goal</code> 命令的心智一致（任务即消息）',
+      '<b>启动 = 发送按钮 / 回车</b>：goal 未设定时发送按钮变成「🎯 启动」，不新增第二个主按钮',
+      '<b>预算 = 参数条</b>：预填设置页默认值，可改可「不限」，只承载参数、不承载文本输入',
+      '切回标准模式，参数条消失、按钮恢复「发送」，零残留',
+    ]},
+    running: { title: '② 运行中（正常区间 &lt;80%）', items: [
+      '目标设定后：status card + budget card 出现，composer 恢复常规输入（可继续追加指示）',
+      '进度条常驻可编辑：现状 <code>budget &gt; 0</code> 后只读、无修改入口，这里补上「编辑预算」行内编辑',
+      '编辑 / 追加预算走 <code>goal.set</code> 同步 host，前端读数与后端是同一个值',
+    ]},
+    warn: { title: '③ 80% 预警（黄色，预警而非拦截）', items: [
+      '到 80% 变黄色提示「接近预算上限」，agent 继续运行，用户有余量决定是否追加',
+    ]},
+    limited: { title: '④ 预算超限（≥95%，红色 + budgetLimited 徽标）', items: [
+      '出现 <code>BUDGET LIMITED</code> 徽标，goal turn 自动暂停',
+      '「追加预算」一键续跑，而不是无声停止 —— 参考 OpenHands / SWE-agent 超限即停 + 人工决定是否继续',
+    ]},
+    settings: { title: '⑤ 设置页：全局默认预算（新增）', items: [
+      '替代现状 <code>localStorage</code> 全局单值：默认值归设置页，实际生效值归每个会话的 <code>goal.set</code>',
+      '保存后参数条（若可见）立即刷新预填值',
+    ]},
+  };
+
+  function renderNote(key) {
+    const n = NOTES[key] || NOTES.running;
+    $('#noteCard').innerHTML = `<h4>${n.title}</h4><ul>${n.items.map(i => `<li>${i}</li>`).join('')}</ul>`;
+  }
+
+  function setState(name) {
+    S.demoState = name;
+    document.querySelectorAll('.demo-bar button[data-state]').forEach(b =>
+      b.classList.toggle('active', b.dataset.state === name));
+    overlay.style.display = name === 'settings' ? 'flex' : 'none';
+    if (name === 'setup') {
+      S.mode = 'goal'; S.goalSet = false; S.used = 0; S.paused = false; S.phase = 'normal';
+      S.stripBudget = S.defaultBudget;
+    }
+    if (name === 'running' || name === 'warn' || name === 'limited') {
+      S.mode = 'goal'; S.goalSet = true; S.paused = false;
+      S.budget = S.budget > 0 ? S.budget : S.defaultBudget;
+      if (name === 'running') S.used = S.budget * 0.3;
+      if (name === 'warn') S.used = S.budget * 0.84;
+      if (name === 'limited') S.used = S.budget * 0.97;
+    }
+    renderZone(); updateComposer();
+    renderNote(name === 'settings' ? 'settings' : name);
+    $('#composerNote').textContent =
+      name === 'setup' ? '启动前 · demo：目标打在输入框，回车或点「🎯 启动」即调用 goal.set 进入 goal turn'
+      : (name === 'running' || name === 'warn' || name === 'limited') ? '运行中 · demo：token 持续累积，可试「编辑预算 / 追加预算 / 暂停」'
+      : '设置页 · demo：默认值只做参数条的预填来源';
+  }
+
+  document.querySelectorAll('.demo-bar button[data-state]').forEach(b =>
+    b.addEventListener('click', () => setState(b.dataset.state)));
+
+  // 模式下拉
+  const pill = $('#modePill'), menu = $('#modeMenu');
+  pill.addEventListener('click', e => {
+    if (e.target.closest('.mode-menu')) return;
+    menu.classList.toggle('open');
+  });
+  menu.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    menu.classList.remove('open');
+    menu.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    if (b.dataset.mode === 'goal') { setState('setup'); }
+    else {
+      S.mode = 'standard'; S.goalSet = false;
+      renderZone(); updateComposer();
+      $('#composerNote').textContent = '标准模式 · demo：非目标模式不出现任何预算 UI';
+      renderNote('setup');
+      document.querySelectorAll('.demo-bar button[data-state]').forEach(x => x.classList.remove('active'));
+    }
+  }));
+  document.addEventListener('click', e => { if (!e.target.closest('#modePill')) menu.classList.remove('open'); });
+
+  // ───────────────────────── 模拟消耗 ─────────────────────────
+  setInterval(() => {
+    const runningish = S.mode === 'goal' && S.goalSet &&
+      ['running', 'warn', 'limited', 'setup'].includes(S.demoState);
+    if (!runningish || S.paused) return;
+    const speed = Number($('#speed').value) || 1;
+    const base = S.budget > 0 ? S.budget : 1024000;
+    S.used += base * (0.002 + Math.random() * 0.004) * speed;
+    if (S.budget > 0 && S.used > S.budget * 1.03) S.used = S.budget * 1.03;
+    const before = S.phase; refreshPhase();
+    if (S.phase !== before) {
+      renderRunning();
+      toast(S.phase === 'over80' ? '已用 80%，黄色预警' : S.phase === 'over95' ? '预算超限，goal turn 自动暂停' : '');
+    } else refreshRunningNumbers();
+  }, 700);
+
+  setState('setup');
+</script>
+</body>
+</html>
