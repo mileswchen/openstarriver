@@ -468,6 +468,7 @@
     "taskStopped": "⏹ 任务已停止",
     "stoppingStill": "⏳ 仍在停止中…",
     "stopNoConfirm": "已请求停止但 20 秒内未收到确认——事件流可能中断。后端回合可能仍在运行;如界面持续不刷新,请重启应用。",
+    "turnAlreadyEnded": "后端没有正在运行的任务（上个回合早已结束）——界面状态已复位。",
     "approvalMode": "审批",
     "send": "发送",
     "thinkingDots": "思考中…",

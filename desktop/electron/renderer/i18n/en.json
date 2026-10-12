@@ -468,6 +468,7 @@
     "taskStopped": "⏹ Task stopped",
     "stoppingStill": "⏳ Still stopping…",
     "stopNoConfirm": "Stop requested but no confirmation within 20s — the event stream may be broken. The backend turn may still be running; restart the app if the UI stays stale.",
+    "turnAlreadyEnded": "Nothing is running on the backend (the previous turn already ended) — the UI run state has been reset.",
     "approvalMode": "Approval",
     "send": "Send",
     "thinkingDots": "Thinking…",

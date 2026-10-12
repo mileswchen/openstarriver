@@ -3169,7 +3169,11 @@ export function Composer(props: {
  *   stream once left Stop armed forever waiting for a TaskStarted that
  *   could never arrive (2026-10-02 session ed397c5b).
  * - cancel() resolving false (nothing running / unknown session) resets
- *   `stopping` right away.
+ *   `stopping` right away — and calls `onNotRunning` so the owning view can
+ *   drop its own stale run state (2026-10-12 09:02 host log: the turn had
+ *   ended long before, the composer still showed Stop, and both Stop clicks
+ *   hit "no live agent"; resetting only `stopping` left the button wedged
+ *   on Stop until 新建 task reset the whole view).
  * - onTerminal must be called on TaskCompleted / TaskFailed / TaskCancelled;
  *   it also stops the retry loop.
  * - Hard watchdog (20s): if no terminal confirmation arrived, reset
@@ -3180,6 +3184,7 @@ export function useTaskStop(
   sessionIdRef: React.RefObject<string>,
   notify: (text: string) => void,
   fallbackSessionRef?: React.RefObject<string>,
+  onNotRunning?: () => void,
 ) {
   const { t } = useI18n();
   const [stopping, setStopping] = useState(false);
@@ -3216,14 +3221,21 @@ export function useTaskStop(
     try {
       const ok = await window.starriver.cancel(sid);
       if (!ok && stopTarget() === sid) {
+        // The host has no live turn for this session: the composer's run
+        // state is stale (the turn's terminal event never reached us). Drop
+        // ALL of it — not just `stopping` — or the button stays "Stop" while
+        // every further click hits an idle backend. clearTimers first so the
+        // 20s watchdog cannot fire a misleading stopNoConfirm afterwards.
         cancelSentRef.current = false;
+        clearTimers();
         setStopping(false);
+        onNotRunning?.();
       }
     } catch {
       cancelSentRef.current = false;
       setStopping(false);
     }
-  }, [sessionIdRef, fallbackSessionRef]);
+  }, [sessionIdRef, fallbackSessionRef, clearTimers, onNotRunning]);
 
   const onTerminal = useCallback(() => {
     cancelSentRef.current = false;
@@ -8302,9 +8314,18 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // Third arg: the open-session ref as fallback — the primary only fills from
   // live TaskStarted events, so after restart/remount Stop would otherwise be
   // a 20s no-op that never sends the cancel (2026-10-07 session e3d6121b).
+  // Fourth arg: cancel resolved false — the backend has no live turn for this
+  // session, so the composer's Stop state is stale (the turn's terminal event
+  // never reached this view). Drop the run state and flip back to Send
+  // instead of wedging until the user clicks 新建 task (2026-10-12 report).
   const stopControl = useTaskStop(sessionIdRef, useCallback((text: string) => {
     addMessage('tool', text, false);
-  }, [addMessage]), sessionIdRef2);
+  }, [addMessage]), sessionIdRef2, useCallback(() => {
+    sendingRef.current = false;
+    setSending(false);
+    setStaleBusy(false);
+    addMessage('tool', t('common.turnAlreadyEnded'), false);
+  }, [addMessage, t]));
 
   // BUG-96: recover a session whose previous turn still holds the single
   // input slot (renderer lost its run state or the turn hung). Cancel the
@@ -8318,7 +8339,15 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     (async () => {
       try {
         const ok = await window.starriver.cancel(sid);
-        if (!ok) { setStaleBusy(false); return; }
+        if (!ok) {
+          // Nothing was running host-side: the stale-busy marker is stale by
+          // definition (BUG-141 contract — slot proven free). Any latched
+          // sending state is stale with it — flip the composer back to Send.
+          sendingRef.current = false;
+          setSending(false);
+          setStaleBusy(false);
+          return;
+        }
         for (let i = 0; i < 20; i++) {
           const ids: string[] = await window.starriver.listRunningSessions().catch(() => [] as string[]);
           if (!Array.isArray(ids) || !ids.includes(sid)) {
