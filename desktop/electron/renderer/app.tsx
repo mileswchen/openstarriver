@@ -339,7 +339,7 @@ export function UserImage({ fileRef, alt }: { fileRef: string; alt: string }) {
     );
   }
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 12, padding: '2px 0' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 13, padding: '2px 0' }}>
       🖼 {failed ? alt || fileRef : alt || '…'}
     </span>
   );
@@ -380,7 +380,7 @@ export function FeedbackRow({
   const [comment, setComment] = useState('');
   if (sent) {
     return (
-      <div className="feedback-row" style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+      <div className="feedback-row" style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
         {t('feedback.thanks')}
       </div>
     );
@@ -391,7 +391,7 @@ export function FeedbackRow({
     setSent(true);
   };
   return (
-    <div className="feedback-row" style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+    <div className="feedback-row" style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
       {picked === null ? (
         <>
           <span>{t('feedback.title')}</span>
@@ -425,12 +425,12 @@ export function FeedbackRow({
               if (e.key === 'Enter') record('down');
             }}
             placeholder={t('feedback.downPlaceholder')}
-            style={{ fontSize: 11.5, padding: '2px 6px', width: 220, marginLeft: 4 }}
+            style={{ fontSize: 13, padding: '2px 6px', width: 220, marginLeft: 4 }}
           />
           <button
             type="button"
             onClick={() => record('down')}
-            style={{ border: '1px solid var(--border-strong)', background: 'var(--surface)', borderRadius: 6, cursor: 'pointer', fontSize: 11, padding: '1px 8px' }}
+            style={{ border: '1px solid var(--border-strong)', background: 'var(--surface)', borderRadius: 6, cursor: 'pointer', fontSize: 12, padding: '1px 8px' }}
           >
             {t('feedback.submit')}
           </button>
@@ -3078,8 +3078,8 @@ export function Composer(props: {
                       {filteredSkills.length === 0 && <div style={{ padding: '10px 12px', color: 'var(--text-muted)', fontSize: 12 }}>—</div>}
                       {filteredSkills.map((s, i) => (
                         <div key={s.name} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); insertSkill(skillTokenOf(s)); }} style={{ padding: '7px 12px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 1, background: i === skillIndex ? 'var(--accent-soft)' : 'transparent' }}>
-                          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>{`/${skillTokenOf(s)}`}</div>
-                          {s.description && <div style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.description}</div>}
+                          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{`/${skillTokenOf(s)}`}</div>
+                          {s.description && <div style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.description}</div>}
                         </div>
                       ))}
                     </div>
@@ -3120,7 +3120,7 @@ export function Composer(props: {
         {atOpen && atFiles.length > 0 && (
           <div style={{ position: 'absolute', left: 16, right: 16, bottom: 'calc(100% + 6px)', zIndex: 40, background: 'var(--surface)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-md)', maxHeight: 220, overflowY: 'auto' }}>
             {atFiles.map((path, i) => (
-              <div key={path} onMouseDown={(e) => { e.preventDefault(); insertAtFile(path); }} style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 12.5, fontFamily: 'monospace', color: 'var(--text)', background: i === atIndex ? 'var(--accent-soft)' : 'transparent', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div key={path} onMouseDown={(e) => { e.preventDefault(); insertAtFile(path); }} style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 14, fontFamily: 'monospace', color: 'var(--text)', background: i === atIndex ? 'var(--accent-soft)' : 'transparent', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 @{path}
               </div>
             ))}
@@ -3977,7 +3977,7 @@ function SkillsTab() {
 
   const filterBtn = (f: SkillFilter, label: string) => (
     <button onClick={() => setFilter(f)} style={{
-      padding: '3px 10px', fontSize: 11, cursor: 'pointer', borderRadius: 4,
+      padding: '3px 10px', fontSize: 12, cursor: 'pointer', borderRadius: 4,
       border: `1px solid ${filter === f ? 'var(--accent)' : 'var(--border-strong)'}`,
       background: filter === f ? 'var(--accent-soft)' : 'var(--surface)', color: filter === f ? 'var(--accent)' : 'var(--text-secondary)',
       fontWeight: 600,
@@ -4003,8 +4003,8 @@ function SkillsTab() {
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
               <div>
                 <span style={{ fontWeight: 600, color: 'var(--accent)' }}>{r.skill}</span>
-                {r.version && <span style={{ color: 'var(--text-muted)', fontSize: 10, marginLeft: 4 }}>v{r.version}</span>}
-                <span style={{ color: 'var(--text-muted)', fontSize: 11, marginLeft: 8 }}>{r.mode}</span>
+                {r.version && <span style={{ color: 'var(--text-muted)', fontSize: 11, marginLeft: 4 }}>v{r.version}</span>}
+                <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 8 }}>{r.mode}</span>
               </div>
               <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
                 {r.ts ? new Date(r.ts * 1000).toLocaleString() : ''}
@@ -4015,7 +4015,7 @@ function SkillsTab() {
       )}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, padding: '0 24px' }}>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search skills..."
-          style={{ padding: '5px 10px', border: '1px solid var(--border-strong)', borderRadius: 4, fontSize: 12, outline: 'none', width: 180 }} />
+          style={{ padding: '5px 10px', border: '1px solid var(--border-strong)', borderRadius: 4, fontSize: 13, outline: 'none', width: 180 }} />
         {filterBtn('all', 'All')}
         {filterBtn('command', '/ command')}
         {filterBtn('keyword', 'keyword')}
@@ -4036,7 +4036,7 @@ function SkillsTab() {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
                 <span className="skill-name">{s.name}</span>
-                {s.version && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>v{s.version}</span>}
+                {s.version && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>v{s.version}</span>}
               </div>
               {/* Always-on toggle: body injected every session. Off = on-demand. */}
               <div onClick={() => handleAlwaysOn(s)} role="switch" aria-checked={!!s.always_on} title="Always-on: inject full body into every prompt"
@@ -4054,8 +4054,8 @@ function SkillsTab() {
             </div>
             {s.body && (
               <details style={{ marginTop: 6 }}>
-                <summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--accent)' }}>Preview instructions</summary>
-                <pre style={{ fontSize: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--panel-bg)', padding: 8, borderRadius: 4, margin: '6px 0 0', maxHeight: 200, overflowY: 'auto' }}>{s.body}</pre>
+                <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--accent)' }}>Preview instructions</summary>
+                <pre style={{ fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--panel-bg)', padding: 8, borderRadius: 4, margin: '6px 0 0', maxHeight: 200, overflowY: 'auto' }}>{s.body}</pre>
               </details>
             )}
             <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
@@ -4108,8 +4108,8 @@ function CreateSkillModal({ onClose, onSaved, initial }: {
     }
   };
 
-  const label: React.CSSProperties = { fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 };
-  const input: React.CSSProperties = { width: '100%', padding: '6px 10px', border: '1px solid var(--border-strong)', borderRadius: 5, fontSize: 13, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' };
+  const label: React.CSSProperties = { fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 };
+  const input: React.CSSProperties = { width: '100%', padding: '6px 10px', border: '1px solid var(--border-strong)', borderRadius: 5, fontSize: 14, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' };
 
   return (
     <div style={{
@@ -4132,7 +4132,7 @@ function CreateSkillModal({ onClose, onSaved, initial }: {
           <div>
             <label style={label}>Name <span style={{ color: 'var(--danger)' }}>*</span></label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="write-book (letters, digits, - _)" style={input} disabled={editing} />
-            {editing && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>Name is the directory and cannot be renamed — recreate the skill instead.</div>}
+            {editing && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Name is the directory and cannot be renamed — recreate the skill instead.</div>}
           </div>
           <div>
             <label style={label}>Description</label>
@@ -4200,7 +4200,7 @@ function PluginsTab() {
 
   const segBtn = (s: 'installed' | 'market', label: string) => (
     <button onClick={() => setSegment(s)} style={{
-      padding: '5px 14px', fontSize: 12, cursor: 'pointer', borderRadius: '4px 4px 0 0',
+      padding: '5px 14px', fontSize: 13, cursor: 'pointer', borderRadius: '4px 4px 0 0',
       border: 'none', borderBottom: `2px solid ${segment === s ? 'var(--accent)' : 'transparent'}`,
       background: 'none', color: segment === s ? 'var(--accent)' : 'var(--text-muted)', fontWeight: 600,
     }}>{label}</button>
@@ -4222,7 +4222,7 @@ function PluginsTab() {
         <>
           <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
             <input value={installUrl} onChange={(e) => setInstallUrl(e.target.value)} placeholder="Install from local dir or git URL"
-              style={{ flex: 1, padding: '6px 10px', border: '1px solid var(--border-strong)', borderRadius: 5, fontSize: 12, outline: 'none' }} />
+              style={{ flex: 1, padding: '6px 10px', border: '1px solid var(--border-strong)', borderRadius: 5, fontSize: 13, outline: 'none' }} />
             <button className="btn btn-primary btn-small" disabled={busy} onClick={() => handleInstall(installUrl)}>{busy ? 'Installing...' : 'Install'}</button>
           </div>
           {plugins.length === 0 && <p className="empty-text">No plugins installed. Install from the Market or a URL above.</p>}
@@ -4231,13 +4231,13 @@ function PluginsTab() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <span style={{ fontWeight: 600, fontSize: 13 }}>{p.name}</span>
-                  {p.version && <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 }}>v{p.version}</span>}
-                  {(p as any).ui && <span style={{ fontSize: 10, color: 'var(--accent)', marginLeft: 6, background: 'var(--accent-soft)', borderRadius: 3, padding: '1px 5px' }}>UI</span>}
+                  {p.version && <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6 }}>v{p.version}</span>}
+                  {(p as any).ui && <span style={{ fontSize: 11, color: 'var(--accent)', marginLeft: 6, background: 'var(--accent-soft)', borderRadius: 3, padding: '1px 5px' }}>UI</span>}
                 </div>
-                <button className="btn btn-secondary btn-small" style={{ fontSize: 11, padding: '3px 10px', color: 'var(--danger)' }} onClick={() => handleUninstall(p)}>Uninstall</button>
+                <button className="btn btn-secondary btn-small" style={{ fontSize: 12, padding: '3px 10px', color: 'var(--danger)' }} onClick={() => handleUninstall(p)}>Uninstall</button>
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{p.description}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{p.skills.length} skill(s): {p.skills.join(', ')}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{p.description}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{p.skills.length} skill(s): {p.skills.join(', ')}</div>
             </div>
           ))}
         </>
@@ -4251,12 +4251,12 @@ function PluginsTab() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <span style={{ fontWeight: 600, fontSize: 13 }}>{e.name}</span>
-                  <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 }}>{e.entry_type}</span>
-                  {e.version && <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 4 }}>v{e.version}</span>}
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6 }}>{e.entry_type}</span>
+                  {e.version && <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 4 }}>v{e.version}</span>}
                 </div>
                 <button className="btn btn-primary btn-small" disabled={busy} onClick={() => handleInstall(e.url)}>Install</button>
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{e.description}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{e.description}</div>
             </div>
           ))}
         </>
@@ -4493,9 +4493,9 @@ export function ModelCatalogEditor(props: {
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>{t('models.catalog')}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>{t('models.catalog')}</div>
           {props.presetModels !== undefined && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
               {overridden ? t('models.modelsCustomized') : t('models.modelsInherited')}
             </div>
           )}
@@ -4503,14 +4503,14 @@ export function ModelCatalogEditor(props: {
         <div style={{ display: 'flex', gap: 4 }}>
           {overridden && props.presetModels !== undefined && (
             <button type="button" className="btn btn-secondary btn-small" disabled={props.disabled}
-              onClick={reset} style={{ fontSize: 11, padding: '2px 8px' }}>
+              onClick={reset} style={{ fontSize: 12, padding: '2px 8px' }}>
               {t('models.resetModels')}
             </button>
           )}
           <button type="button" className="btn btn-secondary btn-small" title={
             !askable ? t('models.fetchNeedsBaseUrl') : undefined
           } disabled={props.disabled || fetching || !askable}
-            onClick={() => { void handleFetch(); }} style={{ fontSize: 11, padding: '2px 8px' }}>
+            onClick={() => { void handleFetch(); }} style={{ fontSize: 12, padding: '2px 8px' }}>
             {fetching ? t('models.fetching') : t('models.fetchModels')}
           </button>
         </div>
@@ -4519,7 +4519,7 @@ export function ModelCatalogEditor(props: {
       {props.variants.length === 0 && (
         <p style={{
           margin: 0, padding: 12, border: '1px dashed var(--border-strong)', borderRadius: 8,
-          textAlign: 'center', fontSize: 12, color: 'var(--text-muted)',
+          textAlign: 'center', fontSize: 13, color: 'var(--text-muted)',
         }}>{t('models.modelsEmpty')}</p>
       )}
 
@@ -4550,19 +4550,19 @@ export function ModelCatalogEditor(props: {
                 if (!next.delete(index)) next.add(index);
                 return next;
               })}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 12, padding: '0 2px' }}>
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 13, padding: '0 2px' }}>
               {expanded.has(index) ? '▾' : '▸'}
             </button>
             <button type="button" aria-label={`${t('models.removeModel')} ${index + 1}`} title={t('models.removeModel')}
               disabled={props.disabled} onClick={() => removeRow(index)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 13, padding: '0 2px' }}>
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 14, padding: '0 2px' }}>
               ✕
             </button>
           </div>
           {expanded.has(index) && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, padding: '8px 4px 2px' }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('models.contextWindow')}</span>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('models.contextWindow')}</span>
                 <input type="text" inputMode="numeric" disabled={props.disabled} style={{ ...inputStyle, height: 30 }}
                   value={capText.get(capBufferKey(index)) ?? (v.contextLength != null ? formatCapacity(v.contextLength) : '')}
                   placeholder={t('models.contextWindowPlaceholder')}
@@ -4590,11 +4590,11 @@ export function ModelCatalogEditor(props: {
 
       <button type="button" className="btn btn-secondary btn-small" disabled={props.disabled}
         onClick={() => { props.onChange([...props.variants, { id: '', name: '' }]); }}
-        style={{ alignSelf: 'flex-start', fontSize: 11, padding: '3px 10px' }}>
+        style={{ alignSelf: 'flex-start', fontSize: 12, padding: '3px 10px' }}>
         ＋ {t('models.addModel')}
       </button>
 
-      {fetchError && <p role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--danger)' }}>{fetchError}</p>}
+      {fetchError && <p role="alert" style={{ margin: 0, fontSize: 13, color: 'var(--danger)' }}>{fetchError}</p>}
 
       {candidates && (
         <div style={{
@@ -4606,7 +4606,7 @@ export function ModelCatalogEditor(props: {
             maxHeight: '80vh', overflowY: 'auto', boxShadow: 'var(--shadow-md)', padding: 16,
           }} onClick={(e) => e.stopPropagation()}>
             <h4 style={{ margin: '0 0 4px', fontSize: 14 }}>{t('models.fetchTitle')}</h4>
-            <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--text-muted)' }}>{t('models.fetchDescription')}</p>
+            <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text-muted)' }}>{t('models.fetchDescription')}</p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
               <button type="button" className="btn btn-secondary btn-small" style={{ fontSize: 11 }}
                 onClick={() => setPicked(allPicked ? new Set() : new Set(candidates.map((c) => c.id)))}>
@@ -4618,7 +4618,7 @@ export function ModelCatalogEditor(props: {
                 <li key={c.id}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', cursor: 'pointer' }}>
                     <input type="checkbox" checked={picked.has(c.id)} onChange={() => toggleCandidate(c.id)} />
-                    <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12, overflowWrap: 'anywhere' }}>{c.id}</span>
+                    <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 13, overflowWrap: 'anywhere' }}>{c.id}</span>
                   </label>
                 </li>
               ))}
@@ -4651,7 +4651,7 @@ function EditorFooter({ cancelLabel, submitLabel, submitBusy, busy, disabled, on
 }
 
 const fieldLabelStyle: React.CSSProperties = {
-  fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: 4,
+  fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', display: 'block', marginBottom: 4,
 };
 
 /**
@@ -4792,7 +4792,7 @@ export function ProviderEditorCard({ entry, preset, hideTitle, onClose }: {
   const detailsSummary = (label: string) => (
     <summary style={{
       display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', width: 'fit-content',
-      fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)', listStyle: 'none',
+      fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', listStyle: 'none',
     }}>▸ {label}</summary>
   );
 
@@ -4804,16 +4804,16 @@ export function ProviderEditorCard({ entry, preset, hideTitle, onClose }: {
       {!hideTitle && (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
           <span style={{ fontWeight: 600, fontSize: 13 }}>{title}</span>
-          {id !== title && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{id}</span>}
+          {id !== title && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{id}</span>}
         </div>
       )}
-      {saveError && <p role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--danger)' }}>{saveError}</p>}
+      {saveError && <p role="alert" style={{ margin: 0, fontSize: 13, color: 'var(--danger)' }}>{saveError}</p>}
 
       <div>
         <label style={fieldLabelStyle}>{t('models.modelLabel')}</label>
         <input value={modelLabel} aria-label={t('models.modelLabel')} disabled={saving}
           placeholder={t('models.modelLabelPlaceholder')} onChange={(e) => setModelLabel(e.target.value)} style={inputStyle} />
-        <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>{t('models.modelLabelHint')}</p>
+        <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>{t('models.modelLabelHint')}</p>
       </div>
 
       {!isLocal && (
@@ -4821,7 +4821,7 @@ export function ProviderEditorCard({ entry, preset, hideTitle, onClose }: {
           <label style={fieldLabelStyle}>
             {t('models.keyInput')}
             {keyConfigured && (
-              <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>
+              <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>
                 {t('models.keyConfiguredBadge')}
               </span>
             )}
@@ -4928,13 +4928,13 @@ export function ProviderEditorCard({ entry, preset, hideTitle, onClose }: {
           </div>
         </div>
         {reasoningEffort && reasoningEffort !== 'off' && (
-          <div style={{ marginTop: 8, padding: '5px 8px', borderRadius: 6, fontSize: 11, color: 'var(--warning)', background: 'var(--warning-soft)' }}>
+          <div style={{ marginTop: 8, padding: '5px 8px', borderRadius: 6, fontSize: 12, color: 'var(--warning)', background: 'var(--warning-soft)' }}>
             {t('models.thinkingWarn')}
           </div>
         )}
       </details>
 
-      {modelFailureText && <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>{modelFailureText}</p>}
+      {modelFailureText && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>{modelFailureText}</p>}
 
       <EditorFooter
         cancelLabel={t('models.cancel')}
@@ -5012,16 +5012,16 @@ export function CustomProviderForm({ taken, onClose }: {
       display: 'flex', flexDirection: 'column', gap: 12, border: '1px solid var(--border)',
     }}>
       <div style={{ fontWeight: 600, fontSize: 13 }}>{t('models.customTitle')}</div>
-      {failure && <p role="alert" style={{ margin: 0, fontSize: 12, color: 'var(--danger)' }}>{failure}</p>}
+      {failure && <p role="alert" style={{ margin: 0, fontSize: 13, color: 'var(--danger)' }}>{failure}</p>}
       <div>
         <label style={fieldLabelStyle}>{t('models.customRoute')}</label>
         <input value={route} placeholder="acme-gateway" aria-label={t('models.customRoute')} disabled={saving}
           onChange={(e) => setRoute(e.target.value)} style={inputStyle} />
         {routeInvalid || routeTaken
-          ? <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--danger)' }}>
+          ? <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--danger)' }}>
               {t(routeInvalid ? 'models.customRouteInvalid' : 'models.customRouteTaken')}
             </p>
-          : <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>{t('models.customRouteHint')}</p>}
+          : <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-muted)' }}>{t('models.customRouteHint')}</p>}
       </div>
       <div>
         <label style={fieldLabelStyle}>{t('models.customDisplayName')}</label>
@@ -5047,7 +5047,7 @@ export function CustomProviderForm({ taken, onClose }: {
         <label style={fieldLabelStyle}>{t('models.modelLabel')}</label>
         <input value={modelLabel} aria-label={t('models.modelLabel')} disabled={saving}
           placeholder={t('models.modelLabelPlaceholder')} onChange={(e) => setModelLabel(e.target.value)} style={inputStyle} />
-        <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>{t('models.modelLabelHint')}</p>
+        <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>{t('models.modelLabelHint')}</p>
       </div>
       <div>
         <label style={fieldLabelStyle}>{t('models.keyInput')}</label>
@@ -5074,7 +5074,7 @@ export function CustomProviderForm({ taken, onClose }: {
         onReset={() => {}}
         onDefaultChange={setDefaultVariant}
       />
-      {hint && <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>{hint}</p>}
+      {hint && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>{hint}</p>}
       <EditorFooter
         cancelLabel={t('models.cancel')}
         submitLabel={t('models.create')}
@@ -5211,7 +5211,7 @@ export function ModelsTab() {
     <button type="button" disabled={disabled} onClick={onClick} style={{
       flex: '1 1 0', minWidth: 180, height: 44, borderRadius: 10, cursor: disabled ? 'default' : 'pointer',
       border: '1px dashed var(--border-strong)', background: 'transparent', color: 'var(--text-secondary)',
-      fontSize: 13, fontWeight: 500,
+      fontSize: 14, fontWeight: 500,
     }}>＋ {label}</button>
   );
 
@@ -5220,16 +5220,16 @@ export function ModelsTab() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div>
           <h3 style={{ margin: 0, fontSize: 16 }}>{t('models.title')}</h3>
-          <p style={{ margin: '4px 0 0 0', fontSize: 13, color: 'var(--text-muted)' }}>{t('models.intro')}</p>
+          <p style={{ margin: '4px 0 0 0', fontSize: 14, color: 'var(--text-muted)' }}>{t('models.intro')}</p>
         </div>
         <button className="btn btn-secondary btn-small" style={{ flex: 'none' }} onClick={() => { void openConfig(); }}>
           {t('models.openConfig')}
         </button>
       </div>
 
-      {configError && <p role="alert" style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--danger)' }}>{configError}</p>}
+      {configError && <p role="alert" style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--danger)' }}>{configError}</p>}
       {savedName && (
-        <p role="status" style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--success)' }}>
+        <p role="status" style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--success)' }}>
           {t('models.savedProvider', { provider: savedName })}
         </p>
       )}
@@ -5252,19 +5252,19 @@ export function ModelsTab() {
                   {custom && (
                     <span style={{
                       marginLeft: 8, padding: '1px 6px', border: '1px solid var(--border-strong)',
-                      borderRadius: 4, fontSize: 11, color: 'var(--text-secondary)', flex: 'none',
+                      borderRadius: 4, fontSize: 12, color: 'var(--text-secondary)', flex: 'none',
                     }}>{t('models.customTag')}</span>
                   )}
                   <CredentialDot state={keyStates[id]} />
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn btn-secondary btn-small" style={{ fontSize: 11, padding: '3px 10px' }}
+                  <button className="btn btn-secondary btn-small" style={{ fontSize: 12, padding: '3px 10px' }}
                     aria-label={`${t('models.edit')} ${name}`} onClick={() => openEdit(id)}>
                     {t('models.edit')}
                   </button>
                   <button
                     className={armRemoveId === id ? 'btn btn-danger btn-small' : 'btn btn-secondary btn-small'}
-                    style={{ fontSize: 11, padding: '3px 10px' }}
+                    style={{ fontSize: 12, padding: '3px 10px' }}
                     aria-label={`${t('models.remove')} ${name}`}
                     title={armRemoveId === id ? t('models.removeConfirmArmed') : undefined}
                     onClick={() => handleRemoveModel(id)}
@@ -5335,9 +5335,9 @@ export function ModelsTab() {
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '6px 10px', border: '1px solid var(--border-strong)', borderRadius: 5,
-  fontSize: 13, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box',
+  fontSize: 14, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box',
 };
-const labelStyle: React.CSSProperties = { fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 };
+const labelStyle: React.CSSProperties = { fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 };
 
 /* ─── App ─── */
 /* ─── McpTab ─── */
@@ -5489,16 +5489,16 @@ export function McpTab() {
         <div style={{ fontSize: 18, lineHeight: '22px' }}>{p.icon}</div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>{p.name[lang]}</span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{p.name[lang]}</span>
             {Object.keys(p.env).length > 0 && <span title={t('mcp.needsKey')} style={{ fontSize: 11 }}>🔑</span>}
           </div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{p.desc[lang]}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{p.desc[lang]}</div>
         </div>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-          {p.homepage && <a href={p.homepage} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)' }}>🔗</a>}
+          {p.homepage && <a href={p.homepage} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ fontSize: 12, color: 'var(--accent)' }}>🔗</a>}
           {created
-            ? <span title={t('mcp.created')} style={{ color: 'var(--success)', fontSize: 13, fontWeight: 700 }}>✓</span>
-            : <button className="btn btn-secondary btn-small" aria-label={`create-${p.id}`} title={t('mcp.createFromTemplate')} onClick={e => { e.stopPropagation(); applyPreset(p); }} style={{ fontSize: 14, fontWeight: 700, lineHeight: 1, padding: '2px 8px', borderRadius: 4, color: 'var(--accent)', cursor: 'pointer' }}>+</button>}
+            ? <span title={t('mcp.created')} style={{ color: 'var(--success)', fontSize: 14, fontWeight: 700 }}>✓</span>
+            : <button className="btn btn-secondary btn-small" aria-label={`create-${p.id}`} title={t('mcp.createFromTemplate')} onClick={e => { e.stopPropagation(); applyPreset(p); }} style={{ fontSize: 15, fontWeight: 700, lineHeight: 1, padding: '2px 8px', borderRadius: 4, color: 'var(--accent)', cursor: 'pointer' }}>+</button>}
         </div>
       </div>
     );
@@ -5609,14 +5609,14 @@ export function McpTab() {
       {/* Sub-tab segmented control */}
       <div style={{ display: 'flex', gap: 4, background: 'var(--bg-soft)', borderRadius: 8, padding: 3, marginBottom: 14 }}>
         {(['templates', 'servers'] as const).map(st => (
-          <button key={st} type="button" onClick={() => setSubTab(st)} style={{ flex: 1, padding: '6px 0', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontWeight: 600, background: subTab === st ? 'var(--surface)' : 'transparent', color: subTab === st ? 'var(--accent)' : 'var(--text-secondary)', boxShadow: subTab === st ? 'var(--shadow-sm)' : 'none' }}>{t(`mcp.tab_${st}`)}</button>
+          <button key={st} type="button" onClick={() => setSubTab(st)} style={{ flex: 1, padding: '6px 0', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontWeight: 600, background: subTab === st ? 'var(--surface)' : 'transparent', color: subTab === st ? 'var(--accent)' : 'var(--text-secondary)', boxShadow: subTab === st ? 'var(--shadow-sm)' : 'none' }}>{t(`mcp.tab_${st}`)}</button>
         ))}
       </div>
       {error && <div style={{ color: 'var(--danger)', marginBottom: 8, fontSize: 13 }}>{error}</div>}
       {/* Templates tab — the popular-server gallery; `+` creates an instance from a preset */}
       {subTab === 'templates' && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>{t('mcp.popular')}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>{t('mcp.popular')}</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
             {MCP_PRESETS.filter(p => p.region === 'overseas').map(renderPresetCard)}
           </div>
@@ -5633,9 +5633,9 @@ export function McpTab() {
           {servers.map(s => (
             <div key={s.name} style={{ background: 'var(--card-bg, var(--bg-soft))', borderRadius: 8, padding: '10px 14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 12, background: s.transport === 'stdio' ? 'var(--success)' : 'var(--accent)', color: 'var(--surface)', borderRadius: 4, padding: '1px 6px' }}>{s.transport}</span>
+                <span style={{ fontSize: 13, background: s.transport === 'stdio' ? 'var(--success)' : 'var(--accent)', color: 'var(--surface)', borderRadius: 4, padding: '1px 6px' }}>{s.transport}</span>
                 <strong style={{ flex: 1, fontSize: 14 }}>{s.name}</strong>
-                <span style={{ color: 'var(--text-muted)', fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.transport === 'http' ? (s.url || '') : s.command}</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.transport === 'http' ? (s.url || '') : s.command}</span>
                 {/* OAuth button only makes sense for servers that actually have an
                     OAuth config — plain HTTP servers connect automatically (the
                     tool count proves it), and clicking here would just error with
@@ -5648,7 +5648,7 @@ export function McpTab() {
                   <button className="btn btn-secondary btn-small" onClick={() => setTestTarget(s)} style={{ fontSize: 11 }}>{t('mcp.test')}</button>
                   <button className="btn btn-secondary btn-small" onClick={() => openEdit(s)} style={{ fontSize: 11 }}>{t('common.edit')}</button>
                   <button className="btn btn-secondary btn-small" onClick={() => handleRefresh(s.name)} style={{ fontSize: 11 }} title={t('mcp.discoverTools')}>🔍</button>
-                  <button className="btn btn-secondary btn-small" onClick={() => handleRemove(s.name)} style={{ fontSize: 11, color: 'var(--danger)' }}>{t('common.remove')}</button>
+                  <button className="btn btn-secondary btn-small" onClick={() => handleRemove(s.name)} style={{ fontSize: 12, color: 'var(--danger)' }}>{t('common.remove')}</button>
                 </div>
               </div>
             </div>
@@ -5661,30 +5661,30 @@ export function McpTab() {
             <h4 style={{ margin: '0 0 16px', fontSize: 15 }}>{editing ? t('mcp.editServer') : t('mcp.addServer')}</h4>
             {error && <div style={{ color: 'var(--danger)', marginBottom: 8, fontSize: 13 }}>{error}</div>}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.name')}<input className="toolbar-input" value={name} onChange={e => setName(e.target.value)} placeholder="github" style={{ width: '100%', marginTop: 2 }} /></label>
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.transport')}<select className="toolbar-select" value={transport} onChange={e => setTransport(e.target.value)} style={{ width: '100%', marginTop: 2 }}><option value="stdio">Stdio</option><option value="sse">SSE</option><option value="http">HTTP</option></select></label>
+              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.name')}<input className="toolbar-input" value={name} onChange={e => setName(e.target.value)} placeholder="github" style={{ width: '100%', marginTop: 2 }} /></label>
+              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.transport')}<select className="toolbar-select" value={transport} onChange={e => setTransport(e.target.value)} style={{ width: '100%', marginTop: 2 }}><option value="stdio">Stdio</option><option value="sse">SSE</option><option value="http">HTTP</option></select></label>
               {transport === 'http' && (
                 <>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.url')}<input className="toolbar-input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://mcp.slack.com/mcp" style={{ width: '100%', marginTop: 2 }} /></label>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.url')}<input className="toolbar-input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://mcp.slack.com/mcp" style={{ width: '100%', marginTop: 2 }} /></label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <input type="checkbox" checked={useOAuth} onChange={e => { setUseOAuth(e.target.checked); if (e.target.checked && !oauth) setOAuth({ authorization_url: '', token_url: '', client_id: '', client_secret: '', scopes: '', redirect_uri: 'http://localhost:3118/callback' }); }} />
                     {t('mcp.useOAuth')}
                   </label>
                 </>
               )}
-              {transport !== 'http' && <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.command')}<input className="toolbar-input" value={command} onChange={e => setCommand(e.target.value)} placeholder="npx" style={{ width: '100%', marginTop: 2 }} /></label>}
+              {transport !== 'http' && <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.command')}<input className="toolbar-input" value={command} onChange={e => setCommand(e.target.value)} placeholder="npx" style={{ width: '100%', marginTop: 2 }} /></label>}
               {transport === 'http' && useOAuth && oauth && (
                 <>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.authUrl')}<input className="toolbar-input" value={oauth.authorization_url} onChange={e => setOAuth({ ...oauth, authorization_url: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.tokenUrl')}<input className="toolbar-input" value={oauth.token_url} onChange={e => setOAuth({ ...oauth, token_url: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.clientId')}<input className="toolbar-input" value={oauth.client_id} onChange={e => setOAuth({ ...oauth, client_id: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.clientSecret')}<input className="toolbar-input" value={oauth.client_secret} onChange={e => setOAuth({ ...oauth, client_secret: e.target.value })} placeholder={editing?.oauth?.has_secret ? t('mcp.secretSaved') : ''} style={{ width: '100%', marginTop: 2 }} /></label>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.scopes')}<input className="toolbar-input" value={oauth.scopes} onChange={e => setOAuth({ ...oauth, scopes: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.redirectUri')}<input className="toolbar-input" value={oauth.redirect_uri} onChange={e => setOAuth({ ...oauth, redirect_uri: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.authUrl')}<input className="toolbar-input" value={oauth.authorization_url} onChange={e => setOAuth({ ...oauth, authorization_url: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.tokenUrl')}<input className="toolbar-input" value={oauth.token_url} onChange={e => setOAuth({ ...oauth, token_url: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.clientId')}<input className="toolbar-input" value={oauth.client_id} onChange={e => setOAuth({ ...oauth, client_id: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.clientSecret')}<input className="toolbar-input" value={oauth.client_secret} onChange={e => setOAuth({ ...oauth, client_secret: e.target.value })} placeholder={editing?.oauth?.has_secret ? t('mcp.secretSaved') : ''} style={{ width: '100%', marginTop: 2 }} /></label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.scopes')}<input className="toolbar-input" value={oauth.scopes} onChange={e => setOAuth({ ...oauth, scopes: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.redirectUri')}<input className="toolbar-input" value={oauth.redirect_uri} onChange={e => setOAuth({ ...oauth, redirect_uri: e.target.value })} style={{ width: '100%', marginTop: 2 }} /></label>
                 </>
               )}
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.args')}<textarea className="toolbar-input" value={argsText} onChange={e => setArgsText(e.target.value)} placeholder={t('mcp.argsHint')} rows={3} style={{ width: '100%', marginTop: 2, resize: 'vertical' }} /></label>
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('mcp.env')}<textarea className="toolbar-input" value={envText} onChange={e => setEnvText(e.target.value)} placeholder={t('mcp.envHint')} rows={3} style={{ width: '100%', marginTop: 2, resize: 'vertical' }} /></label>
+              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.args')}<textarea className="toolbar-input" value={argsText} onChange={e => setArgsText(e.target.value)} placeholder={t('mcp.argsHint')} rows={3} style={{ width: '100%', marginTop: 2, resize: 'vertical' }} /></label>
+              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('mcp.env')}<textarea className="toolbar-input" value={envText} onChange={e => setEnvText(e.target.value)} placeholder={t('mcp.envHint')} rows={3} style={{ width: '100%', marginTop: 2, resize: 'vertical' }} /></label>
             </div>
             <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button className="btn btn-secondary btn-small" onClick={() => { setShowForm(false); resetForm(); }}>{t('mcp.cancel')}</button>
@@ -5729,16 +5729,16 @@ function McpTestWindow({ server, onClose }: { server: McpServerInfo; onClose: ()
       <div style={{ background: 'var(--surface)', borderRadius: 12, padding: 24, width: 560, maxHeight: '80vh', overflowY: 'auto', boxShadow: 'var(--shadow-md)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h4 style={{ margin: 0, fontSize: 15 }}>
-            <span style={{ fontSize: 12, background: server.transport === 'stdio' ? 'var(--success)' : 'var(--accent)', color: 'var(--surface)', borderRadius: 4, padding: '1px 6px', marginRight: 8 }}>{server.transport}</span>
+            <span style={{ fontSize: 13, background: server.transport === 'stdio' ? 'var(--success)' : 'var(--accent)', color: 'var(--surface)', borderRadius: 4, padding: '1px 6px', marginRight: 8 }}>{server.transport}</span>
             {server.name}
           </h4>
           <button className="btn btn-secondary btn-small" onClick={onClose}>{t('mcp.cancel')}</button>
         </div>
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{t('mcp.testConnection')}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{t('mcp.testConnection')}</div>
           <button className="btn btn-primary btn-small" onClick={runTest} disabled={result === 'testing'}>{result === 'testing' ? '…' : t('mcp.test')}</button>
           {result !== null && result !== 'testing' && (
-            <div style={{ marginTop: 8, fontSize: 12, color: result.ok ? 'var(--success)' : 'var(--danger)' }}>
+            <div style={{ marginTop: 8, fontSize: 13, color: result.ok ? 'var(--success)' : 'var(--danger)' }}>
               {result.ok
                 ? `✓ ${t('mcp.toolCount', { count: String(result.toolCount) })}`
                 : `✗ ${result.error || 'failed'}`}
@@ -5747,7 +5747,7 @@ function McpTestWindow({ server, onClose }: { server: McpServerInfo; onClose: ()
         </div>
         {ok && result.tools.length > 0 && (
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{t('mcp.usage')}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{t('mcp.usage')}</div>
             <div style={{ padding: '6px 10px', background: 'var(--panel-bg)', borderRadius: 6 }}>
               {result.tools.map(tool => {
                 const key = `${server.name}::${tool}`;
@@ -5922,11 +5922,11 @@ function TraceEntryView({ e }: { e: SessionTraceEntry }) {
   if (e.kind === 'tool_use') {
     return (
       <div style={{ margin: '6px 0', border: '1px solid var(--accent-border)', borderRadius: 8, overflow: 'hidden' }}>
-        <div style={{ background: 'var(--panel-bg)', padding: '5px 10px', fontSize: 12, color: 'var(--info)', fontWeight: 600 }}>🔧 {e.toolName}</div>
+        <div style={{ background: 'var(--panel-bg)', padding: '5px 10px', fontSize: 13, color: 'var(--info)', fontWeight: 600 }}>🔧 {e.toolName}</div>
         {e.toolInput && (
           <details style={{ fontSize: 12 }}>
             <summary style={{ padding: '4px 10px', color: 'var(--text-muted)', cursor: 'pointer' }}>input</summary>
-            <pre style={{ margin: 0, padding: '8px 10px', background: 'var(--panel-bg)', fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{e.toolInput}</pre>
+            <pre style={{ margin: 0, padding: '8px 10px', background: 'var(--panel-bg)', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{e.toolInput}</pre>
           </details>
         )}
       </div>
@@ -5935,7 +5935,7 @@ function TraceEntryView({ e }: { e: SessionTraceEntry }) {
   if (e.kind === 'tool_result') {
     return (
       <div style={{ margin: '4px 0 8px 0', border: '1px solid var(--accent-border)', borderRadius: 8, overflow: 'hidden' }}>
-        <div style={{ padding: '5px 10px', fontSize: 12, fontWeight: 600, color: e.toolOk ? 'var(--success)' : 'var(--danger)' }}>{e.toolOk ? '✓ result' : '✗ error'}</div>
+        <div style={{ padding: '5px 10px', fontSize: 13, fontWeight: 600, color: e.toolOk ? 'var(--success)' : 'var(--danger)' }}>{e.toolOk ? '✓ result' : '✗ error'}</div>
         {e.toolOutput && (
           <details open style={{ fontSize: 12 }}>
             <summary style={{ padding: '4px 10px', color: 'var(--text-muted)', cursor: 'pointer' }}>output</summary>
@@ -5947,7 +5947,7 @@ function TraceEntryView({ e }: { e: SessionTraceEntry }) {
   }
   if (e.kind === 'thinking') {
     return (
-      <details style={{ margin: '6px 0', fontSize: 12, color: 'var(--text-muted)' }}>
+      <details style={{ margin: '6px 0', fontSize: 13, color: 'var(--text-muted)' }}>
         <summary style={{ cursor: 'pointer', fontStyle: 'italic' }}>💭 thinking</summary>
         <div style={{ padding: '6px 10px', whiteSpace: 'pre-wrap', fontStyle: 'italic', color: 'var(--text-secondary)' }}>{e.text}</div>
       </details>
@@ -6187,12 +6187,12 @@ export function MemoryTab() {
   };
 
   const badgeStyle: React.CSSProperties = {
-    display: 'inline-block', padding: '1px 6px', borderRadius: 4, fontSize: 10.5,
+    display: 'inline-block', padding: '1px 6px', borderRadius: 4, fontSize: 12,
     background: 'var(--bg-soft)', color: 'var(--text-muted)', marginRight: 4,
   };
   const selectStyle: React.CSSProperties = {
     padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)',
-    background: 'var(--surface)', color: 'var(--text)', fontSize: 12,
+    background: 'var(--surface)', color: 'var(--text)', fontSize: 13,
   };
 
   return (
@@ -6200,7 +6200,7 @@ export function MemoryTab() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
         <div>
           <h3 style={{ margin: 0, fontSize: 16 }}>{t('memory.title')}</h3>
-          <p style={{ margin: '4px 0 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+          <p style={{ margin: '4px 0 0 0', fontSize: 13, color: 'var(--text-muted)' }}>
             {t('memory.count', { n: filtered.length })}
           </p>
         </div>
@@ -6258,27 +6258,27 @@ export function MemoryTab() {
                   background: selected === e.name ? 'var(--accent-soft)' : 'var(--surface)',
                 }}
               >
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', wordBreak: 'break-all' }}>{e.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{e.description}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', wordBreak: 'break-all' }}>{e.name}</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{e.description}</div>
                 <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                   <span style={badgeStyle}>{sourceLabel(e.source)}</span>
                   {!!e.source_agent && <span style={badgeStyle}>{agentLabel(e.source_agent)}</span>}
-                  {!!e.updated && <span style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{t('memory.updated')} {fmtTime(e.updated)}</span>}
+                  {!!e.updated && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('memory.updated')} {fmtTime(e.updated)}</span>}
                 </div>
               </div>
             ))}
             {loaded && filtered.length === 0 && entries.length > 0 && (
-              <div style={{ padding: 12, fontSize: 12, color: 'var(--text-muted)' }}>{t('memory.emptySearch')}</div>
+              <div style={{ padding: 12, fontSize: 13, color: 'var(--text-muted)' }}>{t('memory.emptySearch')}</div>
             )}
           </div>
           {/* Detail side panel: body full text + metadata */}
           <div style={{ flex: '1 1 45%', minWidth: 0 }} data-testid="memory-detail">
             {current ? (
               <div style={{ border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', padding: 14 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', wordBreak: 'break-all' }}>{current.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 8px' }}>{current.description}</div>
-                <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--text)', background: 'var(--bg-soft)', padding: 10, borderRadius: 6, maxHeight: 320, overflowY: 'auto' }}>{current.body}</pre>
-                <div style={{ marginTop: 8, display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-muted)' }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', wordBreak: 'break-all' }}>{current.name}</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '4px 0 8px' }}>{current.description}</div>
+                <pre style={{ margin: 0, fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--text)', background: 'var(--bg-soft)', padding: 10, borderRadius: 6, maxHeight: 320, overflowY: 'auto' }}>{current.body}</pre>
+                <div style={{ marginTop: 8, display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-muted)' }}>
                   <span>{t('memory.source')}: {sourceLabel(current.source)}</span>
                   {!!current.source_agent && <span>{t('memory.sourceAgent')}: {agentLabel(current.source_agent)}</span>}
                   <span>{t('memory.project')}: {current.project}</span>
@@ -6288,7 +6288,7 @@ export function MemoryTab() {
                 <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   {armDelete === current.name ? (
                     <>
-                      <span style={{ fontSize: 12, color: 'var(--danger)' }}>{t('memory.confirmDelete', { name: current.name })}</span>
+                      <span style={{ fontSize: 13, color: 'var(--danger)' }}>{t('memory.confirmDelete', { name: current.name })}</span>
                       <button className="btn btn-secondary btn-small" onClick={() => setArmDelete(null)}>{t('common.cancel')}</button>
                       <button className="modal-btn danger" onClick={doDelete}>{t('memory.delete')}</button>
                     </>
@@ -6298,16 +6298,16 @@ export function MemoryTab() {
                 </div>
               </div>
             ) : (
-              <div style={{ padding: 14, fontSize: 12, color: 'var(--text-muted)', border: '1px dashed var(--border)', borderRadius: 8 }}>{t('memory.emptyDetail')}</div>
+              <div style={{ padding: 14, fontSize: 13, color: 'var(--text-muted)', border: '1px dashed var(--border)', borderRadius: 8 }}>{t('memory.emptyDetail')}</div>
             )}
           </div>
         </div>
       )}
-      {busy && <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>…</div>}
+      {busy && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>…</div>}
 
       {/* Ops status bar (Phase 3): budget meter from memory.status. */}
       {statusInfo?.budget && (
-        <div data-testid="memory-budget" style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 11.5, color: 'var(--text-muted)' }}>
+        <div data-testid="memory-budget" style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 13, color: 'var(--text-muted)' }}>
           {statusInfo.budget.exceeded ? (
             <span style={{ color: 'var(--danger)' }}>{t('memory.tokensExceeded')}</span>
           ) : (
@@ -6316,12 +6316,12 @@ export function MemoryTab() {
         </div>
       )}
       {ingestReport && (
-        <div data-testid="memory-report" style={{ marginTop: 8, fontSize: 12, color: 'var(--accent)' }}>{ingestReport}</div>
+        <div data-testid="memory-report" style={{ marginTop: 8, fontSize: 13, color: 'var(--accent)' }}>{ingestReport}</div>
       )}
 
       {/* Recall preview: what the run path would inject for a task (debug view). */}
       <div data-testid="memory-recall" style={{ marginTop: 18, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{t('memory.recall')}</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{t('memory.recall')}</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input
             aria-label={t('memory.recallPlaceholder')}
@@ -6337,7 +6337,7 @@ export function MemoryTab() {
         </div>
         {recallResults !== null && (
           recallResults.length === 0 ? (
-            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>{t('memory.recallEmpty')}</div>
+            <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-muted)' }}>{t('memory.recallEmpty')}</div>
           ) : (
             <ul data-testid="memory-recall-results" style={{ margin: '8px 0 0 0', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
               {recallResults.map((e) => (
@@ -6355,21 +6355,21 @@ export function MemoryTab() {
       {showForm && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
           <div className="modal-card" data-testid="memory-form" style={{ width: 460, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>{t('memory.add')}</div>
-            <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>{t('memory.add')}</div>
+            <label style={{ display: 'block', fontSize: 13, marginBottom: 8 }}>
               {t('memory.name')}
               <input aria-label={t('memory.name')} value={formName} onChange={(e) => setFormName(e.target.value)} style={{ ...selectStyle, width: '100%', marginTop: 2 }} />
-              <span style={{ display: 'block', fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>{t('memory.nameHint')}</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{t('memory.nameHint')}</span>
             </label>
-            <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
+            <label style={{ display: 'block', fontSize: 13, marginBottom: 8 }}>
               {t('memory.description')}
               <input aria-label={t('memory.description')} value={formDesc} onChange={(e) => setFormDesc(e.target.value)} style={{ ...selectStyle, width: '100%', marginTop: 2 }} />
             </label>
-            <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
+            <label style={{ display: 'block', fontSize: 13, marginBottom: 8 }}>
               {t('memory.body')}
               <textarea aria-label={t('memory.body')} value={formBody} onChange={(e) => setFormBody(e.target.value)} rows={5} style={{ ...selectStyle, width: '100%', marginTop: 2, resize: 'vertical' }} />
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginBottom: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 12 }}>
               <input type="checkbox" aria-label={t('memory.global')} checked={formGlobal} onChange={(e) => setFormGlobal(e.target.checked)} />
               {t('memory.global')}
             </label>
@@ -6382,7 +6382,7 @@ export function MemoryTab() {
           </div>
         </div>
       )}
-      {savedName && <div data-testid="memory-saved" style={{ marginTop: 8, fontSize: 12, color: 'var(--accent)' }}>{t('memory.saved')}: {savedName}</div>}
+      {savedName && <div data-testid="memory-saved" style={{ marginTop: 8, fontSize: 13, color: 'var(--accent)' }}>{t('memory.saved')}: {savedName}</div>}
     </div>
   );
 }
@@ -6751,16 +6751,16 @@ export function ScheduledTasksTab() {
           {tplOpen && (
             <div ref={tplPopRef} data-testid="tpl-popover" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', width: 680, maxWidth: 'calc(100vw - 48px)', background: 'var(--panel-bg)', border: '1px solid var(--border)', borderRadius: 14, boxShadow: 'var(--shadow-md)', padding: 14, zIndex: 30 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10, padding: '0 2px' }}>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{t('scheduled.templatesTitle')}</span>
-                <button onClick={() => setTplOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>✕</button>
+                <span style={{ fontSize: 14, fontWeight: 600 }}>{t('scheduled.templatesTitle')}</span>
+                <button onClick={() => setTplOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 15, lineHeight: 1 }}>✕</button>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, maxHeight: 420, overflowY: 'auto' }}>
                 {TASK_TEMPLATES.map(tpl => (
                   <div key={tpl.id} className="tpl-card" onClick={() => applyTemplate(tpl)} title={tpl.desc[lang]} style={{ background: 'var(--card-bg, var(--bg-soft))', borderRadius: 8, padding: '9px 11px', cursor: 'pointer', display: 'flex', gap: 8, alignItems: 'flex-start', border: '1px solid transparent', transition: 'border-color 0.15s, background 0.15s' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'transparent'; }}>
                     <div style={{ fontSize: 18, lineHeight: '22px' }}>{tpl.icon}</div>
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>{tpl.name[lang]}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{tpl.desc[lang]}</div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{tpl.name[lang]}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{tpl.desc[lang]}</div>
                     </div>
                   </div>
                 ))}
@@ -6776,27 +6776,27 @@ export function ScheduledTasksTab() {
         {tasks.length === 0 && !showForm && (
           <div style={{ color: 'var(--text-muted)', fontSize: 14 }}>
             {t('scheduled.noTasks')}
-            <div style={{ fontSize: 12, marginTop: 6 }}>{t('scheduled.emptyHint')}</div>
+            <div style={{ fontSize: 13, marginTop: 6 }}>{t('scheduled.emptyHint')}</div>
           </div>
         )}
           {tasks.map(tk => (
             <div key={tk.name} style={{ background: 'var(--card-bg, var(--bg-soft))', borderRadius: 8, padding: '10px 14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
                 <strong style={{ flex: 1, fontSize: 14 }}>{tk.name}</strong>
-                <span onClick={() => handleToggle(tk)} style={{ fontSize: 11, background: tk.enabled ? 'var(--success)' : 'var(--text-muted)', color: 'var(--surface)', borderRadius: 4, padding: '1px 6px', cursor: 'pointer' }}>{tk.enabled ? 'ON' : 'OFF'}</span>
+                <span onClick={() => handleToggle(tk)} style={{ fontSize: 12, background: tk.enabled ? 'var(--success)' : 'var(--text-muted)', color: 'var(--surface)', borderRadius: 4, padding: '1px 6px', cursor: 'pointer' }}>{tk.enabled ? 'ON' : 'OFF'}</span>
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                 <span>🔄 {tk.description || tk.modeType}</span>
                 {tk.model && <span title={tk.model}>🤖 {modelNameById[tk.model] || tk.model}</span>}
                 {tk.agent && <span title={tk.agent}>👤 {tk.agent}</span>}
                 {tk.nextRun && <span>⏭ {tk.nextRun.replace('T',' ').slice(0,16)}</span>}
                 {tk.lastStatus && <span style={{ color: statusColor(tk.lastStatus) }}>● {tk.lastStatus}</span>}
               </div>
-              {(tk.startDate || tk.endDate) && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>📅 {tk.startDate || '—'} ~ {tk.endDate || '—'}</div>}
+              {(tk.startDate || tk.endDate) && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>📅 {tk.startDate || '—'} ~ {tk.endDate || '—'}</div>}
               <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
                 <button className="btn btn-secondary btn-small" onClick={() => openEdit(tk)} style={{ fontSize: 11 }}>{t('common.edit')}</button>
                 <button className="btn btn-secondary btn-small" onClick={() => handleRunNow(tk.name)} style={{ fontSize: 11 }}>{t('scheduled.runNow')}</button>
-                <button className="btn btn-secondary btn-small" onClick={() => handleRemove(tk.name)} style={{ fontSize: 11, color: 'var(--danger)' }}>{t('common.remove')}</button>
+                <button className="btn btn-secondary btn-small" onClick={() => handleRemove(tk.name)} style={{ fontSize: 12, color: 'var(--danger)' }}>{t('common.remove')}</button>
               </div>
             </div>
           ))}
@@ -6811,34 +6811,34 @@ export function ScheduledTasksTab() {
               <button onClick={() => { setShowForm(false); resetForm(); }} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: 'var(--text-muted)', lineHeight: 1 }}>✕</button>
             </div>
             {/* Error banner */}
-            {error && <div style={{ padding: '8px 12px', margin: '10px 20px 0', background: 'var(--danger-soft)', border: '1px solid var(--danger-border)', borderRadius: 6, color: 'var(--danger)', fontSize: 13, flexShrink: 0 }}>{error}</div>}
+            {error && <div style={{ padding: '8px 12px', margin: '10px 20px 0', background: 'var(--danger-soft)', border: '1px solid var(--danger-border)', borderRadius: 6, color: 'var(--danger)', fontSize: 14, flexShrink: 0 }}>{error}</div>}
             {/* Body */}
             <div style={{ padding: '16px 20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0 }}>
               {/* Section: Basic Info */}
               <div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>{t('scheduled.basicInfo')}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>{t('scheduled.basicInfo')}</div>
                 <div style={{ display: 'flex', gap: 10 }}>
                   <div style={{ flex: 1 }}>
-                    <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('scheduled.name')}</label>
+                    <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('scheduled.name')}</label>
                     <input className="toolbar-input" value={tname} onChange={e => setTName(e.target.value)} placeholder={t('scheduled.namePlaceholder')} style={{ width: '100%' }} />
                   </div>
                 </div>
                 <div style={{ marginTop: 10 }}>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('scheduled.model')}</label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('scheduled.model')}</label>
                   <select className="toolbar-select" value={model} onChange={e => setModel(e.target.value)} style={{ width: '100%' }}>
                     <option value="">{t('scheduled.modelDefault')}</option>
                     {modelOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                   </select>
                 </div>
                 <div style={{ marginTop: 10 }}>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('scheduled.agent')}</label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('scheduled.agent')}</label>
                   <select data-testid="scheduled-agent" className="toolbar-select" value={taskAgent} onChange={e => setTaskAgent(e.target.value)} style={{ width: '100%' }}>
                     <option value="">{t('scheduled.agentDefault')}</option>
                     {agents.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
                   </select>
                 </div>
                 <div style={{ marginTop: 10 }}>
-                  <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('scheduled.workspace')}</label>
+                  <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('scheduled.workspace')}</label>
                   <select data-testid="scheduled-workspace" className="toolbar-select" value={taskWorkspace} onChange={e => setTaskWorkspace(e.target.value)} style={{ width: '100%' }}>
                     <option value="">{t('scheduled.workspaceNone')}</option>
                     {wsList.map(w => <option key={w.id} value={w.id}>{w.title}</option>)}
@@ -6847,11 +6847,11 @@ export function ScheduledTasksTab() {
               </div>
               {/* Section: Frequency */}
               <div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>{t('scheduled.frequency')}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>{t('scheduled.frequency')}</div>
                 {/* Segmented mode selector */}
                 <div style={{ display: 'flex', gap: 4, background: 'var(--bg-soft)', borderRadius: 8, padding: 3, marginBottom: 10 }}>
                   {['periodic','interval','once'].map(mt => (
-                    <button key={mt} type="button" onClick={() => setModeType(mt)} style={{ flex: 1, padding: '6px 0', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontWeight: 600, background: modeType === mt ? 'var(--surface)' : 'transparent', color: modeType === mt ? 'var(--accent)' : 'var(--text-secondary)', boxShadow: modeType === mt ? 'var(--shadow-sm)' : 'none' }}>{t(`scheduled.${mt}`)}</button>
+                    <button key={mt} type="button" onClick={() => setModeType(mt)} style={{ flex: 1, padding: '6px 0', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer', fontWeight: 600, background: modeType === mt ? 'var(--surface)' : 'transparent', color: modeType === mt ? 'var(--accent)' : 'var(--text-secondary)', boxShadow: modeType === mt ? 'var(--shadow-sm)' : 'none' }}>{t(`scheduled.${mt}`)}</button>
                   ))}
                 </div>
                 {/* Periodic mode */}
@@ -6873,13 +6873,13 @@ export function ScheduledTasksTab() {
                 {modeType === 'interval' && (
                   <div style={{ background: 'var(--panel-bg)', borderRadius: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, minHeight: 92, boxSizing: 'border-box' }}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('scheduled.every')}</span>
+                      <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('scheduled.every')}</span>
                       <input className="toolbar-input" type="number" min={1} max={24} value={hours} onChange={e => setHours(parseInt(e.target.value)||1)} style={{ width: 60, textAlign: 'center' }} />
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('scheduled.hoursUnit')}</span>
+                      <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('scheduled.hoursUnit')}</span>
                     </div>
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                       {DAY_NAMES.map((d, i) => (
-                        <span key={i} onClick={() => toggleDay(i)} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 12, cursor: 'pointer', background: daysOfWeek.includes(i) ? 'var(--success)' : 'var(--border)', color: daysOfWeek.includes(i) ? 'var(--surface)' : 'var(--text-secondary)', userSelect: 'none' }}>{d}</span>
+                        <span key={i} onClick={() => toggleDay(i)} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 12, cursor: 'pointer', background: daysOfWeek.includes(i) ? 'var(--success)' : 'var(--border)', color: daysOfWeek.includes(i) ? 'var(--surface)' : 'var(--text-secondary)', userSelect: 'none' }}>{d}</span>
                       ))}
                     </div>
                   </div>
@@ -6899,7 +6899,7 @@ export function ScheduledTasksTab() {
                         }}
                         style={{ flex: 1, minWidth: 0 }}
                       />
-                      <span style={{ fontSize: 12, color: 'var(--text-muted)', flexShrink: 0 }}>·</span>
+                      <span style={{ fontSize: 13, color: 'var(--text-muted)', flexShrink: 0 }}>·</span>
                       <input
                         className="toolbar-input"
                         type="time"
@@ -6917,31 +6917,31 @@ export function ScheduledTasksTab() {
               </div>
               {/* Section: Validity */}
               <div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>{t('scheduled.validity')}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>{t('scheduled.validity')}</div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <input className="toolbar-input" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ flex: 1, minWidth: 0, fontSize: 12 }} />
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>~</span>
+                  <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>~</span>
                   <input className="toolbar-input" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ flex: 1, minWidth: 0, fontSize: 12 }} />
                 </div>
               </div>
               {/* Section: Task Prompt */}
               <div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>{t('scheduled.prompt')}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>{t('scheduled.prompt')}</div>
                 <div style={{ position: 'relative' }}>
                   <textarea ref={promptRef} className="toolbar-input" value={prompt} onChange={onPromptChange} onKeyDown={onPromptKeyDown} placeholder={t('scheduled.promptPlaceholder')} rows={4} style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', minHeight: 88, paddingBottom: 30, fontFamily: 'inherit', lineHeight: 1.5 }} />
-                  <button ref={skillBtnRef} type="button" onClick={openButtonPicker} title={t('scheduled.attachSkill')} style={{ position: 'absolute', left: 6, bottom: 6, border: '1px solid var(--border-strong)', background: 'var(--surface)', borderRadius: 7, padding: '2px 9px', fontSize: 11.5, cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 3 }}>＋ {t('scheduled.attachSkill')}</button>
+                  <button ref={skillBtnRef} type="button" onClick={openButtonPicker} title={t('scheduled.attachSkill')} style={{ position: 'absolute', left: 6, bottom: 6, border: '1px solid var(--border-strong)', background: 'var(--surface)', borderRadius: 7, padding: '2px 9px', fontSize: 13, cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 3 }}>＋ {t('scheduled.attachSkill')}</button>
                   {pickerOpen && (
                     <div style={{ position: 'absolute', zIndex: 30, ...(pickerMode === 'slash' ? { bottom: caretPos.bottom + 4, left: Math.min(caretPos.left, 180) } : { bottom: btnPopupBottom, left: 0 }), background: 'var(--surface)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-md)', width: 270, maxHeight: 280, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                      <div style={{ fontSize: 10.5, color: 'var(--text-muted)', padding: '6px 12px 2px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('scheduled.attachSkill')}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '6px 12px 2px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('scheduled.attachSkill')}</div>
                       <div style={{ overflowY: 'auto', flex: 1, paddingBottom: 4 }}>
                         {filteredSkills.length === 0 && <div style={{ padding: '10px 12px', color: 'var(--text-muted)', fontSize: 12 }}>—</div>}
                         {filteredSkills.map((s, i) => (
                           <div key={s.name} onMouseDown={(e) => { e.preventDefault(); insertSkillToken(skillTokenOf(s)); }} style={{ padding: '7px 12px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 1, background: i === pickerIndex && pickerMode === 'slash' ? 'var(--accent-soft)' : 'transparent' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>{s.has_command && s.command ? `/${s.command}` : `/${s.name}`}</span>
-                              {s.always_on && <span style={{ fontSize: 9.5, background: 'var(--info-soft)', color: 'var(--info)', padding: '0 5px', borderRadius: 6 }}>always-on</span>}
+                              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{s.has_command && s.command ? `/${s.command}` : `/${s.name}`}</span>
+                              {s.always_on && <span style={{ fontSize: 10, background: 'var(--info-soft)', color: 'var(--info)', padding: '0 5px', borderRadius: 6 }}>always-on</span>}
                             </div>
-                            {s.description && <div style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.description}</div>}
+                            {s.description && <div style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.description}</div>}
                           </div>
                         ))}
                       </div>
@@ -6949,7 +6949,7 @@ export function ScheduledTasksTab() {
                   )}
                 </div>
                 {parseSkillTokens(prompt, skillsList).length > 0 && (
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>{t('scheduled.attached')}: {parseSkillTokens(prompt, skillsList).map(n => `/${n}`).join('  ')}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>{t('scheduled.attached')}: {parseSkillTokens(prompt, skillsList).map(n => `/${n}`).join('  ')}</div>
                 )}
               </div>
             </div>
@@ -6960,7 +6960,7 @@ export function ScheduledTasksTab() {
                 <div style={{ width: 34, height: 19, borderRadius: 10, cursor: 'pointer', flexShrink: 0, background: enabled ? 'var(--accent)' : 'var(--border-strong)', transition: 'background 0.2s', position: 'relative' }}>
                   <div style={{ width: 15, height: 15, borderRadius: 8, background: 'var(--surface)', position: 'absolute', top: 2, left: enabled ? 17 : 2, transition: 'left 0.2s' }} />
                 </div>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('scheduled.enabled')}</span>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('scheduled.enabled')}</span>
               </div>
               <button className="btn btn-secondary btn-small" onClick={() => { setShowForm(false); resetForm(); }}>{t('scheduled.cancel')}</button>
               <button className="btn btn-primary btn-small" onClick={handleSave} disabled={busy}>{busy ? '...' : t('scheduled.save')}</button>
@@ -7087,7 +7087,7 @@ function BacktrackModal({ messages, loading, onSelect, onCancel }: {
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-card" style={{ maxHeight: '70%', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-title">{t('thread.backtrackTitle')}</div>
-        <div className="modal-body" style={{ flex: 1, overflowY: 'auto', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div className="modal-body" style={{ flex: 1, overflowY: 'auto', fontSize: 13, display: 'flex', flexDirection: 'column', gap: 2 }}>
           {loading && <div style={{ color: 'var(--text-muted)', padding: 8 }}>{t('thread.loading')}</div>}
           {!loading && messages.length === 0 && (
             <div style={{ color: 'var(--text-muted)', padding: 8 }}>{t('thread.backtrackEmpty')}</div>
@@ -7147,7 +7147,7 @@ function ArchiveModal({ sessions, onRestore, onCancel }: {
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-card" style={{ maxHeight: '70%', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-title">{t('thread.archiveTitle')}</div>
-        <div className="modal-body" style={{ flex: 1, overflowY: 'auto', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div className="modal-body" style={{ flex: 1, overflowY: 'auto', fontSize: 13, display: 'flex', flexDirection: 'column', gap: 2 }}>
           {sessions.length === 0 && (
             <div style={{ color: 'var(--text-muted)', padding: 8 }}>{t('thread.archiveEmpty')}</div>
           )}
@@ -7281,7 +7281,7 @@ export function PermissionRiskModal(props: {
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-title">{t('common.permissionRiskTitle')}</div>
         <div className="modal-body">{t('common.permissionRiskBody')}</div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer', padding: '0 16px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', padding: '0 16px' }}>
           <input
             type="checkbox"
             checked={props.acknowledged}
@@ -10203,7 +10203,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Error toast */}
       {errorMsg && (
-        <div style={{ padding: '8px 16px', background: 'var(--danger-soft)', borderBottom: '1px solid var(--danger-border)', color: 'var(--danger)', fontSize: 12, textAlign: 'center' }}>
+        <div style={{ padding: '8px 16px', background: 'var(--danger-soft)', borderBottom: '1px solid var(--danger-border)', color: 'var(--danger)', fontSize: 13, textAlign: 'center' }}>
           {errorMsg}
         </div>
       )}
@@ -10236,13 +10236,13 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       {/* Workspace instructions banner (same file set as the model context) */}
       {workspaceInstructions && (
         <details style={{ margin: '0 16px', padding: '8px 12px', background: 'var(--panel-bg)', borderRadius: 6, border: '1px solid var(--accent-border)' }}>
-          <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>
             {t('coding.workspaceInstructions')}
             {instructionsTruncated && (
               <span style={{ color: 'var(--danger)', fontWeight: 400 }}> · {t('coding.instructionsTruncated')}</span>
             )}
           </summary>
-          <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap', color: 'var(--text-secondary)', maxHeight: 200, overflowY: 'auto' }}>
+          <pre style={{ marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap', color: 'var(--text-secondary)', maxHeight: 200, overflowY: 'auto' }}>
             {workspaceInstructions}
           </pre>
         </details>
@@ -10339,21 +10339,21 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       {/* API Debug log — collapsible cards, default off */}
       {debugEnabled && (
         <div style={{ flexShrink: 0, maxHeight: '35%', overflowY: 'auto', borderTop: '1px solid var(--border)', background: 'var(--panel-bg)' }}>
-          <div style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ padding: '5px 12px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>{debugLog.length > 0 ? t('chat.debugEntries', { count: debugLog.length }) : t('chat.debugWaiting')}</span>
             {debugLog.length > 0 && <button onClick={() => setDebugLog([])} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 11 }}>{t('chat.debugClear')}</button>}
           </div>
           {debugLog.length === 0 && (
-            <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-muted)' }}>
+            <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
               {t('chat.debugHint')}
             </div>
           )}
           {debugLog.map((entry, i) => (
             <details key={i} style={{ padding: '4px 12px', borderBottom: '1px solid var(--border)' }}>
-              <summary style={{ fontSize: 11, cursor: 'pointer', fontWeight: 600, color: entry.kind === 'request' ? 'var(--accent)' : 'var(--success)' }}>
+              <summary style={{ fontSize: 12, cursor: 'pointer', fontWeight: 600, color: entry.kind === 'request' ? 'var(--accent)' : 'var(--success)' }}>
                 {entry.kind === 'request' ? '⬆ REQUEST' : '⬇ RESPONSE'} · turn {entry.turn} · {entry.kind === 'request' ? 'body' : `${(entry.data as string[]).length} chunks`}
               </summary>
-              <pre style={{ fontSize: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 220, overflowY: 'auto', color: 'var(--text)', margin: '6px 0 2px', background: 'var(--surface)', padding: 6, borderRadius: 4, border: '1px solid var(--border)' }}>
+              <pre style={{ fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 220, overflowY: 'auto', color: 'var(--text)', margin: '6px 0 2px', background: 'var(--surface)', padding: 6, borderRadius: 4, border: '1px solid var(--border)' }}>
                 {entry.kind === 'request'
                   ? (() => { try { return JSON.stringify(entry.data, null, 2); } catch { return String(entry.data); } })()
                   : (entry.data as string[]).join('\n')}
@@ -11751,8 +11751,8 @@ function RemoteAccessSection() {
     <div>
       {!info ? (
         <>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>{t('settings.remoteHint')}</div>
-          <button onClick={startServer} style={{ padding: '6px 14px', border: '1px solid var(--border-strong)', borderRadius: 6, background: 'var(--surface)', color: 'var(--text)', fontSize: 12.5, cursor: 'pointer' }}>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>{t('settings.remoteHint')}</div>
+          <button onClick={startServer} style={{ padding: '6px 14px', border: '1px solid var(--border-strong)', borderRadius: 6, background: 'var(--surface)', color: 'var(--text)', fontSize: 14, cursor: 'pointer' }}>
             {t('settings.remoteStart')}
           </button>
         </>
@@ -11761,7 +11761,7 @@ function RemoteAccessSection() {
           {qrSvg && (
             <div className="qr-box" dangerouslySetInnerHTML={{ __html: qrSvg }} />
           )}
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
             <div>{t('settings.remoteAddr')}: <code style={{ fontFamily: 'var(--mono)' }}>{lan}:{info.port}</code></div>
             <div style={{ wordBreak: 'break-all', userSelect: 'text' }}>{t('settings.remoteToken')}: <code style={{ fontFamily: 'var(--mono)' }}>{info.token}</code></div>
             <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
@@ -11769,7 +11769,7 @@ function RemoteAccessSection() {
               <button onClick={() => copy(pairingUrl, 'url')} style={copyBtn}>{copied === 'url' ? t('settings.copied') : t('settings.copyPairUrl')}</button>
               <button onClick={() => copy(pairingJson, 'json')} style={copyBtn}>{copied === 'json' ? t('settings.copied') : t('settings.copyPairJson')}</button>
             </div>
-            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.remoteNote')}</div>
+            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.remoteNote')}</div>
           </div>
         </div>
       )}
@@ -11778,7 +11778,7 @@ function RemoteAccessSection() {
 }
 const copyBtn: React.CSSProperties = {
   padding: '4px 10px', border: '1px solid var(--border-strong)', borderRadius: 6,
-  background: 'var(--surface)', color: 'var(--text)', fontSize: 11.5, cursor: 'pointer',
+  background: 'var(--surface)', color: 'var(--text)', fontSize: 13, cursor: 'pointer',
 };
 
 /* ─── Settings hot-update sections (WI-4: settings sections / model-provider
@@ -11786,7 +11786,7 @@ const copyBtn: React.CSSProperties = {
 
 const settingsInputStyle: React.CSSProperties = {
   width: '100%', padding: '6px 10px', border: '1px solid var(--border-strong)', borderRadius: 5,
-  fontSize: 12, background: 'var(--surface)', color: 'var(--text)', outline: 'none', boxSizing: 'border-box',
+  fontSize: 13, background: 'var(--surface)', color: 'var(--text)', outline: 'none', boxSizing: 'border-box',
 };
 
 function SettingsField({ label, hint, children }: {
@@ -11794,9 +11794,9 @@ function SettingsField({ label, hint, children }: {
 }) {
   return (
     <div>
-      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{label}</div>
       {children}
-      {hint && <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 3 }}>{hint}</div>}
+      {hint && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>{hint}</div>}
     </div>
   );
 }
@@ -11808,7 +11808,7 @@ function SaveStatusLine({ status, message, savedText }: {
   if (status === 'idle') return null;
   const color = status === 'error' ? 'var(--danger)' : status === 'saved' ? 'var(--success)' : 'var(--text-muted)';
   const text = status === 'error' ? message : status === 'saving' ? '…' : savedText;
-  return <span data-testid="settings-save-status" style={{ fontSize: 11, color }}>{text}</span>;
+  return <span data-testid="settings-save-status" style={{ fontSize: 12, color }}>{text}</span>;
 }
 
 /** Number-or-null field semantics: empty input clears the override (the
@@ -11881,7 +11881,7 @@ export function SettingsAgentSection() {
   };
 
   if (loadError) {
-    return <div data-testid="agent-load-error" style={{ fontSize: 12, color: 'var(--danger)' }}>
+    return <div data-testid="agent-load-error" style={{ fontSize: 13, color: 'var(--danger)' }}>
       {t('settings.loadFailed')}: {loadError}
     </div>;
   }
@@ -11889,7 +11889,7 @@ export function SettingsAgentSection() {
   const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 14px', marginBottom: 12 };
   return (
     <div>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.6 }}>
         {t('settings.agentHint')}
       </div>
       <div style={grid}>
@@ -12026,18 +12026,18 @@ export function SettingsModelsSection() {
   };
 
   if (loadError) {
-    return <div data-testid="models-load-error" style={{ fontSize: 12, color: 'var(--danger)' }}>
+    return <div data-testid="models-load-error" style={{ fontSize: 13, color: 'var(--danger)' }}>
       {t('settings.loadFailed')}: {loadError}
     </div>;
   }
   if (providers && providers.length === 0) {
-    return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.noProviders')}</div>;
+    return <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{t('settings.noProviders')}</div>;
   }
 
   const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 14px', marginBottom: 8 };
   return (
     <div>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.6 }}>
         {t('settings.modelsHint')}
       </div>
       {(providers ?? []).map((p) => {
@@ -12047,10 +12047,10 @@ export function SettingsModelsSection() {
         return (
           <div key={p.id} style={{ padding: '10px 12px', marginBottom: 8, borderRadius: 6, background: 'var(--bg-soft)', border: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-              <span style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text-muted)' }}>{p.id}</span>
-              <span style={{ fontSize: 10, background: 'var(--accent-soft)', color: 'var(--accent)', borderRadius: 3, padding: '1px 6px' }}>{p.model_type}</span>
-              <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{p.provider_type}</span>
-              <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+              <span style={{ fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--text-muted)' }}>{p.id}</span>
+              <span style={{ fontSize: 11, background: 'var(--accent-soft)', color: 'var(--accent)', borderRadius: 3, padding: '1px 6px' }}>{p.model_type}</span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{p.provider_type}</span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
                 {t('settings.providerModels', { count: p.models?.length ?? 0 })}
               </span>
             </div>
@@ -12073,7 +12073,7 @@ export function SettingsModelsSection() {
               </SettingsField>
             </div>
             <details style={{ marginBottom: 6 }}>
-              <summary style={{ fontSize: 11, color: 'var(--text-muted)', cursor: 'pointer' }}>{t('models.advanced')}</summary>
+              <summary style={{ fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>{t('models.advanced')}</summary>
               <div style={grid}>
                 <SettingsField label={t('models.apiFormat')}>
                   <select aria-label={`provider-${p.id}-api-format`} style={settingsInputStyle} value={d.apiFormat}
@@ -12144,21 +12144,21 @@ export function SettingsPluginsSection() {
   };
 
   if (loadError) {
-    return <div data-testid="plugins-load-error" style={{ fontSize: 12, color: 'var(--danger)' }}>
+    return <div data-testid="plugins-load-error" style={{ fontSize: 13, color: 'var(--danger)' }}>
       {t('settings.loadFailed')}: {loadError}
     </div>;
   }
   if (plugins && plugins.length === 0) {
-    return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('plugins.noPlugins')}</div>;
+    return <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{t('plugins.noPlugins')}</div>;
   }
 
   const chip: React.CSSProperties = {
-    display: 'inline-block', fontSize: 10, borderRadius: 3, padding: '1px 6px', marginRight: 4,
+    display: 'inline-block', fontSize: 11, borderRadius: 3, padding: '1px 6px', marginRight: 4,
     background: 'var(--bg-soft)', border: '1px solid var(--border)', color: 'var(--text-muted)',
   };
   return (
     <div>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.6 }}>
         {t('settings.pluginsHint')}
       </div>
       {(plugins ?? []).map((p) => (
@@ -12166,33 +12166,33 @@ export function SettingsPluginsSection() {
           style={{ padding: '10px 12px', marginBottom: 8, borderRadius: 6, background: 'var(--bg-soft)', border: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontWeight: 600, fontSize: 13 }}>{p.name}</span>
-            {p.version && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>v{p.version}</span>}
-            {p.ui && <span style={{ fontSize: 10, color: 'var(--accent)', background: 'var(--accent-soft)', borderRadius: 3, padding: '1px 5px' }}>UI</span>}
+            {p.version && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>v{p.version}</span>}
+            {p.ui && <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-soft)', borderRadius: 3, padding: '1px 5px' }}>UI</span>}
             <button className="btn btn-secondary btn-small" disabled={busy === p.name}
-              style={{ fontSize: 11, padding: '3px 10px', color: 'var(--danger)', marginLeft: 'auto' }}
+              style={{ fontSize: 12, padding: '3px 10px', color: 'var(--danger)', marginLeft: 'auto' }}
               onClick={() => uninstall(p)}>{t('plugins.uninstall')}</button>
           </div>
-          {p.description && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{p.description}</div>}
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+          {p.description && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{p.description}</div>}
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
             {t('settings.skillsCount', { count: p.skills.length })}
             {p.skills.length > 0 && `: ${p.skills.join(', ')}`}
           </div>
           {p.ui?.tabs && p.ui.tabs.length > 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
               {t('settings.uiTabs')}: {p.ui.tabs.map((tab) => (
                 <span key={tab.id} style={chip}>{tab.title}</span>
               ))}
             </div>
           )}
           {p.ui?.permissions && p.ui.permissions.length > 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
               {t('settings.permissions')}: {p.ui.permissions.map((perm) => (
                 <span key={perm} style={chip}>{perm}</span>
               ))}
             </div>
           )}
           {(p.installedAt || p.installed_at) && (
-            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
               {t('plugins.installedAt')} {(p.installedAt || p.installed_at).slice(0, 10)}
             </div>
           )}
@@ -12230,20 +12230,20 @@ function CodeTokenColorsSection() {
   const bump = () => setVersion((v) => v + 1);
   return (
     <div data-tick={version} style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>{t('settings.codePalette.title')}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>{t('settings.codePalette.title')}</div>
       <div style={{ padding: '4px 0 2px' }}>
         {CODE_TOKEN_ROWS.map(({ key, label }) => {
           const current = currentTokenValue('light', key);
           const overridden = current.toLowerCase() !== DEFAULT_LIGHT[key].toLowerCase();
           return (
             <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
-              <span style={{ flex: 1, fontSize: 12.5, color: 'var(--text)' }}>{t(label)}</span>
+              <span style={{ flex: 1, fontSize: 14, color: 'var(--text)' }}>{t(label)}</span>
               {overridden && (
                 <button
                   type="button"
                   title={t('settings.codePalette.reset')}
                   onClick={() => { setCodeToken('light', key, DEFAULT_LIGHT[key]); bump(); }}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13, padding: '0 2px' }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, padding: '0 2px' }}
                 >↺</button>
               )}
               <input
@@ -12288,8 +12288,8 @@ export function SubagentDelegationSection() {
   if (subagents.length === 0) return null;
   return (
     <div style={{ marginBottom: 16 }}>
-      <h4 style={{ margin: '0 0 2px', fontSize: 13, color: 'var(--text-secondary)' }}>Subagent Delegation</h4>
-      <p style={{ margin: '0 0 8px', fontSize: 11, color: 'var(--text-muted)' }}>
+      <h4 style={{ margin: '0 0 2px', fontSize: 14, color: 'var(--text-secondary)' }}>Subagent Delegation</h4>
+      <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--text-muted)' }}>
         Enable a template and pick its model — the child runs under that route, or inherits the calling agent's model when none is picked.
       </p>
       {subagents.map((s) => {
@@ -12306,21 +12306,21 @@ export function SubagentDelegationSection() {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ minWidth: 0 }}>
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{s.name}</span>
-                <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)' }}>{s.description}</span>
+                <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-muted)' }}>{s.description}</span>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
                 {s.enabled && (
                   <select
                     value={s.model ?? ''}
                     onChange={(e) => saveSubagent(s.name, true, e.target.value || undefined)}
-                    style={{ fontSize: 12, padding: '3px 6px', borderRadius: 4, border: '1px solid var(--border-strong)', maxWidth: 220 }}
+                    style={{ fontSize: 13, padding: '3px 6px', borderRadius: 4, border: '1px solid var(--border-strong)', maxWidth: 220 }}
                     title="Child model route"
                   >
                     <option value="">Calling agent model</option>
                     {modelOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
                   </select>
                 )}
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
                   <input
                     type="checkbox"
                     checked={s.enabled}
@@ -12331,7 +12331,7 @@ export function SubagentDelegationSection() {
                 </label>
               </div>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
               {s.readOnly ? 'read-only' : 'read/write'} · tools: {s.tools.join(', ')}
             </div>
           </div>
@@ -12352,7 +12352,7 @@ export function SettingsDialog({ onClose }: {
     return (
       <button onClick={() => setTab(t2)} style={{
         flex: 1, padding: '9px 8px', border: 'none', cursor: 'pointer', background: 'none',
-        color: active ? 'var(--accent)' : 'var(--text-muted)', fontSize: 13, fontWeight: 600,
+        color: active ? 'var(--accent)' : 'var(--text-muted)', fontSize: 14, fontWeight: 600,
         borderBottom: `2px solid ${active ? 'var(--accent)' : 'transparent'}`, transition: 'all 0.15s',
       }}>{label}</button>
     );
@@ -12383,9 +12383,9 @@ export function SettingsDialog({ onClose }: {
           {tab === 'general' && (
             <>
               <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>{t('settings.language')}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>{t('settings.language')}</div>
                 <select value={lang} onChange={(e) => setLang(e.target.value as 'en' | 'zh')}
-                  style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border-strong)', borderRadius: 6, fontSize: 13, background: 'var(--surface)', cursor: 'pointer' }}>
+                  style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border-strong)', borderRadius: 6, fontSize: 14, background: 'var(--surface)', cursor: 'pointer' }}>
                   <option value="en">{t('settings.english')}</option>
                   <option value="zh">{t('settings.chinese')}</option>
                 </select>
@@ -12503,7 +12503,7 @@ export function BackendErrorScreen({ error }: { error: string }) {
             onClick={() => { void window.starriver?.retryInit?.(); }}
             style={{
               padding: '8px 20px', borderRadius: 6, border: 'none', cursor: 'pointer',
-              background: 'var(--accent)', color: 'var(--surface)', fontSize: 14,
+              background: 'var(--accent)', color: 'var(--surface)', fontSize: 15,
             }}
           >
             {t('backendError.retry')}
@@ -12512,20 +12512,20 @@ export function BackendErrorScreen({ error }: { error: string }) {
             onClick={() => window.starriver?.quitApp?.()}
             style={{
               padding: '8px 20px', borderRadius: 6, border: 'none', cursor: 'pointer',
-              background: 'var(--danger)', color: 'var(--surface)', fontSize: 14,
+              background: 'var(--danger)', color: 'var(--surface)', fontSize: 15,
             }}
           >
             {t('backendError.quit')}
           </button>
         </div>
         <details style={{ marginTop: 20 }}>
-          <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--text-muted)' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--text-muted)' }}>
             {t('backendError.devDetail')}
           </summary>
           <pre style={{
             background: 'var(--overlay)', border: '1px solid var(--danger-soft)', borderRadius: 6,
             padding: 12, overflow: 'auto', maxHeight: 240, whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word', fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12,
+            wordBreak: 'break-word', fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 13,
             color: 'var(--danger-soft)', marginTop: 8,
           }}>{error}</pre>
         </details>
@@ -12588,7 +12588,7 @@ export function HooksTab() {
             ? <span className="badge">{t('hooks.allTools')}</span>
             : tools.map((tk) => <span key={tk} className="badge">{tk}</span>)}
         </span>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{h.size}B</span>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{h.size}B</span>
         <button className="btn btn-secondary btn-small" onClick={() => setModal({ mode: 'edit', hook: h })}>Edit</button>
         <button className="btn btn-secondary btn-small" style={{ color: 'var(--danger)' }} onClick={() => handleDelete(h)}>Delete</button>
       </li>
@@ -12599,9 +12599,9 @@ export function HooksTab() {
     const items = hooks.filter((h) => h.event === event);
     return (
       <div key={event} style={{ marginBottom: 16 }}>
-        <h4 style={{ margin: '0 0 6px', fontSize: 12, color: 'var(--text-secondary)' }}>{label}</h4>
+        <h4 style={{ margin: '0 0 6px', fontSize: 13, color: 'var(--text-secondary)' }}>{label}</h4>
         {items.length === 0
-          ? <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '6px 0' }}>—</div>
+          ? <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '6px 0' }}>—</div>
           : <ul className="skills-list" style={{ margin: 0, paddingLeft: 0, listStyle: 'none' }}>{items.map(row)}</ul>}
       </div>
     );
@@ -12613,13 +12613,13 @@ export function HooksTab() {
         <h3>Hooks</h3>
         <button className="btn btn-primary btn-small" onClick={() => setModal({ mode: 'create' })}>+ {t('hooks.new')}</button>
       </div>
-      <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 0 }}>{t('hooks.subtitle')}</p>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 0 }}>{t('hooks.subtitle')}</p>
       {hooks.length === 0 && (
         <div style={{ border: '1px dashed var(--border-strong)', borderRadius: 8, padding: 16, marginBottom: 16 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('hooks.empty')}</div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>{t('hooks.emptyHint')}</div>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{t('hooks.envTitle')}</div>
-          <pre style={{ fontSize: 11, margin: 0, fontFamily: 'ui-monospace, Menlo, monospace', whiteSpace: 'pre-wrap' }}>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 10 }}>{t('hooks.emptyHint')}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('hooks.envTitle')}</div>
+          <pre style={{ fontSize: 12, margin: 0, fontFamily: 'ui-monospace, Menlo, monospace', whiteSpace: 'pre-wrap' }}>
 {`STARRIVER_EVENT       PreToolUse | PostToolUse
 STARRIVER_TOOL        <tool name>
 STARRIVER_SESSION     <session id>
@@ -12676,8 +12676,8 @@ function HookEditorModal({ onClose, onSaved, initial }: {
     } finally { setSaving(false); }
   };
 
-  const label: React.CSSProperties = { fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 };
-  const input: React.CSSProperties = { width: '100%', padding: '6px 10px', border: '1px solid var(--border-strong)', borderRadius: 5, fontSize: 13, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' };
+  const label: React.CSSProperties = { fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 };
+  const input: React.CSSProperties = { width: '100%', padding: '6px 10px', border: '1px solid var(--border-strong)', borderRadius: 5, fontSize: 14, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' };
   const tplBtn = (labelText: string, body: string) => (
     <button className="btn btn-secondary btn-small" type="button"
       onClick={() => setContent(body)}>{labelText}</button>
@@ -12706,7 +12706,7 @@ function HookEditorModal({ onClose, onSaved, initial }: {
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="bash-audit.sh" style={input} disabled={editing} />
             </div>
           </div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -4 }}>{t('hooks.nameHint')}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: -4 }}>{t('hooks.nameHint')}</div>
           {!editing && content === '' && (
             <div style={{ display: 'flex', gap: 6 }}>
               {tplBtn(t('hooks.templateAudit'), HOOK_TEMPLATE_AUDIT)}
@@ -12716,7 +12716,7 @@ function HookEditorModal({ onClose, onSaved, initial }: {
           <div>
             <label style={label}>{t('hooks.fieldContent')}</label>
             <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={12}
-              style={{ ...input, fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12, resize: 'vertical' }} />
+              style={{ ...input, fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 13, resize: 'vertical' }} />
           </div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '0 20px 16px' }}>
@@ -12865,7 +12865,7 @@ function App() {
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '6px 12px', borderBottom: '1px solid var(--border)',
-          background: 'var(--sidebar-bg)', fontSize: 12, color: 'var(--text-secondary)', flexShrink: 0,
+          background: 'var(--sidebar-bg)', fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0,
         }}>
           <span>Shell plugin: {shellReplacement.name}</span>
           <button className="btn btn-secondary btn-small" onClick={() => setShellDismissed(true)}>
