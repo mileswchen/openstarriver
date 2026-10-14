@@ -9986,6 +9986,10 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // not yet acked by TaskStarted already counts as the Session screen — the
   // pickers must not flash back mid-send.
   const inSession = !!activeSessionId || messages.length > 0;
+  // WI-125 turn rail: multi-turn sessions get navigation; a running turn shows
+  // its tick live even when it is the session's first (only) turn — gating on
+  // group count alone left the rail absent for the entire first turn.
+  const showTurnRail = inSession && (turnGroups.length > 1 || sending);
   // Todo widget state: the latest todo_write result across the message stream
   // (live and replayed history share the same `## TODO` text shape), honoring
   // the todoHideUpTo stale-todo watermark above.
@@ -10062,7 +10066,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       )}
       {(view === 'chat' || !inSession) && (<>
       <div className="turn-body">
-      {inSession && turnGroups.length > 1 && (
+      {showTurnRail && (
         <div
           className="turn-rail"
           ref={railRef}
@@ -10091,7 +10095,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           )}
         </div>
       )}
-      <div className={`message-list coding-messages${inSession && turnGroups.length > 1 ? ' rail-inset' : ''}${isNewTask ? ' new-task' : ''}`} ref={codingListRef} onScroll={() => {
+      <div className={`message-list coding-messages${showTurnRail ? ' rail-inset' : ''}${isNewTask ? ' new-task' : ''}`} ref={codingListRef} onScroll={() => {
           const el = codingListRef.current;
           if (!el) return;
           codingFollowRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -10183,7 +10187,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       {/* Todo widget (global, not per-message): the latest todo_write state
           with a collapsed progress summary and an expandable full list. */}
       {inSession && latestTodo && (
-        <div className={`todo-widget${inSession && turnGroups.length > 1 ? ' rail-inset' : ''}`}>
+        <div className={`todo-widget${showTurnRail ? ' rail-inset' : ''}`}>
           <button type="button" className="todo-widget-head" aria-expanded={todoOpen} aria-label="todo-widget"
             onClick={() => setTodoOpen(o => !o)}>
             <span className="todo-widget-title">{t('coding.todoTitle')}</span>
@@ -10201,7 +10205,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       )}
       <div
         ref={slashBoxRef}
-        className={`${isNewTask ? 'newtask-composer' : ''}${inSession && turnGroups.length > 1 ? ' rail-inset' : ''}`}
+        className={`${isNewTask ? 'newtask-composer' : ''}${showTurnRail ? ' rail-inset' : ''}`}
         style={{ position: 'relative' }}
       >
         {/* New Task screen: the Coding / Chat switch sits in the empty state
@@ -10304,7 +10308,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           </div>
         )}
         <Composer
-          railInset={inSession && turnGroups.length > 1}
+          railInset={showTurnRail}
           fileSuggest={!stagedChat && activeWorkspaceId ? { workspaceId: activeWorkspaceId } : null}
           planReviewCard={
             planReview && sessionIdRef2.current ? (

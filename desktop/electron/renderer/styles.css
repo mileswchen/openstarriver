@@ -434,7 +434,9 @@ button { font-family: inherit; }
 }
 
 /* ── Turn 导航轨(WI-125):一条横线代表一个 Turn,靠近鼠标动态加长(Dock 式),
-   悬停显示摘要,点击切换该 Turn 的显示;≡ 回全部时间线。仅多 Turn 会话显示。── */
+   悬停显示摘要,点击切换该 Turn 的显示;≡ 回全部时间线。多 Turn 会话显示;
+   单 Turn 会话在 Turn 运行中也显示(运行中的回合要有实时导航,不能等第二个
+   Turn 出现)。── */
 .turn-body { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .turn-rail {
   width: 48px; flex-shrink: 0; background: var(--surface);
