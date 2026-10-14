@@ -49,6 +49,9 @@
   --accent-soft: #eef0f3;
   --accent-border: #d8dce2;
   --on-accent: #ffffff;
+  /* 侧栏当前工作区行：macOS Finder 风格蓝色胶囊（截图基准色） */
+  --ws-active: #3478f6;
+  --ws-active-hover: #2a6ce0;
   /* Semantic */
   --success: #16a34a;
   --success-soft: #e8f7ee;
@@ -2436,3 +2439,19 @@ button[data-tip]:hover::after,
 @media (prefers-reduced-motion: reduce) {
   .ui-lock-shake { animation: none; }
 }
+
+/* ─── 侧栏当前工作区：macOS Finder 风格蓝色胶囊高亮 ───
+   截图基准：蓝色圆角胶囊 + 白色文字/图标。is-active 只挂在当前工作区
+   行（app.tsx WorkspaceSection），会话行/未分组行不受影响。规则置于
+   文件末尾以赢得与 .coding-group-header:hover 的同特异性源顺序竞争。 */
+.sb-ws-group.is-active {
+  background: var(--ws-active, #3478f6);
+  border-radius: 999px;
+  transition: background 0.12s, border-radius 0.12s;
+}
+.sb-ws-group.is-active:hover { background: var(--ws-active-hover, #2a6ce0); }
+.sb-ws-group.is-active .sb-ws-name,
+.sb-ws-group.is-active .sb-ws-chevron,
+.sb-ws-group.is-active .sb-ws-folder,
+.sb-ws-group.is-active .sb-ws-icon-btn,
+.sb-ws-group.is-active .coding-group-delete { color: #ffffff; }
