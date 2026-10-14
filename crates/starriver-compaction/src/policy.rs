@@ -17,6 +17,10 @@ pub enum CompactionTrigger {
     ContextOverflow,
     /// A human (or API caller) asked for condensation; threshold bypassed.
     Manual,
+    /// WI-199: the same-step retry escalation ladder fires — after 3+
+    /// consecutive escalatable failures the retry is diverged from the exact
+    /// context that kept failing by condensing first. Threshold bypassed.
+    EscalatedRetry,
 }
 
 /// Tool-result pruner budgets (compaction-tool-result-pruner defaults:
@@ -101,4 +105,16 @@ pub struct CompactionRoute {
     pub context_window: u64,
     /// Output cap for the summarize request.
     pub max_tokens: u32,
+    /// WI-207 (BUG-151): explicit reasoning effort for the summarize call —
+    /// `Some("off")` when the model resolves an effort, so a reasoning
+    /// model can't burn the whole output budget thinking and return empty
+    /// text. `None` keeps the provider default (models without effort
+    /// support must not see an explicit effort at all).
+    pub summarize_reasoning_effort: Option<String>,
+    /// WI-209 (BUG-150): the provider's real input-token count from the last
+    /// completed call in this session. The char-based estimate undershoots
+    /// real tokenizers (plus system prompt + tool schemas it never sees);
+    /// this floors the pressure comparison — erring high just compacts a
+    /// little early, erring low lets the context grow unbounded.
+    pub observed_input_tokens: Option<u64>,
 }

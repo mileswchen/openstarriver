@@ -1,14 +1,14 @@
 /// <reference types="vitest/globals" />
 // 2026-10-07 session-switch sweep: per-session view state leaked across an
 // A→B switch. Two pinned regressions:
-//   1. Session A's run state kept the composer on Stop after switching to an
+//   1. Session A's run state kept the composer on 停止 after switching to an
 //      IDLE session B — the button keys on `sending || staleBusy`, and
 //      `sending` belonged to A's execute (fixed: the switch effect resets
 //      sending and re-derives the button from `sessions.running` only).
 //   2. The stop/approval ref (sessionIdRef) only filled from live
 //      TaskStarted/sessionStarted, so after a restart / remount Stop armed
 //      the 20s watchdog and NEVER sent a cancel (host log, session
-//      e3d6121b: zero cancels while the user clicked Stop twice). The open
+//      e3d6121b: zero cancels while the user clicked 结束 twice). The open
 //      session id is now mirrored into the ref on switch, and the hook
 //      falls back to it (matching stopStaleTurn).
 import { describe, it, expect, vi, beforeEach } from 'vitest';

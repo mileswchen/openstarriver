@@ -500,6 +500,24 @@ pub struct TurnRepeatGuard {
 /// Same-signature consecutive failures tolerated before the breaker fires
 /// (two real attempts; the 3rd identical call is paired without dispatch).
 pub const REPEAT_FAILURE_LIMIT: u32 = 2;
+
+/// WI-202: transport-class tool failures — infrastructure unavailable (MCP
+/// server down / request dropped / timeout / launch-handshake failed). They
+/// never feed the repeat-failure breaker: retrying after a while is the
+/// CORRECT recovery for a transient outage, and no change of arguments can
+/// fix it (that is what the breaker's "identical arguments" heuristic is
+/// FOR). Hammering a dead endpoint is still backstopped by the turn's total
+/// tool-call budget, and the MCP availability notice announces the outage.
+fn is_transport_failure(error: &JsonValue) -> bool {
+    matches!(
+        error.as_str_at("code"),
+        Some("MCP_CALL_FAILED")
+            | Some("MCP_TIMEOUT")
+            | Some("MCP_LAUNCH_FAILED")
+            | Some("MCP_INIT_FAILED")
+    )
+}
+
 /// Total non-reload tool calls per turn before the breaker fires (the
 /// `agent.turn_tool_call_budget` settings default).
 pub const TURN_TOOL_CALL_BUDGET: u32 = 666;
@@ -515,6 +533,20 @@ impl TurnRepeatGuard {
     }
     pub fn consecutive_errors(&self, sig: &str) -> u32 {
         self.consecutive_errors.get(sig).copied().unwrap_or(0)
+    }
+
+    /// WI-202: per-turn reset that keeps the absorb cursor. Zeroing the
+    /// cursor made the next `absorb_results` replay the WHOLE session
+    /// history, re-counting prior turns' failures into the fresh turn's
+    /// "consecutive" tally — the documented per-turn semantics leaked
+    /// session-wide (observed: a single retry of a tool that failed once
+    /// LAST turn tripped the breaker immediately).
+    pub fn reset_keeping_cursor(&mut self) {
+        let cursor = self.cursor;
+        *self = Self {
+            cursor,
+            ..Default::default()
+        };
     }
     /// Tail-scan tool/call + tool/result rows: recompute each executed call's
     /// signature and adjust its consecutive-error count (error → +1, success
@@ -542,7 +574,17 @@ impl TurnRepeatGuard {
                         if let Some(sig) = self.pending.remove(&linked) {
                             let failed = event.data.get("error").is_some();
                             if failed {
-                                *self.consecutive_errors.entry(sig).or_insert(0) += 1;
+                                // WI-202: transport-class failures (dead MCP
+                                // endpoint, dropped request, timeout) are
+                                // infrastructure, not model-fixable input —
+                                // they never feed the repeat breaker.
+                                if !event
+                                    .data
+                                    .get("error")
+                                    .is_some_and(|error| is_transport_failure(error))
+                                {
+                                    *self.consecutive_errors.entry(sig).or_insert(0) += 1;
+                                }
                             } else {
                                 self.consecutive_errors.remove(&sig);
                             }
@@ -1947,5 +1989,132 @@ mod tests {
     fn ingress_arguments_invalid_json_keeps_text() {
         let value = starriver_kernel::llm::tool_call_arguments_from_text("not json").to_value();
         assert!(value.downcast::<String>().is_ok());
+    }
+
+    /// WI-202 guard-level fixture: append one tool/call + one linked
+    /// tool/result row the way the scheduler writes them.
+    fn record_call_result(
+        session: &starriver_kernel::session::Session,
+        name: &str,
+        arguments: &str,
+        error: Option<(&str, &str)>,
+    ) {
+        use starriver_kernel::json::JsonValue;
+        use starriver_kernel::session::{AppendOptions, SurfaceOp};
+        let call_seq = session
+            .append_with(
+                "tool/call",
+                JsonValue::Object(vec![
+                    ("name".into(), JsonValue::String(name.into())),
+                    (
+                        "arguments".into(),
+                        JsonValue::from_json_str(arguments).unwrap(),
+                    ),
+                ]),
+                AppendOptions::default(),
+            )
+            .unwrap()
+            .seq;
+        let mut data = Vec::new();
+        if let Some((code, message)) = error {
+            data.push((
+                "error".into(),
+                JsonValue::Object(vec![
+                    ("code".into(), JsonValue::String(code.into())),
+                    ("message".into(), JsonValue::String(message.into())),
+                ]),
+            ));
+        }
+        session
+            .append_with(
+                "tool/result",
+                JsonValue::Object(data),
+                AppendOptions {
+                    surface_op: Some(SurfaceOp::Append),
+                    source_event_seqs: vec![call_seq],
+                },
+            )
+            .unwrap();
+    }
+
+    fn sig_of(name: &str, arguments: &str) -> String {
+        call_signature(name, &starriver_kernel::json::JsonValue::from_json_str(arguments).unwrap())
+    }
+
+    /// WI-202: transport-class failures (dead MCP endpoint, dropped request,
+    /// timeout) must never feed the repeat-failure breaker — retrying after
+    /// a while is the correct recovery for a transient outage.
+    #[test]
+    fn transport_failures_do_not_feed_the_repeat_breaker() {
+        let bus = EventBus::new();
+        let session = starriver_kernel::session::Session::new(SessionId("g1".into()), bus);
+        let mut guard = TurnRepeatGuard::default();
+        for _ in 0..3 {
+            record_call_result(
+                &session,
+                "mcp_nexplan_call",
+                r#"{"batch":"WI-199 regression"}"#,
+                Some(("MCP_TIMEOUT", "mcp call timed out after 30s")),
+            );
+            guard.absorb_results(&session);
+        }
+        let sig = sig_of("mcp_nexplan_call", r#"{"batch":"WI-199 regression"}"#);
+        assert_eq!(
+            guard.consecutive_errors(&sig),
+            0,
+            "transport failures must not count toward the breaker"
+        );
+    }
+
+    /// WI-202: the exemption is narrow — a tool that EXECUTED and returned a
+    /// business error still counts, and a success still clears the tally.
+    #[test]
+    fn business_failures_still_count_and_success_clears() {
+        let bus = EventBus::new();
+        let session = starriver_kernel::session::Session::new(SessionId("g2".into()), bus);
+        let mut guard = TurnRepeatGuard::default();
+        let args = r#"{"path":"/x"}"#;
+        record_call_result(&session, "probe", args, Some(("MCP_IS_ERROR", "server said no")));
+        record_call_result(&session, "probe", args, Some(("MCP_IS_ERROR", "server said no")));
+        guard.absorb_results(&session);
+        let sig = sig_of("probe", args);
+        assert_eq!(guard.consecutive_errors(&sig), 2);
+        record_call_result(&session, "probe", args, None);
+        guard.absorb_results(&session);
+        assert_eq!(guard.consecutive_errors(&sig), 0, "success clears the tally");
+    }
+
+    /// WI-202: the per-turn reset must keep the absorb cursor — zeroing it
+    /// replayed the whole session history on the next absorb, re-counting
+    /// prior turns' failures into the fresh turn's tally (a single retry of
+    /// a tool that failed once LAST turn tripped the breaker immediately).
+    #[test]
+    fn turn_reset_keeps_the_absorb_cursor() {
+        let bus = EventBus::new();
+        let session = starriver_kernel::session::Session::new(SessionId("g3".into()), bus);
+        let args = r#"{"path":"/x"}"#;
+        record_call_result(&session, "probe", args, Some(("NOT_FOUND", "gone")));
+        let mut guard = TurnRepeatGuard::default();
+        guard.absorb_results(&session);
+        let sig = sig_of("probe", args);
+        assert_eq!(guard.consecutive_errors(&sig), 1);
+
+        // Turn end: reset. The tally clears (a fresh turn starts cold), and
+        // — the WI-202 fix — the kept cursor means the re-absorb must NOT
+        // replay history: the old Default reset rewound the cursor to 0 and
+        // resurrected the prior failure into the fresh tally (count would
+        // come back as 1 here).
+        guard.reset_keeping_cursor();
+        guard.absorb_results(&session);
+        assert_eq!(
+            guard.consecutive_errors(&sig),
+            0,
+            "prior-turn failures must not resurrect after the reset"
+        );
+
+        // A NEW failure in the fresh turn counts normally.
+        record_call_result(&session, "probe", args, Some(("NOT_FOUND", "gone")));
+        guard.absorb_results(&session);
+        assert_eq!(guard.consecutive_errors(&sig), 1);
     }
 }

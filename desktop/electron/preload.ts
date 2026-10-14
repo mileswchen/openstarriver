@@ -125,16 +125,6 @@ contextBridge.exposeInMainWorld('starriver', {
   updateSettings: (patch: Record<string, unknown>): Promise<Record<string, unknown>> =>
     call('settings.update', { patch }),
 
-  // ── WI-97 goal surface. MUST stay in sync with the built preload.js — the
-  // 23:13 zip shipped a preload without these, so goal.set silently no-op'd
-  // (window.starriver.setGoal?.() swallows the undefined) and the autonomous
-  // loop never armed. Keep all three even when unreferenced: the renderer
-  // calls them optional-chained.
-  setGoal: (sessionId: string, objective: string, tokenBudget?: number) =>
-    call('goal.set', { sessionId, objective, tokenBudget }),
-  getGoal: (sessionId: string) => call('goal.get', { sessionId }),
-  clearGoal: (sessionId: string) => call('goal.clear', { sessionId }),
-
   // ── System integration (stays in Electron main, outside the protocol) ──
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   saveTempFile: (name: string, base64Data: string): Promise<string> =>

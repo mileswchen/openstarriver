@@ -28,6 +28,12 @@ pub enum AgentStatus {
 pub struct AgentOptions {
     pub provider: Option<String>,
     pub model: Option<String>,
+    /// WI-199 escalation rung ③: fallback route ("provider", "model") the
+    /// step reroutes to when the SAME step keeps failing past the ladder's
+    /// earlier rungs (compact → reasoning downgrade). `None` = no fallback;
+    /// the rung then records "unconfigured" and the ladder exhausts.
+    pub fallback_provider: Option<String>,
+    pub fallback_model: Option<String>,
     pub max_tokens: Option<u64>,
     /// Legacy whole-string system prompt; used when system_sections is empty.
     pub system: Option<String>,

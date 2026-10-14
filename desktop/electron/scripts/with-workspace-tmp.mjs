@@ -1,4 +1,4 @@
-// Sandbox-proof TMPDIR wrapper (WI-152 incident fix).
+// Sandbox-proof TMPDIR wrapper (WI-152 插曲修复).
 //
 // Execution environments that confine writes to the workspace
 // (workspace-write sandboxes) break tooling that mkdtemp()s in the system

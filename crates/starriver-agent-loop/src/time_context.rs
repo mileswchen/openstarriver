@@ -157,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn first_sample_is_mandatory_and_wording_is_stable() {
+    fn first_sample_is_mandatory_and_worded_like_dsh() {
         let mut p = TimeProjection::new(&fresh());
         let message = p
             .project(1_000, 3, 1, Some(60_000), None)
@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn format_duration_matches_the_compact_shape() {
+    fn format_duration_matches_the_compact_dsh_shape() {
         assert_eq!(format_duration(0), "0s");
         assert_eq!(format_duration(90_000), "1m 30s");
         assert_eq!(format_duration(330_000), "5m 30s");

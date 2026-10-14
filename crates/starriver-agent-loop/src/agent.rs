@@ -182,6 +182,12 @@ pub struct ReactLoopAgent {
     last_header: Mutex<Option<HeaderKey>>,
     last_proposal: Mutex<Option<LlmCallConfig>>,
     last_adapter_defaults: Mutex<LlmCallConfigAdapterDefaults>,
+    /// WI-209 (BUG-150): the provider's real input-token count from the last
+    /// completed stream. The compaction pressure check floors its char-based
+    /// estimate with this — the estimate misses the tokenizer, the system
+    /// prompt and the tool schemas, and the miss is what let a session the
+    /// provider measured at 157k tokens run unbounded.
+    observed_input_tokens: Mutex<Option<u64>>,
     /// WI-1: file ids pulled hot by `reload_image` calls this turn; cleared
     /// at turn/end so a pull lasts exactly one turn. BUG-115/WI-160: only
     /// ids whose tool result settled WITHOUT an error get pinned here
@@ -202,7 +208,7 @@ pub struct ReactLoopAgent {
     reload_storm: Mutex<crate::tool_calls::ReloadStorm>,
     /// BUG-138: per-turn repeat guard for every NON-reload tool — consecutive
     /// identical-call failures and the turn's total non-reload calls. The
-    /// generalized version of the BUG-135 defense line: any tool stuck in the
+    /// generalized version of the BUG-135防线: any tool stuck in the
     /// unavailable/failing/pattern-locked shape gets the turn terminated
     /// instead of looping ~7s/step forever.
     turn_repeat: Mutex<crate::tool_calls::TurnRepeatGuard>,
@@ -253,6 +259,27 @@ impl ReactLoopAgent {
         );
     }
 
+    /// WI-200: one-shot anti-loop steering injected the moment the
+    /// output-side breaker trips, so the re-ask diverges from the exact
+    /// prompt shape that induced the loop (the looped partial never enters
+    /// the surface — the interrupted anchor sees to that). Same seam as the
+    /// time-context notice: a plugin-sourced user message that rides the
+    /// next assembly and is compact-managed like any other notice.
+    fn append_anti_loop_notice(&self) {
+        let text = "Detected repeated output in a loop: stop repeating, directly execute the \
+                    next operation (write file/call tool), and do not confirm again."
+            .to_string();
+        self.append_snapshot_message(Message {
+            id: mint_message_id(),
+            role: MessageRole::User,
+            content: vec![ContentBlock::Text(text)],
+            source: MessageSource::Plugin {
+                plugin: "harness:anti-loop".into(),
+                form: None,
+            },
+        });
+    }
+
     /// Compact the context when the derived surface's estimated token count
     /// exceeds `threshold × context_window`. The older messages (everything
     /// but the retained tail, never splitting a tool-call pair) are summarized
@@ -283,6 +310,7 @@ impl ReactLoopAgent {
     pub async fn force_compact(&self, system: Option<&str>, window: u64) -> Option<(u64, u64)> {
         self.compact_inner(system, window, 0.0, CompactionTrigger::Manual)
             .await
+            .tokens()
     }
 
 }
@@ -298,6 +326,7 @@ impl ReactLoopAgent {
         let ratio = (keep_recent as f64 / surface_len).clamp(0.0, 1.0);
         self.compact_inner_with_retain(system, window, 0.0, ratio, CompactionTrigger::Manual)
             .await
+            .tokens()
     }
 
     /// Overflow-recovery compaction (`agent.max_overflow_retries`): the
@@ -306,6 +335,7 @@ impl ReactLoopAgent {
     async fn compact_for_overflow(&self, system: Option<&str>, window: u64) -> Option<(u64, u64)> {
         self.compact_inner(system, window, 0.0, CompactionTrigger::ContextOverflow)
             .await
+            .tokens()
     }
 
     /// Thin bridge: build the crate-side policy/route from agent options and
@@ -318,7 +348,7 @@ impl ReactLoopAgent {
         window: u64,
         threshold: f64,
         trigger: CompactionTrigger,
-    ) -> Option<(u64, u64)> {
+    ) -> starriver_compaction::CompactionOutcome {
         let retain = self
             .options
             .compaction_retain_ratio
@@ -334,11 +364,13 @@ impl ReactLoopAgent {
         threshold: f64,
         retain_ratio: f64,
         trigger: CompactionTrigger,
-    ) -> Option<(u64, u64)> {
+    ) -> starriver_compaction::CompactionOutcome {
         let provider = self.options.provider.clone().unwrap_or_default();
         let model = self.options.model.clone().unwrap_or_default();
         if provider.is_empty() || model.is_empty() {
-            return None;
+            return starriver_compaction::CompactionOutcome::Skipped(
+                starriver_compaction::CompactionSkip::RouteUnset,
+            );
         }
         let policy = starriver_compaction::CompactionPolicy::from_tuning(
             threshold,
@@ -351,12 +383,34 @@ impl ReactLoopAgent {
             system: system.map(String::from),
             session_id: self.id.0.clone(),
             context_window: window,
-            max_tokens: 1024,
+            // WI-207 (BUG-151): 1024 was exhaustible by reasoning alone — a
+            // glm-5.3 summarize on a 157k-token context returned empty text
+            // 3/3 times. The structured checkpoint needs real headroom.
+            max_tokens: 4096,
+            summarize_reasoning_effort: self.summarize_reasoning_effort(),
+            observed_input_tokens: *self.observed_input_tokens.lock().unwrap(),
         };
         let llm = LoopCompactionLlm {
             llm: Arc::clone(&self.llm),
         };
         starriver_compaction::compact(&self.session, &llm, route, policy, trigger).await
+    }
+
+    /// WI-207: `Some("off")` when the model resolves an explicit reasoning
+    /// effort (adapter defaults materialized one, or an effort is
+    /// configured), so the summarize call can't spend its output budget
+    /// thinking. `None` for models without effort support — force-setting
+    /// an effort there fails request resolution and would turn a
+    /// recoverable compaction into a terminal one.
+    fn summarize_reasoning_effort(&self) -> Option<String> {
+        let defaults = *self.last_adapter_defaults.lock().unwrap();
+        let current = self
+            .last_proposal
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|config| config.reasoning_effort.clone());
+        (defaults.reasoning_effort || current.is_some()).then(|| "off".to_string())
     }
 
     pub fn new(
@@ -520,6 +574,7 @@ impl ReactLoopAgent {
             last_header: Mutex::new(None),
             last_proposal: Mutex::new(None),
             last_adapter_defaults: Mutex::new(LlmCallConfigAdapterDefaults::default()),
+            observed_input_tokens: Mutex::new(None),
             reload_ids: Mutex::new(std::collections::HashSet::new()),
             attempted_reload_ids: Mutex::new(std::collections::HashSet::new()),
             reload_confirm_cursor: Mutex::new(0),
@@ -930,8 +985,11 @@ impl ReactLoopAgent {
         self.reload_ids.lock().unwrap().clear();
         self.attempted_reload_ids.lock().unwrap().clear();
         *self.reload_storm.lock().unwrap() = crate::tool_calls::ReloadStorm::default();
-        // BUG-138: the general repeat guard is turn-scoped too.
-        *self.turn_repeat.lock().unwrap() = crate::tool_calls::TurnRepeatGuard::default();
+        // BUG-138: the general repeat guard is turn-scoped too. WI-202: the
+        // reset keeps the absorb cursor — zeroing it replayed the whole
+        // session history on the next absorb, re-counting prior turns'
+        // failures into this turn's tally.
+        self.turn_repeat.lock().unwrap().reset_keeping_cursor();
         self.inbox_lock().has_pending()
     }
 
@@ -992,16 +1050,23 @@ impl ReactLoopAgent {
         let max_overflow_retries = self.max_overflow_retries();
         // Transient-failure retries for this step (see retry_transient_failure).
         let mut transient_retries = 0u32;
+        // WI-199: escalation ladder state — fires from the 3rd consecutive
+        // same-step failure (see StepEscalation).
+        let mut escalation = StepEscalation::default();
         'request: loop {
             let tools = self.tools.schemas_for(Some(&self.id.0));
-            let assembled = match self.build_request(turn, step, abort, system, tools).await {
-                Ok(assembled) => assembled,
-                Err(error) => {
-                    return Some(TurnEndReason::Error {
-                        failure: error.to_failure(),
-                    })
-                }
-            };
+            // WI-200: fresh output-side loop detector per attempt — a retry
+            // re-counts from zero on its new stream.
+            let mut degenerate = crate::degenerate_loop::DegenerateLoopMonitor::default();
+            let assembled =
+                match self.build_request(turn, step, abort, system, tools, &escalation).await {
+                    Ok(assembled) => assembled,
+                    Err(error) => {
+                        return Some(TurnEndReason::Error {
+                            failure: error.to_failure(),
+                        })
+                    }
+                };
             let mut assembler = BlockAssembler::new();
             let mut chunk_seqs = Vec::new();
             let stream = match &assembled.prepared {
@@ -1056,6 +1121,7 @@ impl ReactLoopAgent {
                                 &failure,
                                 &self.step_retry_policy(&assembled),
                                 transient_retries + 1,
+                                &mut escalation,
                                 abort,
                             )
                             .await
@@ -1090,11 +1156,110 @@ impl ReactLoopAgent {
                         match action {
                             RequestErrorAction::Retry => continue 'request,
                             RequestErrorAction::None => {
-                                return Some(TurnEndReason::Error { failure });
+                                return Some(TurnEndReason::Error {
+                                    failure: escalation
+                                        .summarized(failure, transient_retries),
+                                });
                             }
                         }
                     }
                 };
+                // WI-209 (BUG-150): remember the provider's real prompt size —
+                // the compaction pressure check floors its char-based estimate
+                // with this (the estimate misses tokenizer, system prompt and
+                // tool schemas).
+                if let StreamChunk::Usage { usage } = &chunk {
+                    *self.observed_input_tokens.lock().unwrap() = Some(usage.input_tokens);
+                }
+                // WI-200: output-side degenerate-loop breaker. The detector
+                // watches the streamed text; on trip the stream is aborted
+                // IMMEDIATELY (instead of burning the attempt until an
+                // upstream idle timeout kills it ~30s in), the looped
+                // partial never reaches the surface history (interrupted
+                // anchor), an anti-loop notice diverges the re-ask, and the
+                // WI-199 ladder advances one rung (the long poisoned context
+                // that induced the loop gets condensed). DEGENERATE_LOOP is
+                // retryable per the kernel policy.
+                if let StreamChunk::TextDelta { text, .. } = &chunk {
+                    if degenerate.feed(text) {
+                        // Deliberately NO interrupted anchor here: the anchor
+                        // persists the partial into the surface (user-abort
+                        // semantics), and the looped text is precisely what
+                        // must NOT cement itself into the history (the
+                        // 2026-10-14 incident: 21.7k looped chars locked the
+                        // context). The raw assistant/chunk log events stay,
+                        // the derived surface drops the attempt.
+                        if !escalation.anti_loop_notice_fired {
+                            escalation.anti_loop_notice_fired = true;
+                            self.append_anti_loop_notice();
+                        }
+                        self.escalate_retry(
+                            turn,
+                            step,
+                            &assembled.request.provider,
+                            &mut escalation,
+                        )
+                        .await;
+                        let failure = LlmFailure {
+                            message: "loop output detected: the stream degenerated into a \
+                                     repetition loop and was aborted"
+                                .to_string(),
+                            code: "DEGENERATE_LOOP".to_string(),
+                            status: None,
+                            provider_retry_after_ms: None,
+                            request_id: None,
+                        };
+                        match self
+                            .retry_transient_failure(
+                                turn,
+                                step,
+                                &assembled.request.provider,
+                                &failure,
+                                &self.step_retry_policy(&assembled),
+                                transient_retries + 1,
+                                &mut escalation,
+                                abort,
+                            )
+                            .await
+                        {
+                            RetryDecision::Retry => {
+                                transient_retries += 1;
+                                continue 'request;
+                            }
+                            RetryDecision::Aborted => {
+                                self.append_interrupted_anchor(
+                                    turn, step, &assembler, &chunk_seqs,
+                                );
+                                return Some(TurnEndReason::Aborted {
+                                    cause: self.take_cancel_cause(),
+                                });
+                            }
+                            RetryDecision::GiveUp => {}
+                        }
+                        let action = self
+                            .request_error_waterfall(
+                                turn,
+                                step,
+                                &assembled.request,
+                                &failure,
+                                assembled
+                                    .prepared
+                                    .as_ref()
+                                    .map(|prepared| prepared.retry_policy.clone()),
+                                abort,
+                            )
+                            .await;
+                        match action {
+                            RequestErrorAction::Retry => continue 'request,
+                            RequestErrorAction::None => {
+                                return Some(TurnEndReason::Error {
+                                    failure: escalation
+                                        .summarized(failure, transient_retries),
+                                });
+                            }
+                        }
+                    }
+                }
                 if abort.is_cancelled() {
                     self.append_interrupted_anchor(turn, step, &assembler, &chunk_seqs);
                     return Some(TurnEndReason::Aborted {
@@ -1150,6 +1315,7 @@ impl ReactLoopAgent {
                         &failure,
                         &self.step_retry_policy(&assembled),
                         transient_retries + 1,
+                        &mut escalation,
                         abort,
                     )
                     .await
@@ -1182,7 +1348,9 @@ impl ReactLoopAgent {
                 match action {
                     RequestErrorAction::Retry => continue,
                     RequestErrorAction::None => {
-                        return Some(TurnEndReason::Error { failure });
+                        return Some(TurnEndReason::Error {
+                            failure: escalation.summarized(failure, transient_retries),
+                        });
                     }
                 }
             }
@@ -1568,6 +1736,7 @@ impl ReactLoopAgent {
         abort: &CancellationToken,
         system: Option<&str>,
         tools: Vec<ToolSchema>,
+        escalation: &StepEscalation,
     ) -> Result<AssembledRequest, LlmError> {
         let bus = self.loop_ctx.event_bus().ok_or_else(|| LlmError::Call {
             code: "EVENT".into(),
@@ -1608,7 +1777,7 @@ impl ReactLoopAgent {
                 request_id: None,
             });
         }
-        let proposed = {
+        let mut proposed = {
             let inner = seed.clone();
             bus.waterfall_scoped(
                 &self.agent_ctx,
@@ -1631,6 +1800,18 @@ impl ReactLoopAgent {
                 request_id: None,
             })?
         };
+        // WI-199: same-step escalation overrides land AFTER the listener
+        // waterfall so a degradation rung deterministically diverges the
+        // retry — compaction already shrank the session, the reasoning
+        // downgrade and fallback reroute must not be silently re-edited
+        // back by a listener proposal.
+        if let Some((provider, model)) = &escalation.override_route {
+            proposed.provider = provider.clone();
+            proposed.model = model.clone();
+        }
+        if let Some(reasoning) = &escalation.reasoning_override {
+            proposed.reasoning_effort = reasoning.clone();
+        }
         let prepared = match self
             .llm
             .prepare_call(proposed.clone(), Some(abort.clone()))
@@ -1763,7 +1944,7 @@ impl ReactLoopAgent {
     /// jittered backoff) was plumbed all the way into every request — and
     /// then never executed: the AgentRequestError waterfall has no production
     /// listener, so its default action ended the turn on the FIRST blip. A
-    /// provider 500 "network error, please retry later" killed a 5m45s turn mid-fix
+    /// provider 500 "网络错误，请稍后重试" killed a 5m45s turn mid-fix
     /// (session 72a13c58 turn 26, host.log 2026-10-04 05:29:31Z) with no
     /// error surface in the UI. The policy now executes here — the per-step
     /// attempt counter and the abort-aware backoff sleep live naturally in
@@ -1777,6 +1958,7 @@ impl ReactLoopAgent {
         failure: &LlmFailure,
         policy: &RetryPolicy,
         attempt: u32,
+        escalation: &mut StepEscalation,
         abort: &CancellationToken,
     ) -> RetryDecision {
         let max_retries = match policy {
@@ -1785,6 +1967,11 @@ impl ReactLoopAgent {
         };
         if attempt > max_retries || !policy.is_retryable(&failure.code) {
             return RetryDecision::GiveUp;
+        }
+        // WI-199: from the Nth consecutive same-step failure, every retry
+        // diverges — the escalation ladder advances one rung per failure.
+        if attempt >= STEP_ESCALATION_THRESHOLD {
+            self.escalate_retry(turn, step, provider, escalation).await;
         }
         let mut delay = backoff_delay(policy.backoff(), attempt);
         if let Some(retry_after) = failure.provider_retry_after_ms {
@@ -1804,6 +1991,151 @@ impl ReactLoopAgent {
             biased;
             _ = abort.cancelled() => RetryDecision::Aborted,
             _ = tokio::time::sleep(delay) => RetryDecision::Retry,
+        }
+    }
+
+    /// WI-199 escalation ladder: one rung per call, fixed order —
+    /// ① compact (threshold-bypassed, `EscalatedRetry` trigger) so the retry
+    /// re-assembles against a CONDENSED context; ② force reasoning effort
+    /// down (low, then off) so a thinking-mode model diverges; ③ reroute to
+    /// the configured fallback provider/model. A rung that has nothing to do
+    /// (no window / fallback unconfigured) is recorded as skipped, and the
+    /// NEXT call advances to the following rung.
+    async fn escalate_retry(
+        &self,
+        turn: u64,
+        step: u64,
+        provider: &str,
+        escalation: &mut StepEscalation,
+    ) {
+        // Rung ①: compaction. The condense output lands in the session, so
+        // the re-assembly at the top of the 'request loop picks it up.
+        if !escalation.compact_fired {
+            escalation.compact_fired = true;
+            let window = self.options.context_window.unwrap_or(0);
+            let outcome = self
+                .compact_inner(None, window, 0.0, CompactionTrigger::EscalatedRetry)
+                .await;
+            // WI-206 (BUG-149): report what ACTUALLY happened — "nothing to
+            // condense" (skip) and "the summarize call itself failed" are
+            // different faults and used to collapse into the same label.
+            let detail = match &outcome {
+                starriver_compaction::CompactionOutcome::Condensed {
+                    before,
+                    after,
+                    pruned_only: false,
+                } => format!("condensed {before}→{after} tokens"),
+                starriver_compaction::CompactionOutcome::Condensed {
+                    before,
+                    after,
+                    pruned_only: true,
+                } => format!("pruned {before}→{after} tokens"),
+                starriver_compaction::CompactionOutcome::Skipped(
+                    starriver_compaction::CompactionSkip::BelowPressure,
+                ) => "nothing to condense".to_string(),
+                starriver_compaction::CompactionOutcome::Skipped(
+                    starriver_compaction::CompactionSkip::TooFewMessages,
+                ) => "too few messages to condense".to_string(),
+                starriver_compaction::CompactionOutcome::Skipped(
+                    starriver_compaction::CompactionSkip::RouteUnset,
+                ) => "route unset".to_string(),
+                starriver_compaction::CompactionOutcome::Failed(
+                    starriver_compaction::CompactionFailure::NoSafeRange,
+                ) => "no safe compaction range".to_string(),
+                starriver_compaction::CompactionOutcome::Failed(
+                    starriver_compaction::CompactionFailure::EmptySummary,
+                ) => "failed: summarize returned empty text".to_string(),
+                starriver_compaction::CompactionOutcome::Failed(
+                    starriver_compaction::CompactionFailure::SummarizeCall(error),
+                ) => format!(
+                    "failed: summarize call: {}",
+                    error.chars().take(140).collect::<String>()
+                ),
+                starriver_compaction::CompactionOutcome::Failed(
+                    starriver_compaction::CompactionFailure::CheckpointWrite,
+                ) => "failed: checkpoint append".to_string(),
+                starriver_compaction::CompactionOutcome::Failed(
+                    starriver_compaction::CompactionFailure::SurfaceUnreadable,
+                ) => "failed: surface unreadable".to_string(),
+            };
+            tracing::warn!(turn, step, provider, "escalation ① compact: {detail}");
+            escalation.actions.push(format!("compact ({detail})"));
+            return;
+        }
+        // Rung ②: reasoning-effort downgrade — low first, then clear (off).
+        // Gated on the model actually supporting reasoning (the last
+        // request's adapter metadata materialized an effort, or an explicit
+        // effort is configured): force-setting an effort on a model without
+        // support would fail request resolution (UNSUPPORTED_REASONING_EFFORT)
+        // and turn a recoverable transport failure into a terminal one.
+        // Unsupported → record the skip and fall through to rung ③ now.
+        if !escalation.reasoning_fired {
+            escalation.reasoning_fired = true;
+            let defaults = *self.last_adapter_defaults.lock().unwrap();
+            let current = self
+                .last_proposal
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|config| config.reasoning_effort.clone());
+            let supported = defaults.reasoning_effort || current.is_some();
+            if !supported {
+                tracing::warn!(
+                    turn,
+                    step,
+                    provider,
+                    "escalation ② reasoning: model has no reasoning support — skipped"
+                );
+                escalation.actions.push("reasoning: unsupported".to_string());
+                // fall through to rung ③
+            } else {
+                let downgraded = match current.as_deref() {
+                    // Already at "low" — the only step below is clearing the
+                    // effort entirely. Any other value (including None =
+                    // provider default, often the strongest tier) → "low".
+                    Some("low") => None,
+                    _ => Some("low".to_string()),
+                };
+                tracing::warn!(
+                    turn,
+                    step,
+                    provider,
+                    from = current.as_deref().unwrap_or("(provider default)"),
+                    to = downgraded.as_deref().unwrap_or("(off)"),
+                    "escalation ② reasoning effort downgrade"
+                );
+                escalation.actions.push(format!(
+                    "reasoning {}→{}",
+                    current.as_deref().unwrap_or("default"),
+                    downgraded.as_deref().unwrap_or("off"),
+                ));
+                escalation.reasoning_override = Some(downgraded);
+                return;
+            }
+        }
+        // Rung ③: fallback route — only when one is configured.
+        if !escalation.fallback_fired {
+            escalation.fallback_fired = true;
+            match (&self.options.fallback_provider, &self.options.fallback_model) {
+                (Some(fallback_provider), Some(fallback_model)) => {
+                    tracing::warn!(
+                        turn,
+                        step,
+                        provider,
+                        fallback = %format!("{fallback_provider}/{fallback_model}"),
+                        "escalation ③ rerouting to the fallback model"
+                    );
+                    escalation
+                        .actions
+                        .push(format!("fallback → {fallback_provider}/{fallback_model}"));
+                    escalation.override_route =
+                        Some((fallback_provider.clone(), fallback_model.clone()));
+                }
+                _ => {
+                    tracing::warn!(turn, step, provider, "escalation ③ fallback: unconfigured");
+                    escalation.actions.push("fallback: unconfigured".to_string());
+                }
+            }
         }
     }
 
@@ -1952,6 +2284,55 @@ enum RetryDecision {
     Aborted,
     /// Not retryable under the policy, or the attempt budget is spent.
     GiveUp,
+}
+
+/// WI-199: consecutive same-step failures from which the escalation ladder
+/// starts firing. Attempts 1..N-1 stay byte-identical re-asks (a genuine
+/// transport blip recovers on its own); from the Nth failure on, every retry
+/// must DIVERGE from the exact context/route that kept failing — re-sending
+/// the same poisoned 100k context five times is not a recovery strategy
+/// (2026-10-14 incident: 5 retries + repeated manual 「继续」 burned ~1M
+/// tokens on deterministic failures).
+const STEP_ESCALATION_THRESHOLD: u32 = 3;
+
+/// WI-199: per-step escalation state. Lives for exactly one `step()` call, so
+/// "same step, consecutive failures" is the natural scope; a successful step
+/// (or a new step) starts cold. Each rung fires at most once, in fixed order
+/// ①compaction → ②reasoning downgrade → ③fallback route; unconfigured or
+/// unavailable rungs are skipped and recorded, never blocking later rungs.
+#[derive(Default)]
+struct StepEscalation {
+    compact_fired: bool,
+    reasoning_fired: bool,
+    fallback_fired: bool,
+    /// Rung ③: (provider, model) replacing the current route on subsequent
+    /// assemblies within this step.
+    override_route: Option<(String, String)>,
+    /// Rung ②: the reasoning_effort to force on subsequent assemblies
+    /// (`Some(None)` = clear the effort — the one step below "low").
+    reasoning_override: Option<Option<String>>,
+    /// WI-200: the anti-loop notice rides the re-ask ONCE per step — a
+    /// persistently looping model must not accumulate a notice per attempt.
+    anti_loop_notice_fired: bool,
+    /// Human-readable record of every escalation action attempted, surfaced
+    /// in the terminal failure message when the ladder is exhausted.
+    actions: Vec<String>,
+}
+
+impl StepEscalation {
+    /// Terminal-failure annotation: retries spent + every escalation action
+    /// attempted, so the UI/log answer "what did it try before dying?".
+    fn summarized(&self, mut failure: LlmFailure, transient_retries: u32) -> LlmFailure {
+        if self.actions.is_empty() {
+            return failure;
+        }
+        failure.message.push_str(&format!(
+            "\n\n[escalation] {} transient retries; attempted: {}",
+            transient_retries,
+            self.actions.join("; ")
+        ));
+        failure
+    }
 }
 
 /// Local delay for retry `attempt` (1-based): `initial << (attempt-1)`
@@ -4330,6 +4711,24 @@ mod tests {
         adapter: Arc<dyn starriver_kernel::llm::LlmAdapter>,
         tools: Arc<dyn crate::services::ToolRuntimeView>,
     ) -> Arc<ReactLoopAgent> {
+        agent_with_options(
+            adapter,
+            tools,
+            starriver_kernel::agent::AgentOptions {
+                provider: Some("mock".into()),
+                model: Some("m1".into()),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// WI-199 tests: same scaffolding with explicit AgentOptions (fallback
+    /// route, compaction window, …).
+    fn agent_with_options(
+        adapter: Arc<dyn starriver_kernel::llm::LlmAdapter>,
+        tools: Arc<dyn crate::services::ToolRuntimeView>,
+        options: starriver_kernel::agent::AgentOptions,
+    ) -> Arc<ReactLoopAgent> {
         let bus = EventBus::new();
         let ctx = Context::new().with_event_bus(&bus);
         let llm = Arc::new(starriver_llm::InMemoryLlmRuntime::new(bus.clone()));
@@ -4338,12 +4737,7 @@ mod tests {
         ReactLoopAgent::new(
             ctx,
             SessionId("a1".into()),
-            starriver_kernel::agent::AgentOptions {
-                compaction_tuning: None,
-                provider: Some("mock".into()),
-                model: Some("m1".into()),
-                ..Default::default()
-            },
+            options,
             session,
             llm,
             tools,
@@ -5556,7 +5950,7 @@ mod tests {
         assert!(events.iter().any(|e| e.event_type == "turn/end"));
     }
 
-    /// BUG-138 inverse: a first failure followed by a success resets the
+    /// BUG-138 反面: a first failure followed by a success resets the
     /// consecutive-error counter — legitimate re-runs after fixing inputs
     /// never trip the breaker.
     #[tokio::test]
@@ -7655,5 +8049,717 @@ mod tests {
         assert!(requests.lock().unwrap().is_empty(), "no summarize call");
         assert!(compaction_events(&agent, "compaction/start").is_empty());
         assert_eq!(agent.session.derive_messages().unwrap().len(), 8);
+    }
+
+    /// WI-199 shared fixture: an adapter that fails every stream with a
+    /// TRANSPORT error and records each call's (provider, model,
+    /// reasoning_effort). The retry policy is policy-shaped but with a
+    /// near-zero backoff so the ladder plays out in milliseconds.
+    struct AlwaysTransport {
+        providers: Vec<String>,
+        calls: std::sync::Mutex<Vec<(String, String, Option<String>)>>,
+    }
+    impl AlwaysTransport {
+        fn new(providers: &[&str]) -> Self {
+            Self {
+                providers: providers.iter().map(|p| (*p).to_string()).collect(),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+    impl starriver_kernel::llm::LlmAdapter for AlwaysTransport {
+        fn providers(&self) -> &[String] {
+            &self.providers
+        }
+        fn resolve_model(
+            &self,
+            provider: &str,
+            model: &str,
+            _cancellation: Option<tokio_util::sync::CancellationToken>,
+        ) -> futures::future::BoxFuture<
+            'static,
+            Result<starriver_kernel::llm::LlmResolvedModelInfo, LlmError>,
+        > {
+            let provider = provider.to_string();
+            let model = model.to_string();
+            Box::pin(async move {
+                // Reasoning-capable with no default effort: early attempts
+                // keep reasoning_effort None, so the ladder's downgrade is
+                // observable as None → Some("low").
+                Ok(starriver_kernel::llm::LlmResolvedModelInfo {
+                    provider,
+                    id: model.clone(),
+                    name: model,
+                    description: None,
+                    input_modalities: None,
+                    context: None,
+                    default_max_tokens: None,
+                    reasoning: Some(starriver_kernel::llm::LlmReasoningInfo {
+                        efforts: vec![
+                            starriver_kernel::llm::LlmReasoningEffortInfo {
+                                id: "low".into(),
+                                name: "Low".into(),
+                                description: None,
+                            },
+                            starriver_kernel::llm::LlmReasoningEffortInfo {
+                                id: "high".into(),
+                                name: "High".into(),
+                                description: None,
+                            },
+                        ],
+                        default_effort: None,
+                    }),
+                })
+            })
+        }
+        fn provider_retry_policy(
+            &self,
+            _provider: &str,
+        ) -> Option<starriver_kernel::llm::RetryPolicy> {
+            Some(starriver_kernel::llm::RetryPolicy::Normal {
+                max_retries: 5,
+                retryable_codes: vec!["TRANSPORT".into()],
+                backoff: starriver_kernel::llm::RetryBackoff {
+                    initial_delay_ms: 1,
+                    max_delay_ms: 2,
+                    jitter_ratio: 0.0,
+                },
+            })
+        }
+        fn stream(
+            &self,
+            options: GenerateOptions,
+        ) -> futures::stream::BoxStream<'static, Result<StreamChunk, LlmError>> {
+            self.calls.lock().unwrap().push((
+                options.provider.clone(),
+                options.model.clone(),
+                options.reasoning_effort.clone(),
+            ));
+            Box::pin(futures::stream::iter(vec![Err(LlmError::Call {
+                code: "TRANSPORT".into(),
+                message: "connection reset by peer".into(),
+                status: None,
+                provider_retry_after_ms: None,
+                request_id: None,
+            })]))
+        }
+    }
+
+    fn flaky_tools() -> Arc<dyn crate::services::ToolRuntimeView> {
+        Arc::new(starriver_tools::InMemoryToolRuntime::new(
+            EventBus::new(),
+            Context::new(),
+        )) as Arc<dyn crate::services::ToolRuntimeView>
+    }
+
+    fn last_turn_end_reason<'a>(
+        events: &'a [starriver_kernel::session::SessionEvent],
+    ) -> String {
+        let turn_end = events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == "turn/end")
+            .expect("turn/end");
+        turn_end
+            .data
+            .get("reason")
+            .and_then(|r| r.as_str_at("kind"))
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// WI-199 acceptance: five identical re-asks of a poisoned context are
+    /// not a recovery strategy. Scripted TRANSPORT failures with a fallback
+    /// route configured must show the ladder diverging the retry —
+    /// attempts 1-2 byte-identical, then compact → reasoning-low → fallback
+    /// reroute, one rung per failure — and the terminal failure message must
+    /// carry the retry count plus every attempted action.
+    #[tokio::test]
+    async fn escalation_ladder_diverges_retries_and_annotates_the_terminal_failure() {
+        let adapter = Arc::new(AlwaysTransport::new(&["mock", "spare"]));
+        let tools = flaky_tools();
+        let agent = agent_with_options(
+            Arc::clone(&adapter) as Arc<dyn starriver_kernel::llm::LlmAdapter>,
+            tools,
+            starriver_kernel::agent::AgentOptions {
+                provider: Some("mock".into()),
+                model: Some("m1".into()),
+                context_window: Some(128_000),
+                fallback_provider: Some("spare".into()),
+                fallback_model: Some("m1".into()),
+                ..Default::default()
+            },
+        );
+        agent.start();
+        agent.followup(message("do the thing"));
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), agent.when_idle()).await;
+
+        let events = agent.session().events();
+        assert_eq!(
+            last_turn_end_reason(&events),
+            "error",
+            "a permanently failing provider must end the turn in error"
+        );
+
+        // The ladder in the recorded calls. Default policy (5 retries) → 6
+        // attempts: 1-2 identical; the compaction rung rides the retry after
+        // failure 3 (invisible in the call config), the reasoning downgrade
+        // after failure 4 shows on attempt 5, the fallback reroute after
+        // failure 5 shows on attempt 6.
+        let calls = adapter.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 6, "attempts 1..=5 retry, attempt 6 gives up");
+        for call in &calls[..4] {
+            assert_eq!(
+                call,
+                &("mock".to_string(), "m1".to_string(), None),
+                "attempts below the escalation threshold stay byte-identical"
+            );
+        }
+        assert_eq!(
+            calls[4],
+            ("mock".to_string(), "m1".to_string(), Some("low".to_string())),
+            "rung ② must downgrade the reasoning effort on attempt 5"
+        );
+        assert_eq!(
+            calls[5],
+            ("spare".to_string(), "m1".to_string(), Some("low".to_string())),
+            "rung ③ must reroute attempt 6 to the fallback provider"
+        );
+
+        // Terminal failure message carries retries + every attempted action.
+        let turn_end = events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == "turn/end")
+            .unwrap();
+        let rendered = format!("{:?}", turn_end.data);
+        assert!(rendered.contains("[escalation]"), "{rendered}");
+        assert!(rendered.contains("5 transient retries"), "{rendered}");
+        assert!(rendered.contains("compact"), "{rendered}");
+        assert!(rendered.contains("reasoning default→low"), "{rendered}");
+        assert!(rendered.contains("fallback → spare/m1"), "{rendered}");
+    }
+
+    /// WI-199: below the escalation threshold the retries stay byte-identical
+    /// and a recovery needs no ladder — two failures then a success completes
+    /// the turn with zero rung effects (no reasoning override, no reroute).
+    #[tokio::test]
+    async fn escalation_ladder_stays_cold_below_the_threshold() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct TwoFailsThenSuccess {
+            providers: Vec<String>,
+            failures: AtomicUsize,
+            calls: std::sync::Mutex<Vec<(String, String, Option<String>)>>,
+        }
+        impl starriver_kernel::llm::LlmAdapter for TwoFailsThenSuccess {
+            fn providers(&self) -> &[String] {
+                &self.providers
+            }
+            fn resolve_model(
+                &self,
+                provider: &str,
+                model: &str,
+                _cancellation: Option<tokio_util::sync::CancellationToken>,
+            ) -> futures::future::BoxFuture<
+                'static,
+                Result<starriver_kernel::llm::LlmResolvedModelInfo, LlmError>,
+            > {
+                let provider = provider.to_string();
+                let model = model.to_string();
+                Box::pin(async move {
+                    Ok(starriver_kernel::llm::LlmResolvedModelInfo {
+                        provider,
+                        id: model.clone(),
+                        name: model,
+                        description: None,
+                        input_modalities: None,
+                        context: None,
+                        default_max_tokens: None,
+                        reasoning: Some(starriver_kernel::llm::LlmReasoningInfo {
+                            efforts: vec![
+                                starriver_kernel::llm::LlmReasoningEffortInfo {
+                                    id: "low".into(),
+                                    name: "Low".into(),
+                                    description: None,
+                                },
+                            ],
+                            default_effort: None,
+                        }),
+                    })
+                })
+            }
+            fn provider_retry_policy(
+                &self,
+                _provider: &str,
+            ) -> Option<starriver_kernel::llm::RetryPolicy> {
+                Some(starriver_kernel::llm::RetryPolicy::Normal {
+                    max_retries: 5,
+                    retryable_codes: vec!["TRANSPORT".into()],
+                    backoff: starriver_kernel::llm::RetryBackoff {
+                        initial_delay_ms: 1,
+                        max_delay_ms: 2,
+                        jitter_ratio: 0.0,
+                    },
+                })
+            }
+            fn stream(
+                &self,
+                options: GenerateOptions,
+            ) -> futures::stream::BoxStream<'static, Result<StreamChunk, LlmError>> {
+                self.calls.lock().unwrap().push((
+                    options.provider.clone(),
+                    options.model.clone(),
+                    options.reasoning_effort.clone(),
+                ));
+                if self.failures.fetch_add(1, Ordering::SeqCst) < 2 {
+                    return Box::pin(futures::stream::iter(vec![Err(LlmError::Call {
+                        code: "TRANSPORT".into(),
+                        message: "connection reset by peer".into(),
+                        status: None,
+                        provider_retry_after_ms: None,
+                        request_id: None,
+                    })]));
+                }
+                let text = "recovered".to_string();
+                Box::pin(futures::stream::iter(vec![
+                    Ok(StreamChunk::TextDelta {
+                        index: 0,
+                        text: text.clone(),
+                    }),
+                    Ok(StreamChunk::BlockEnd {
+                        index: 0,
+                        block: ContentBlock::Text(text),
+                    }),
+                    Ok(StreamChunk::Finish {
+                        reason: FinishReason::Stop,
+                        replay_state: None,
+                    }),
+                ]))
+            }
+        }
+
+        let adapter = Arc::new(TwoFailsThenSuccess {
+            providers: vec!["mock".into()],
+            failures: AtomicUsize::new(0),
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let agent = agent_with_options(
+            Arc::clone(&adapter) as Arc<dyn starriver_kernel::llm::LlmAdapter>,
+            flaky_tools(),
+            starriver_kernel::agent::AgentOptions {
+                provider: Some("mock".into()),
+                model: Some("m1".into()),
+                context_window: Some(128_000),
+                ..Default::default()
+            },
+        );
+        agent.start();
+        agent.followup(message("do the thing"));
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), agent.when_idle()).await;
+
+        let events = agent.session().events();
+        assert_eq!(last_turn_end_reason(&events), "completed");
+        let calls = adapter.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 3, "two retries then the recovered attempt");
+        for call in &calls {
+            assert_eq!(
+                call,
+                &("mock".to_string(), "m1".to_string(), None),
+                "no rung may fire below the 3-consecutive-failure threshold"
+            );
+        }
+    }
+
+    /// WI-199: an unconfigured fallback rung must not wedge the ladder — it
+    /// records "unconfigured", the retry stays on the primary route, and the
+    /// terminal failure still lists every attempted action.
+    #[tokio::test]
+    async fn escalation_ladder_records_unconfigured_fallback_and_gives_up() {
+        let adapter = Arc::new(AlwaysTransport::new(&["mock"]));
+        let agent = agent_with_options(
+            Arc::clone(&adapter) as Arc<dyn starriver_kernel::llm::LlmAdapter>,
+            flaky_tools(),
+            starriver_kernel::agent::AgentOptions {
+                provider: Some("mock".into()),
+                model: Some("m1".into()),
+                context_window: Some(128_000),
+                ..Default::default()
+            },
+        );
+        agent.start();
+        agent.followup(message("do the thing"));
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), agent.when_idle()).await;
+
+        let events = agent.session().events();
+        assert_eq!(last_turn_end_reason(&events), "error");
+        let calls = adapter.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 6);
+        assert_eq!(
+            calls[5],
+            ("mock".to_string(), "m1".to_string(), Some("low".to_string())),
+            "no fallback configured — attempt 6 stays on the primary route"
+        );
+        let turn_end = events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == "turn/end")
+            .unwrap();
+        let rendered = format!("{:?}", turn_end.data);
+        assert!(
+            rendered.contains("fallback: unconfigured"),
+            "the skipped rung must be named in the summary: {rendered}"
+        );
+    }
+
+    /// WI-200 shared fixture: an adapter whose stream is a repetition loop —
+    /// the incident shape, 200 deltas of the same short sentence with the
+    /// finish chunk unreachable behind the breaker's trip point.
+    struct LoopingAdapter {
+        providers: Vec<String>,
+        /// None = loop on EVERY attempt; Some(k) = loop for the first k
+        /// attempts, then recover.
+        recover_after: Option<usize>,
+        attempts: std::sync::atomic::AtomicUsize,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+    impl LoopingAdapter {
+        fn new(recover_after: Option<usize>) -> Self {
+            Self {
+                providers: vec!["mock".into()],
+                recover_after,
+                attempts: std::sync::atomic::AtomicUsize::new(0),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+    impl starriver_kernel::llm::LlmAdapter for LoopingAdapter {
+        fn providers(&self) -> &[String] {
+            &self.providers
+        }
+        fn provider_retry_policy(
+            &self,
+            _provider: &str,
+        ) -> Option<starriver_kernel::llm::RetryPolicy> {
+            Some(starriver_kernel::llm::RetryPolicy::Normal {
+                max_retries: 5,
+                retryable_codes: vec!["DEGENERATE_LOOP".into()],
+                backoff: starriver_kernel::llm::RetryBackoff {
+                    initial_delay_ms: 1,
+                    max_delay_ms: 2,
+                    jitter_ratio: 0.0,
+                },
+            })
+        }
+        fn stream(
+            &self,
+            options: GenerateOptions,
+        ) -> futures::stream::BoxStream<'static, Result<StreamChunk, LlmError>> {
+            let attempt = self
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.calls
+                .lock()
+                .unwrap()
+                .push(options.reasoning_effort.clone().unwrap_or_default());
+            let recovered = self
+                .recover_after
+                .is_some_and(|after| attempt >= after);
+            if !recovered {
+                let deltas = (0..200)
+                    .map(|_| {
+                        Ok(StreamChunk::TextDelta {
+                            index: 0,
+                            text: "写实现。".to_string(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                // No finish chunk: the breaker must cut the stream long
+                // before these deltas run out.
+                Box::pin(futures::stream::iter(deltas))
+            } else {
+                let text = "recovered".to_string();
+                Box::pin(futures::stream::iter(vec![
+                    Ok(StreamChunk::TextDelta {
+                        index: 0,
+                        text: text.clone(),
+                    }),
+                    Ok(StreamChunk::BlockEnd {
+                        index: 0,
+                        block: ContentBlock::Text(text),
+                    }),
+                    Ok(StreamChunk::Finish {
+                        reason: FinishReason::Stop,
+                        replay_state: None,
+                    }),
+                ]))
+            }
+        }
+    }
+
+    fn assistant_surface_texts(agent: &ReactLoopAgent) -> Vec<String> {
+        agent
+            .session()
+            .derive_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.role == MessageRole::Assistant)
+            .flat_map(|m| {
+                m.content.into_iter().filter_map(|block| match block {
+                    ContentBlock::Text(text) => Some(text),
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
+    /// WI-200 acceptance: the output-side breaker aborts a looping stream
+    /// immediately, keeps the looped partial OUT of the surface history,
+    /// injects the anti-loop notice, and the re-ask recovers the turn.
+    #[tokio::test]
+    async fn degenerate_stream_aborts_and_recovers() {
+        let adapter = Arc::new(LoopingAdapter::new(Some(1)));
+        let agent = agent_with_options(
+            Arc::clone(&adapter) as Arc<dyn starriver_kernel::llm::LlmAdapter>,
+            flaky_tools(),
+            starriver_kernel::agent::AgentOptions {
+                provider: Some("mock".into()),
+                model: Some("m1".into()),
+                context_window: Some(128_000),
+                ..Default::default()
+            },
+        );
+        agent.start();
+        agent.followup(message("do the thing"));
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), agent.when_idle()).await;
+
+        let events = agent.session().events();
+        {
+            let te = events.iter().rev().find(|e| e.event_type == "turn/end").unwrap();
+            eprintln!("PROBE turn_end: {:?}", te.data);
+            eprintln!("PROBE calls: {:?}", adapter.calls.lock().unwrap());
+            let msgs: Vec<String> = events.iter().map(|e| e.event_type.clone()).collect();
+            eprintln!("PROBE event_types: {msgs:?}");
+        }
+        assert_eq!(last_turn_end_reason(&events), "completed");
+        let calls = adapter.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2, "looping attempt aborted, re-ask recovered");
+
+        let surface = assistant_surface_texts(&agent);
+        assert_eq!(
+            surface,
+            vec!["recovered".to_string()],
+            "the looped partial must never enter the surface history"
+        );
+        // The anti-loop notice rode the re-ask as a plugin-sourced message.
+        assert!(
+            agent
+                .session()
+                .derive_messages()
+                .unwrap()
+                .iter()
+                .any(|m| {
+                    m.content.iter().any(|block| {
+                        matches!(block, ContentBlock::Text(text) if text.contains("repeated output"))
+                    })
+                }),
+            "the anti-loop notice must ride the re-ask"
+        );
+    }
+
+    /// WI-200: a model that loops on EVERY attempt ends the turn in a
+    /// DEGENERATE_LOOP terminal error whose message carries the escalation
+    /// summary — not an 8-hour silent burn.
+    #[tokio::test]
+    async fn persistent_degenerate_loop_ends_annotated() {
+        let adapter = Arc::new(LoopingAdapter::new(None));
+        let agent = agent_with_options(
+            Arc::clone(&adapter) as Arc<dyn starriver_kernel::llm::LlmAdapter>,
+            flaky_tools(),
+            starriver_kernel::agent::AgentOptions {
+                provider: Some("mock".into()),
+                model: Some("m1".into()),
+                context_window: Some(128_000),
+                ..Default::default()
+            },
+        );
+        agent.start();
+        agent.followup(message("do the thing"));
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), agent.when_idle()).await;
+
+        let events = agent.session().events();
+        assert_eq!(last_turn_end_reason(&events), "error");
+        let calls = adapter.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 6, "5 ladder retries then give-up, not forever");
+        let turn_end = events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == "turn/end")
+            .unwrap();
+        let rendered = format!("{:?}", turn_end.data);
+        assert!(rendered.contains("DEGENERATE_LOOP"), "{rendered}");
+        assert!(rendered.contains("loop output detected"), "{rendered}");
+        assert!(rendered.contains("[escalation] 5 transient retries"), "{rendered}");
+        assert!(rendered.contains("compact"), "{rendered}");
+        assert!(rendered.contains("reasoning: unsupported"), "{rendered}");
+        assert!(rendered.contains("fallback: unconfigured"), "{rendered}");
+        assert!(
+            assistant_surface_texts(&agent).is_empty(),
+            "no looped content may enter the surface history"
+        );
+    }
+
+    /// WI-202 integration: a tool whose failures are TRANSPORT-class (MCP
+    /// timeout code) must NOT trip the repeat-failure breaker — the model
+    /// retrying the same call across steps is the correct recovery for a
+    /// transient outage. Four identical failing calls run; the third is NOT
+    /// breaker-paired; the turn completes when the script stops calling.
+    #[tokio::test]
+    async fn transport_failures_never_trip_the_repeat_breaker() {
+        use futures::stream;
+        use starriver_kernel::llm::{FinishReason, LlmAdapter, StreamChunk};
+        use starriver_kernel::tools::{ToolDefinition, ToolError, ToolExecutor, ToolRunContext};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct AlwaysTransport {
+            executions: Arc<AtomicUsize>,
+        }
+        impl ToolExecutor for AlwaysTransport {
+            fn execute(
+                &self,
+                _arguments: cordis_rslite::Value,
+                _ctx: ToolRunContext,
+            ) -> cordis_rslite::BoxFuture<Result<cordis_rslite::Value, ToolError>> {
+                let executions = Arc::clone(&self.executions);
+                Box::pin(async move {
+                    executions.fetch_add(1, Ordering::SeqCst);
+                    Err(ToolError::Execution {
+                        tool: "probe".into(),
+                        code: "MCP_TIMEOUT".into(),
+                        message: "mcp call timed out after 30s".into(),
+                    })
+                })
+            }
+        }
+        let executions = Arc::new(AtomicUsize::new(0));
+        let probe_definition = ToolDefinition {
+            requires_approval: false,
+            deny_in_readonly: false,
+            name: "probe".into(),
+            description: "transport-failing probe".into(),
+            parameters: cordis_rslite::Value::new(()),
+            output: cordis_rslite::Value::new(()),
+            render: Arc::new(|_, _| Vec::new()),
+            executor: Arc::new(AlwaysTransport {
+                executions: Arc::clone(&executions),
+            }),
+            is_concurrency_safe: None,
+            timeout: None,
+            finalize_content: None,
+        };
+
+        /// Emits the SAME failing probe call while history holds fewer than
+        /// four of them, then stops calling and finishes the turn.
+        struct FourProbesAdapter {
+            providers: Vec<String>,
+        }
+        impl LlmAdapter for FourProbesAdapter {
+            fn providers(&self) -> &[String] {
+                &self.providers
+            }
+            fn stream(
+                &self,
+                options: starriver_kernel::llm::GenerateOptions,
+            ) -> futures::stream::BoxStream<
+                'static,
+                Result<StreamChunk, starriver_kernel::llm::LlmError>,
+            > {
+                let emitted = options
+                    .messages
+                    .iter()
+                    .flat_map(|m| m.content.iter())
+                    .filter(|b| {
+                        matches!(
+                            b,
+                            starriver_kernel::llm::ContentBlock::ToolCall { name: Some(name), .. }
+                                if name == "probe"
+                        )
+                    })
+                    .count();
+                if emitted >= 4 {
+                    let text = "gave up gracefully".to_string();
+                    return Box::pin(stream::iter(vec![
+                        Ok(StreamChunk::TextDelta {
+                            index: 0,
+                            text: text.clone(),
+                        }),
+                        Ok(StreamChunk::BlockEnd {
+                            index: 0,
+                            block: starriver_kernel::llm::ContentBlock::Text(text),
+                        }),
+                        Ok(StreamChunk::Finish {
+                            reason: FinishReason::Stop,
+                            replay_state: None,
+                        }),
+                    ]));
+                }
+                let arguments = r#"{"path":"/x"}"#.to_string();
+                Box::pin(stream::iter(vec![
+                    Ok(StreamChunk::ToolCallDelta {
+                        index: 0,
+                        id: CallId(format!("probe-{emitted}")),
+                        name: Some("probe".into()),
+                        arguments_delta: arguments.clone(),
+                    }),
+                    Ok(StreamChunk::BlockEnd {
+                        index: 0,
+                        block: starriver_kernel::llm::ContentBlock::ToolCall {
+                            id: CallId(format!("probe-{emitted}")),
+                            name: Some("probe".into()),
+                            arguments: JsonValue::from_json_str(&arguments).unwrap(),
+                        },
+                    }),
+                    Ok(StreamChunk::Finish {
+                        reason: FinishReason::ToolCalls,
+                        replay_state: None,
+                    }),
+                ]))
+            }
+        }
+
+        let tools_runtime =
+            starriver_tools::InMemoryToolRuntime::new(EventBus::new(), Context::new());
+        let _handle = tools_runtime.register(probe_definition).unwrap();
+        let tools = Arc::new(tools_runtime) as Arc<dyn crate::services::ToolRuntimeView>;
+        let agent = agent_with(
+            Arc::new(FourProbesAdapter {
+                providers: vec!["mock".into()],
+            }),
+            tools,
+        );
+        agent.start();
+        agent.followup(message("probe the dead endpoint"));
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), agent.when_idle()).await;
+
+        let events = agent.session().events();
+        assert_eq!(
+            executions.load(Ordering::SeqCst),
+            4,
+            "all four identical calls dispatch — no breaker pairing at the 3rd"
+        );
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == "tool/result"
+                    && e.data
+                        .get("error")
+                        .and_then(|x| x.as_str_at("code"))
+                        .is_some_and(|c| c == "REPEAT_STORM")
+            }),
+            "transport-class failures must not trip the repeat breaker"
+        );
+        assert!(
+            events.iter().any(|e| e.event_type == "turn/end"),
+            "the turn ends from the script, not the breaker"
+        );
     }
 }

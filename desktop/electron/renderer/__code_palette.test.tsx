@@ -19,7 +19,7 @@ describe('code palette overrides (settings → 代码高亮配色)', () => {
     const css = styleEl()!.textContent!;
     expect(css).toContain('html:not([data-theme="dark"])');
     expect(css).toContain('--code-string: #123456');
-// Tokens without overrides stay out of the injection (CSS defaults win)
+    // 未覆盖的 token 不出现在注入里(保持 CSS 默认)
     expect(css).not.toContain('--code-keyword');
   });
 
@@ -33,7 +33,7 @@ describe('code palette overrides (settings → 代码高亮配色)', () => {
 
   it('persists to localStorage and survives applyCodeTokens re-reads', () => {
     setCodeToken('light', 'string', '#123456');
-styleEl()!.remove(); // simulate an app restart
+    styleEl()!.remove(); // 模拟重启
     applyCodeTokens();
     expect(loadCodeTokens().light.string).toBe('#123456');
     expect(styleEl()!.textContent).toContain('--code-string: #123456');

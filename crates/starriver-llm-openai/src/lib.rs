@@ -389,7 +389,13 @@ impl LlmAdapter for OpenAiCompletionsAdapter {
             };
             let response = match client.post(&url).bearer_auth(&api_key).json(&body).send().await {
                 Ok(r) => r,
-                Err(e) => { yield Err(transport(&format!("request to {url} failed: {e}"))); return; }
+                Err(e) => {
+                    yield Err(transport(&format!(
+                        "request to {url} failed: {}",
+                        transport_cause_chain(&e)
+                    )));
+                    return;
+                }
             };
             let status = response.status().as_u16();
             if status >= 400 {
@@ -404,7 +410,16 @@ impl LlmAdapter for OpenAiCompletionsAdapter {
             } else {
                 Box::new(translate::SseTranslator::new())
             };
-            let mut byte_stream = response.bytes_stream().map(|r| r.map_err(|e| e.to_string()));
+            // WI-197: capture the request id and stream telemetry up front —
+            // a mid-stream death used to surface as a bare top-line message
+            // with nothing to reconcile against the provider's request log
+            // (the 2026-10-14 incident: TRANSPORT with no cause, no id, no
+            // byte count). `bytes_stream` consumes the response, so the
+            // headers must be read first.
+            let request_id = wire::parse_request_id(response.headers());
+            let stream_started = std::time::Instant::now();
+            let mut received_bytes = 0usize;
+            let mut byte_stream = response.bytes_stream();
             // BUG-46: decode per completed LINE, not per network chunk — a
             // multi-byte UTF-8 char split across chunks would otherwise be
             // replaced by U+FFFD on both sides (a `\n` byte can never occur
@@ -434,13 +449,31 @@ impl LlmAdapter for OpenAiCompletionsAdapter {
                 };
                 match outcome {
                     CancelCheck::Cancelled => { yield Err(aborted()); return; }
-                    CancelCheck::Idle => { yield Err(idle_timeout(idle)); return; }
-                    CancelCheck::Transport(e) => { yield Err(transport(&e)); return; }
+                    CancelCheck::Idle => {
+                        // WI-197: the code stays LLM_STREAM_IDLE_TIMEOUT (it
+                        // is deliberately NOT retryable, unlike TRANSPORT);
+                        // only the reconciliation facts are added.
+                        let mut message = format!("stream idle for over {}ms", idle.as_millis());
+                        message.push_str(&stream_telemetry(stream_started, received_bytes));
+                        yield Err(idle_timeout_with(message, request_id.clone()));
+                        return;
+                    }
+                    CancelCheck::Transport(e) => {
+                        // WI-197: keep the reqwest cause chain — the top-line
+                        // Display is just "error decoding response body"; the
+                        // actionable facts (unexpected EOF, connection reset,
+                        // h2 RST_STREAM) live in the source chain.
+                        let mut message = transport_cause_chain(&e);
+                        message.push_str(&stream_telemetry(stream_started, received_bytes));
+                        yield Err(transport_with(message, request_id.clone()));
+                        return;
+                    }
                     CancelCheck::End => {
                         for chunk in translator.finish() { yield chunk; }
                         return;
                     }
                     CancelCheck::Bytes(bytes) => {
+                        received_bytes += bytes.len();
                         buf.extend_from_slice(&bytes);
                         while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
                             let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
@@ -471,7 +504,7 @@ enum CancelCheck {
     Idle,
     End,
     Bytes(bytes::Bytes),
-    Transport(String),
+    Transport(reqwest::Error),
 }
 
 fn aborted() -> LlmError {
@@ -483,14 +516,50 @@ fn aborted() -> LlmError {
         request_id: None,
     }
 }
-fn idle_timeout(d: std::time::Duration) -> LlmError {
+
+/// WI-197: a mid-stream death message carries the reconciliation facts —
+/// how much arrived and over how long (the incident's deaths clustered
+/// 29-31s after the last byte; the message should show that shape).
+fn stream_telemetry(started: std::time::Instant, received_bytes: usize) -> String {
+    format!(
+        "; stream received {received_bytes} bytes over {:.1}s",
+        started.elapsed().as_secs_f32()
+    )
+}
+
+fn transport_with(message: String, request_id: Option<String>) -> LlmError {
     LlmError::Call {
-        code: "LLM_STREAM_IDLE_TIMEOUT".into(),
-        message: format!("stream idle for over {}ms", d.as_millis()),
+        code: "TRANSPORT".into(),
+        message,
         status: None,
         provider_retry_after_ms: None,
-        request_id: None,
+        request_id,
     }
+}
+
+fn idle_timeout_with(message: String, request_id: Option<String>) -> LlmError {
+    LlmError::Call {
+        code: "LLM_STREAM_IDLE_TIMEOUT".into(),
+        message,
+        status: None,
+        provider_retry_after_ms: None,
+        request_id,
+    }
+}
+
+/// WI-197: the Display of a reqwest error is only the top line ("error
+/// decoding response body") — the actionable facts (unexpected EOF,
+/// connection reset by peer, h2 RST_STREAM) live in the source chain.
+/// Flatten the whole chain into one message.
+fn transport_cause_chain(error: &reqwest::Error) -> String {
+    let mut chain = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        chain.push_str("; caused by: ");
+        chain.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    chain
 }
 fn transport(msg: &str) -> LlmError {
     LlmError::Call {

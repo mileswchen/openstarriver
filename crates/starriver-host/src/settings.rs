@@ -53,6 +53,10 @@ pub struct AgentSection {
     /// BUG-138 repeat breaker: total non-reload tool calls allowed per turn
     /// (turnToolCallBudget). Unset keeps the engine default (666).
     pub turn_tool_call_budget: Option<u32>,
+    /// WI-199: escalation rung ③ fallback route, `provider/model`. When the
+    /// SAME step fails 3+ times the ladder condenses, then downgrades
+    /// reasoning, then reroutes here. Unset = no fallback rung.
+    pub fallback_route: Option<String>,
  /// WI-10: compaction retain ratio (retainRatio — passed straight to
     /// the retain split; default 0.16). Must be 0.0..=1.0.
     pub compaction_retain_ratio: Option<f64>,
@@ -255,6 +259,32 @@ impl Default for LlmProviderSettings {
     }
 }
 
+/// WI-201: builtin context windows for KNOWN cloud models, consulted when a
+/// provider entry does not declare `context_window` itself. The 128k platform
+/// default lied about GLM Coding Plan routes: the official spec for
+/// glm-5.3/glm-5.3-flash/glm-5.3-flashx is a 1M window with 128K max output
+/// (docs.bigmodel.cn, GLM-5.3-Flash/FlashX), and a live probe accepted
+/// 1,001,125 prompt tokens with 200 OK. The DECLARED values are
+/// deliberately bounded for the agent loop — it re-sends the full context on
+/// every call, and a 1M-derived compaction threshold would let context bloat
+/// to 800k tokens before condensing (the 2026-10-14 incident's 102k poisoned
+/// context amplified its failure cost 8×). 200k keeps the 0.8× trigger at
+/// 160k with a ≥32k output reserve. An explicit entry declaration still wins.
+pub fn builtin_context_window(provider: &str, model: &str) -> Option<u64> {
+    let model = model.to_ascii_lowercase();
+    let window: u64 = match provider {
+        // helpers.rs preset id ("zhipu") and the admin-created alias ("glm",
+        // "GLM Coding Plan - CN") must resolve identically.
+        "zhipu" | "glm" => match model.as_str() {
+            "glm-5.3" | "glm-5.3-flash" | "glm-5.3-flashx" => 200_000,
+            "glm-4-plus" | "glm-4-flash" => 128_000,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(window)
+}
+
 impl LlmProviderSettings {
     /// Merge optional fields into a concrete GenerationConfig (same semantics
     /// as the legacy `model_registry::ModelEntry::generation_config`).
@@ -262,7 +292,12 @@ impl LlmProviderSettings {
         starriver_kernel::types::GenerationConfig {
             max_tokens: self.max_tokens.unwrap_or(8192),
             temperature: self.temperature.unwrap_or(0.7),
-            context_window: self.context_window.unwrap_or(128000),
+            context_window: self
+                .context_window
+                .or_else(|| {
+                    builtin_context_window(&self.id, &self.default_model).map(|w| w as usize)
+                })
+                .unwrap_or(starriver_kernel::llm::DEFAULT_MODEL_CONTEXT_WINDOW),
             api_format: self.api_format.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
         }
@@ -800,6 +835,49 @@ mod tests {
         assert_eq!(gc.context_window, 65536);
         assert_eq!(gc.api_format, "anthropic");
         assert_eq!(gc.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    /// WI-201: known GLM Coding Plan models resolve their real window from
+    /// the builtin table when the entry declares none — the 128k default
+    /// lied about that route (official spec 1M; declared 200k as the
+    /// agent-loop compaction bound, see builtin_context_window's doc).
+    #[test]
+    fn builtin_context_window_declares_glm_routes() {
+        // Both preset spellings of the GLM Coding Plan route resolve alike.
+        assert_eq!(
+            builtin_context_window("zhipu", "glm-5.3-flash"),
+            Some(200_000)
+        );
+        assert_eq!(builtin_context_window("glm", "glm-5.3-flashx"), Some(200_000));
+        assert_eq!(builtin_context_window("zhipu", "GLM-5.3"), Some(200_000));
+        // The 4.x catalog models pin the documented 128K.
+        assert_eq!(builtin_context_window("zhipu", "glm-4-plus"), Some(128_000));
+        // Unknown model/provider → no builtin claim (platform default wins).
+        assert_eq!(builtin_context_window("zhipu", "glm-9.9"), None);
+        assert_eq!(builtin_context_window("deepseek", "glm-5.3-flash"), None);
+    }
+
+    #[test]
+    fn generation_config_uses_builtin_window_before_the_default() {
+        // An entry WITHOUT a declared window picks the builtin table value.
+        let mut entry = LlmProviderSettings {
+            id: "zhipu".into(),
+            default_model: "glm-5.3-flash".into(),
+            ..Default::default()
+        };
+        assert_eq!(entry.generation_config().context_window, 200_000);
+
+        // An EXPLICIT declaration still outranks the builtin table.
+        entry.context_window = Some(4096);
+        assert_eq!(entry.generation_config().context_window, 4096);
+
+        // Unknown providers keep the platform default.
+        let other = LlmProviderSettings {
+            id: "deepseek".into(),
+            default_model: "deepseek-chat".into(),
+            ..Default::default()
+        };
+        assert_eq!(other.generation_config().context_window, 128_000);
     }
 
     /// Pins resolve_variant's contract: an exact-id hit, and NO default_model

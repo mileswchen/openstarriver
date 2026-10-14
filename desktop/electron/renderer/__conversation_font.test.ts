@@ -1,4 +1,4 @@
-// App typography regression guard. Two stacks, one boundary (user request 2026-10-03,
+// App typography regression guard. Two stacks, one boundary (2026-10-03 用户要求,
 // superseding WI-145's mono conversation prose):
 //
 //  - --font is the app-wide reading face: English & digits in SF Pro
@@ -8,8 +8,8 @@
 //    message bubbles and every element that merely inherits, including inside
 //    .coding-view. One stack for both UI languages: family lists fall back
 //    per glyph, not per language (CDP probe 2026-10-03, lang=en ≡ lang=zh-CN).
-//  - --mono stays the code/tool surface stack, script-agnostic: JetBrains Mono
-//    leads (per user choice), named SF Mono / Menlo on macOS, Cascadia/Consolas on
+//  - --mono stays the code/tool surface stack, 语言无关: JetBrains Mono
+//    leads (用户指定), named SF Mono / Menlo on macOS, Cascadia/Consolas on
 //    Windows, DejaVu Sans Mono on Linux, CJK falling through to the platform
 //    CJK font.
 //
@@ -29,12 +29,12 @@ describe('app typography (2026-10-03 用户要求: SF Pro Latin + PingFang SC Ha
     const font = css.match(/--font:\s*([^;]+);/)?.[1] ?? '';
     expect(font, '--font variable must exist').not.toBe('');
     // system-ui must LEAD: it resolves to San Francisco (SF Pro) on macOS and
-    // carries no CJK, so Han characters fall through to the next family. (Probe 2026-10-03:
+    // carries no CJK, so 汉字 falls through to the next family. (Probe 2026-10-03:
     // results identical under lang=en and lang=zh-CN — no lang-scoped variants.)
     expect(font.trimStart().startsWith('system-ui')).toBe(true);
     // Named faces catch hosts with SF Pro installed; PingFang SC must sit AFTER
     // the Latin entries — PingFang ships its own Latin glyphs and would capture
-    // English/digits/paths if it came first (same under a Chinese UI).
+    // English/digits/paths if it came first (中文界面同样如此).
     expect(font).toContain('"SF Pro Text"');
     expect(font).toContain('"SF Pro"');
     expect(font.indexOf('"PingFang SC"')).toBeGreaterThan(font.indexOf('"SF Pro"'));
@@ -66,9 +66,9 @@ describe('code/tool mono stack (语言无关, 2026-10-03 用户要求 JetBrains 
   it('--mono leads with JetBrains Mono and carries mono-Latin fallbacks per platform', () => {
     const mono = css.match(/--mono:\s*([^;]+);/)?.[1] ?? '';
     expect(mono, '--mono variable must exist').not.toBe('');
-    // The user-chosen lead; when absent, fall through to named "SF Mono" (an SF-Mono otf is installed locally).
-    // ui-monospace is a dead keyword in the current Electron (probe-verified) and cannot be the
-    // only macOS source — named SF Mono must come before it.
+    // 用户指定的首选;未安装时顺位到命名 "SF Mono"(本机装有 SF-Mono otf)。
+    // ui-monospace 在当前 Electron 里是死关键字(探针实测),不能作为唯一
+    // macOS 来源——命名 SF Mono 必须在它之前。
     expect(mono.trimStart().startsWith('"JetBrains Mono"')).toBe(true);
     expect(mono.indexOf('"SF Mono"')).toBeLessThan(mono.indexOf('ui-monospace'));
     expect(mono).toContain('"SFMono-Regular"');

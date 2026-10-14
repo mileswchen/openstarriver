@@ -85,7 +85,7 @@ async function sendTurn() {
   await waitFor(() => expect(executeCb).not.toBeNull());
 }
 
-describe('CodingView — execution mode and session binding', () => {
+describe('CodingView — 执行模式与 会话绑定(DSH 方案)', () => {
   it('新会话态在输入框上方渲染四档选择器,Standard 为默认', async () => {
     const { CodingView, WorkspaceProvider, WorkspaceSection } = await import('./app');
     render(<I18nProvider><WorkspaceProvider><WorkspaceSection onOpenCoding={() => {}} /><CodingView debugEnabled={false} /></WorkspaceProvider></I18nProvider>);
@@ -401,7 +401,7 @@ describe('SettingsDialog — Coding tab', () => {
 });
 
 
-describe('CodingView — New Task mode switch (WI-5)', () => {
+describe('CodingView — New Task mode switch (WI-5, DSH ui-agent-preset parity)', () => {
   async function renderNewTask() {
     const { CodingView, WorkspaceProvider, WorkspaceSection } = await import('./app');
     render(<I18nProvider><WorkspaceProvider><WorkspaceSection onOpenCoding={() => {}} /><CodingView debugEnabled={false} /></WorkspaceProvider></I18nProvider>);

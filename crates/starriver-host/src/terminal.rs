@@ -245,11 +245,6 @@ impl Scrollback {
 struct TerminalSession {
     /// Publication sequence — the list() ordering key.
     seq: u64,
-    /// Owning agent/session id — the session that started this PTY via
-    /// `terminal_start`; the key that scopes the turn-end reap and
-    /// `kill_owner`. None = legacy/tests direct start: never touched by the
-    /// turn-end reap.
-    owner: Option<String>,
     /// Wall-clock start (ms since epoch) — WI-150 panel shows start time and
     /// live elapsed per background terminal.
     started_at_ms: u64,
@@ -265,20 +260,17 @@ struct TerminalSession {
     /// are non-destructive views).
     consume: Arc<Mutex<Cursor>>,
     closed: Arc<AtomicBool>,
-    /// Most recent marked command (byte-exact marker contract) — set to running on send,
-    /// exit code recorded as soon as the end marker shows up in the output stream. None = no marked command was ever sent on this session.
+    /// 最近一次标记命令（逐字节实时一致：dsh 式标记契约）——发送时置 running，
+    /// 输出流出现结束标记即记录退出码。None = 该会话未用标记发过命令。
     command: Arc<Mutex<Option<CommandRun>>>,
 }
 
-/// Lifecycle of one marked command.
+/// 一次标记命令的生命周期。
 #[derive(Debug, Clone)]
 pub struct CommandRun {
     pub started_ms: u64,
     pub finished_ms: Option<u64>,
     pub exit_code: Option<i64>,
-    /// The sent input text — shown on the background-terminal panel so
-    /// multiple terminals are distinguishable at a glance.
-    pub text: Option<String>,
 }
 
 #[derive(Default)]
@@ -352,16 +344,8 @@ impl TerminalService {
     }
 
     /// Start an interactive PTY session. `shell` defaults to `bash` on Unix
-    /// and `pwsh` on Windows. No owner — legacy/tests only; turn-end reap
-    /// never touches ownerless sessions.
+    /// and `pwsh` on Windows.
     pub fn start(&self, shell: Option<String>) -> Result<String, String> {
-        self.start_owned(None, shell)
-    }
-
-    /// [`Self::start`] with owner attribution: `owner` is the starting
-    /// agent/session id, the key that scopes the turn-end reap and
-    /// `kill_owner` cleanup.
-    pub fn start_owned(&self, owner: Option<String>, shell: Option<String>) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -454,7 +438,6 @@ impl TerminalService {
             seq: self
                 .next_seq
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            owner,
             started_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
@@ -566,9 +549,9 @@ impl TerminalService {
         self.send_ex(id, input, wait_ms, idle_ms, false)
     }
 
-    /// Send with the marker contract (byte-exact panel variant): wrap the command in
-    /// a `printf end-marker + exit-code` trailer written to the PTY; the moment the end marker
-    /// appears in the output stream the completion and exit code are recorded — the panel no longer relies on 5-minute silence inference.
+    /// 带标记契约的发送（逐字节一致面板版，dsh 式）：把命令包成
+    /// `printf 结束标记 + 退出码` 的形式写入 PTY，输出流一出现结束标记即刻
+    /// 记录命令完成与退出码——面板不再依赖 5 分钟静默推断。
     pub fn send_ex(
         &self,
         id: &str,
@@ -578,7 +561,7 @@ impl TerminalService {
         wrap: bool,
     ) -> Result<SendOutcome, String> {
         let (writer, scrollback, child, _killer, consume, closed, last_activity) = self.session_parts(id)?;
-        // Unique marker id per send: guards against matching identical-looking markers from history/echo.
+        // 每次发送的唯一标记 id：防历史/回显中的同形标记误匹配。
         let marker_id = format!(
             "{}{}",
             now_ms(),
@@ -591,16 +574,15 @@ impl TerminalService {
                     started_ms: now_ms(),
                     finished_ms: None,
                     exit_code: None,
-                    text: input.map(|s| s.to_string()),
                 });
             }
         }
         if let Some(input) = input {
             let payload = if wrap {
-                // Single-quote escaping preserves multiline semantics; eval runs in the current shell (cd/exit kept).
+                // 单引号转义保多行语义；eval 在当前 shell 执行（cd/exit 保留）。
                 let quoted = format!("'{}'", input.replace('\'', r"'\''"));
-                // Marker escaping uses $'\x..' ANSI-C quoting (supported by bash/zsh/macOS sh;
-                // printf's \\0NNN octal splits into NUL + literal under bash semantics).
+                // 标记转义走 $'\x..' ANSI-C 引导（bash/zsh/macOS sh 皆支持；
+                // printf 的 \\0NNN 八进制在 bash 语义下会被拆成 NUL+字面量）。
                 format!(
                     "printf '%s' $'\\x1b]633;C;{marker_id}\\x07'; eval -- {quoted}; __st_rc=$?; printf '%s%s' $'\\x1b]633;D;{marker_id}:' \"$__st_rc\" $'\\x07'; unset __st_rc\n"
                 )
@@ -634,7 +616,7 @@ impl TerminalService {
             if dropped_under {
                 truncated = true;
             }
-            // Marker scan: record command completion and exit code as soon as the end marker appears (no silence wait).
+            // 标记扫描：结束标记一出现即记录命令完成与退出码（不等静默窗）。
             if wrap {
                 if let Some(end_at) = delta.rfind(&end_prefix) {
                     let digits_start = end_at + end_prefix.len();
@@ -763,7 +745,7 @@ impl TerminalService {
     }
 
     /// Fresh snapshots (id + top-level status) in publication order.
-    /// The session's marked-command state (None = session missing or no marked command ever sent).
+    /// 会话的标记命令状态（None = 会话不存在或未用标记发过命令）。
     fn command_of(
         &self,
         id: &str,
@@ -808,55 +790,6 @@ impl TerminalService {
             .unwrap_or_else(|e| e.into_inner())
             .kill();
         Ok(())
-    }
-
-    /// Turn-end reconciliation: close every terminal owned by `owner` whose
-    /// marked command is NOT in flight — shells parked at a prompt, sessions
-    /// whose last command finished, and dead (exited) shells. Sessions with
-    /// a live marked command (dev servers, REPLs, long tasks) survive and
-    /// stay usable across turns; the panel ✕ still closes them manually.
-    /// Returns the number of sessions closed.
-    pub fn reap_turn_end(&self, owner: &str) -> usize {
-        let ids: Vec<String> = {
-            let sessions = self.sessions.lock().unwrap();
-            sessions
-                .iter()
-                .filter(|(_, session)| session.owner.as_deref() == Some(owner))
-                .filter(|(_, session)| {
-                    // Shell exited → the marker can never arrive; reap regardless of command state.
-                    let exited = matches!(
-                        Self::poll_status(&session.child, Some(&session.last_activity_ms)),
-                        SessionStatus::Exited { .. }
-                    );
-                    // Marker contract (send_ex wrap=true) sets started on send and finished the
-                    // moment the end marker appears; finished_ms of None means still running.
-                    let live_command = session
-                        .command
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .as_ref()
-                        .is_some_and(|run| run.finished_ms.is_none());
-                    exited || !live_command
-                })
-                .map(|(id, _)| id.clone())
-                .collect()
-        };
-        ids.into_iter().filter_map(|id| self.kill(&id).ok()).count()
-    }
-
-    /// Close every terminal owned by `owner` (session-disposal semantics:
-    /// call when the owning session is closed or destroyed). Returns the
-    /// number of sessions closed.
-    pub fn kill_owner(&self, owner: &str) -> usize {
-        let ids: Vec<String> = {
-            let sessions = self.sessions.lock().unwrap();
-            sessions
-                .iter()
-                .filter(|(_, session)| session.owner.as_deref() == Some(owner))
-                .map(|(id, _)| id.clone())
-                .collect()
-        };
-        ids.into_iter().filter_map(|id| self.kill(&id).ok()).count()
     }
 
     /// Test hook: backdate a session's activity stamp so the idle window
@@ -907,42 +840,6 @@ mod tests {
         assert_eq!(service.status(&id), Ok(SessionStatus::Running));
         assert_eq!(status_of(&id), "running");
         service.kill(&id).expect("kill");
-    }
-
-    #[test]
-    fn reap_turn_end_scopes_to_owner_and_spares_live_commands() {
-        let service = TerminalService::new();
-        let a = service
-            .start_owned(Some("a".into()), Some("sh".into()))
-            .expect("start a");
-        let b = service
-            .start_owned(Some("b".into()), Some("sh".into()))
-            .expect("start b");
-        let anon = service.start(Some("sh".into())).expect("start anon");
-
-        // a: marked command already finished (the end marker recorded) →
-        //    reaped at turn end.
-        service
-            .send_ex(&a, Some(":\n"), 5_000, 300, true)
-            .expect("send a");
-        // b: marked command still running (`read` blocks; the end marker
-        //    never arrives) → must survive.
-        service
-            .send_ex(&b, Some("read x\n"), 500, 300, true)
-            .expect("send b");
-
-        assert_eq!(service.reap_turn_end("a"), 1, "finished session reaped");
-        let remaining: Vec<String> =
-            service.list().into_iter().map(|(id, _, _, _)| id).collect();
-        assert!(!remaining.contains(&a), "finished session should be reaped");
-        assert!(remaining.contains(&b), "live marked command must survive");
-        assert!(remaining.contains(&anon), "ownerless sessions are out of scope");
-
-        // Owner isolation: reaping an unrelated owner is a no-op.
-        assert_eq!(service.reap_turn_end("nobody"), 0);
-        // kill_owner: close-everything-for-one-owner semantics.
-        assert_eq!(service.kill_owner("b"), 1);
-        service.kill(&anon).expect("kill anon");
     }
 
     #[test]
@@ -1111,7 +1008,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_reasons_serialize_with_stable_names() {
+    fn wait_reasons_serialize_with_dsh_names() {
         assert_eq!(WaitReason::StdinRead.as_str(), "stdin_read");
         assert_eq!(WaitReason::InferredIdle.as_str(), "inferred_idle");
         assert_eq!(WaitReason::Timeout.as_str(), "timeout");
@@ -1342,8 +1239,8 @@ mod tests {
     }
 }
 
-/// Strip this send's marker sequences (the real end and start markers; marker literals in
-/// echoed text cannot match because they contain `%s`/no digits).
+/// 移除本条发送的标记序列（真实结束标记与开始标记；回显文本中的标记字面量
+/// 因含 `%s`/无数字不会匹配）。
 fn strip_markers(text: &str, marker_id: &str, end_prefix: &str) -> String {
     let start_marker = format!("\x1b]633;C;{marker_id}\x07");
     let mut out = String::with_capacity(text.len());
@@ -1360,7 +1257,7 @@ fn strip_markers(text: &str, marker_id: &str, end_prefix: &str) -> String {
             out.push_str(&rest[..end_at]);
             rest = &rest[stop + 1..];
         } else {
-            // Not a real marker (e.g. an echoed format string): keep it and skip this hit.
+            // 非真实标记（如回显的格式串）：保留并跳过该命中。
             out.push_str(&rest[..digits_start]);
             rest = &rest[digits_start..];
         }
@@ -1369,8 +1266,8 @@ fn strip_markers(text: &str, marker_id: &str, end_prefix: &str) -> String {
     out.replace(&start_marker, "")
 }
 
-    /// Marker contract: a command wrapped by send_ex is recorded done with its exit code as
-    /// soon as the end marker appears — no 5-minute silence wait; list() carries this state.
+    /// dsh 式标记契约：send_ex 包裹的命令在输出流出现结束标记即记 done 与
+    /// 退出码，无需等 5 分钟静默；list() 携带该状态。
     #[test]
     fn wrapped_send_records_command_completion() {
         let service = TerminalService::new();
@@ -1391,7 +1288,7 @@ fn strip_markers(text: &str, marker_id: &str, end_prefix: &str) -> String {
         assert_eq!(cmd.exit_code, Some(0), "`true` exits 0");
     }
 
-    /// The no-marker path keeps the old behavior: bare write() produces no command state.
+    /// 无标记路径保持旧行为：write() 裸写不产生命令状态。
     #[test]
     fn raw_write_keeps_legacy_semantics() {
         let service = TerminalService::new();

@@ -29,4 +29,6 @@ pub use summarize::{
     CHECKPOINT_PREAMBLE, COMPACTION_INSTRUCTION,
 };
 
-pub use engine::{compact, CompactionLlm};
+pub use engine::{
+    compact, CompactionFailure, CompactionLlm, CompactionOutcome, CompactionSkip,
+};

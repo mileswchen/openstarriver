@@ -229,11 +229,11 @@ pub enum UiEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token_budget: Option<u64>,
     },
-    /// Byte-exact live view (open-turn snapshot stream): the open turn's trace projection slice.
-    /// `entries` is shaped like `session.trace` entries (same projection function) — the client
-    /// re-renders the turn with replace semantics (turnIndex is 0-based; == local turn count means a brand-new turn),
-    /// and the live view is consistent with the settled view by construction. epoch bumps on compaction/fork/rollback;
-    /// a mismatch triggers a client-side full re-pull.
+    /// 逐字节实时一致（开放回合快照流）：开放回合的 trace 投影切片。
+    /// `entries` 与 `session.trace` 条目同构（同一投影函数的输出）——客户端
+    /// 以替换语义重渲染该回合（turnIndex 0-based，== 本地回合数表示全新回合），
+    /// 实时视图与落定视图由构造保证一致。epoch 在 compaction/fork/回滚时递增，
+    /// 不一致即触发客户端全量重拉。
     TraceSnapshot {
         #[serde(default = "UiEvent::version")]
         version: u32,

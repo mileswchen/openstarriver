@@ -444,8 +444,16 @@ pub(crate) fn flatten_blocks(blocks: &[ContentBlock]) -> String {
                 // WI-47 Phase B: lossless conversion (a String argument —
                 // malformed ingress — yields no keys, as before).
                 let parsed: Option<serde_json::Value> = arguments.to_serde_json().ok();
-                let arg = crate::helpers::tool_call_arg(&name, &parsed);
-                Some(tool_call_label(&name, &arg))
+                let arg = ["file", "path", "command"]
+                    .iter()
+                    .find_map(|key| {
+                        parsed
+                            .as_ref()
+                            .and_then(|value| value.get(*key))
+                            .and_then(|value| value.as_str())
+                    })
+                    .unwrap_or("");
+                Some(tool_call_label(&name, arg))
             }
             ContentBlock::ToolResult {
                 call_id: _,
@@ -524,10 +532,18 @@ pub(crate) fn display_pieces(
                 // WI-47 Phase B: lossless conversion (a String argument —
                 // malformed ingress — yields no keys, as before).
                 let parsed: Option<serde_json::Value> = arguments.to_serde_json().ok();
-                let arg = crate::helpers::tool_call_arg(&name, &parsed);
+                let arg = ["file", "path", "command"]
+                    .iter()
+                    .find_map(|key| {
+                        parsed
+                            .as_ref()
+                            .and_then(|value| value.get(*key))
+                            .and_then(|value| value.as_str())
+                    })
+                    .unwrap_or("");
                 out.push(types::ChatMessage {
                     role: "tool".to_string(),
-                    content: tool_call_label(&name, &arg),
+                    content: tool_call_label(&name, arg),
                     ts: Some(ts),
                     usage: None,
                     duration_ms: None,
@@ -726,12 +742,11 @@ pub(crate) fn project_chat_messages(
 }
 
 /// Project surface entries into TrajectoryView trace entries: every content
-/// Byte-exact live view (open-turn snapshot stream): the open-turn slice.
-/// Slices from the last `user/message` (inclusive) to the end — the turn header/tools/
-/// assistant content after it are all inside; the full projection and the slice projection
-/// agree entry-by-entry on this range. Returns `(turn_index, slice)`;
-/// turn_index is the number of user/message entries before the slice (0-based turn number).
-/// No user entry (turn not started yet) → None.
+/// 逐字节实时一致（开放回合快照流）：开放回合切片。
+/// 从最后一条 `user/message`（含）切到末尾——其后的回合头/工具/助手内容都在
+/// 区间内，全量投影在该区间上与切片投影逐条一致。返回 `(turn_index, 切片)`；
+/// turn_index 为切片之前的 user/message 条数（0-based 回合序号）。
+/// 无 user 条目（回合尚未开始）→ None。
 pub(crate) fn open_turn_slice(
     mut entries: Vec<SurfaceEntry>,
 ) -> Option<(u32, Vec<SurfaceEntry>)> {
@@ -745,8 +760,8 @@ pub(crate) fn open_turn_slice(
     Some((turn_index, slice))
 }
 
-/// Build a TraceSnapshot event from the slice (same projection as `project_trace_entries`;
-/// identical-content skipping is done by the caller's hash).
+/// 由切片构建 TraceSnapshot 事件（`project_trace_entries` 同源投影；
+/// 相同内容跳过由调用方哈希完成）。
 pub(crate) fn build_trace_snapshot(
     session_id: &str,
     epoch: u64,
@@ -3278,7 +3293,7 @@ mod delete_tests {
 }
 
 impl crate::HostRuntime {
-    /// Current projection epoch (open-turn snapshot stream): a client epoch mismatch triggers a full re-pull.
+    /// 当前投影世代（开放回合快照流）：客户端 epoch 与此不一致即全量重拉。
     pub fn trace_epoch(&self, session_id: &str) -> u64 {
         *self
             .trace_epochs
@@ -3288,8 +3303,8 @@ impl crate::HostRuntime {
             .unwrap_or(&0)
     }
 
-    /// Bumped after compaction/fork/rollback (manual compact path; automatic compaction
-    /// mid-run is bumped by the relay when it sees a Compaction event).
+    /// compaction/fork/回滚后递增（手动 compact 路径；运行中自动压缩由
+    /// 中继在见到 Compaction 事件时递增）。
     pub fn bump_trace_epoch(&self, session_id: &str) {
         let mut map = self
             .trace_epochs
@@ -3316,8 +3331,8 @@ mod trace_snapshot_tests {
         }
     }
 
-    /// Slice semantics: start at the last user/message (inclusive); request/header after it
-    /// are included too (the turn header belongs to its turn); turn_index = user entries before it.
+    /// 切片语义：从最后一条 user/message（含）切起；其后的 request/header
+    /// 一并纳入（回合头随回合走）；turn_index = 之前的 user 条数。
     #[test]
     fn open_turn_slice_cuts_at_last_user_message_and_counts_turns() {
         let entries = vec![
@@ -3335,7 +3350,7 @@ mod trace_snapshot_tests {
         assert_eq!(slice[2].seq, 6);
     }
 
-    /// No user entry (turn not started / injections only) → no snapshot.
+    /// 无 user 条目（回合未开始/仅注入）→ 无快照。
     #[test]
     fn open_turn_slice_without_user_message_is_none() {
         let entries = vec![entry("request/header", 1), entry("context/message", 2)];

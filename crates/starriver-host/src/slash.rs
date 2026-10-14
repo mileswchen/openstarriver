@@ -420,7 +420,7 @@ mod diff_stat_tests {
         assert!(workspace_diff_stat(dir.path().to_str().unwrap()).is_err());
     }
 
-    /// Regression (diff pill "+1 -1 never updates"): a workspace whose real edits
+    /// Regression (diff pill "+1 -1 永不更新"): a workspace whose real edits
     /// live in a submodule (products/iphone → StarriverMobile). While the
     /// submodule is dirty with an unmoved pointer, plain numstat shows
     /// NOTHING for it — the pill then never changes. The inner edits must be

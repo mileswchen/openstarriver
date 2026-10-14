@@ -14,8 +14,8 @@ pub struct ToolExecutionToken(u64);
 
 static NEXT_TOOL_EXECUTION_TOKEN: AtomicU64 = AtomicU64::new(0);
 
-/// Mint a unique opaque execution token, following the opaque-symbol pattern:
-/// identity is the value, the payload is
+/// Mint a unique opaque execution token, mirroring
+/// `Symbol('dsh.tool.execution')`: identity is the value, the payload is
 /// unreadable, and uniqueness is guaranteed by the counter.
 pub fn mint_tool_execution_token() -> ToolExecutionToken {
     ToolExecutionToken(NEXT_TOOL_EXECUTION_TOKEN.fetch_add(1, Ordering::Relaxed))

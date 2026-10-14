@@ -564,7 +564,70 @@ fn drain_grouped(
                     continue;
                 }
             };
-            store::append_batch(&mut db, &header, &events, materialized)
+            let mut result = store::append_batch(&mut db, &header, &events, materialized);
+            // BUG-154 (2026-10-14, session bc6ff9a5…): a firehose span
+            // (events 44023–44161, the escalated-retry compaction window)
+            // never reached the writer; every later batch then failed the
+            // contiguity check forever — 35 silent rejections, and the
+            // turn's in-memory tail died with the process. Failing closed
+            // here forfeits the WHOLE rest of the session for one missed
+            // span. Firehose batches carry no caller ack, so bridge the gap
+            // with one explicit `session/gap` tombstone and retry: the
+            // ledger stays appendable and the loss becomes bounded and
+            // visible in the trace instead of silently orphaning the
+            // session. Never fabricate events under a real caller's ack.
+            if let Err(PersistenceError::Discontiguous { expected, got, .. }) = &result {
+                let firehose_only = acks.iter().all(|ack| ack.is_closed());
+                if firehose_only && got > expected {
+                    // One tombstone per missing seq: append_batch enforces
+                    // strict +1 contiguity, so the bridge itself must be a
+                    // contiguous run. The first tombstone carries the span
+                    // metadata; the rest are bare markers.
+                    let (from, until) = (*expected, got - 1);
+                    let time = events.first().map(|e| e.time).unwrap_or(0);
+                    let bridge: Vec<SessionEvent> = (from..=until)
+                        .map(|seq| SessionEvent {
+                            seq,
+                            time,
+                            event_type: "session/gap".into(),
+                            data: starriver_kernel::json::JsonValue::Object(vec![
+                                (
+                                    "reason".into(),
+                                    starriver_kernel::json::JsonValue::String(
+                                        "events never reached the persistence writer; bridged to keep the ledger appendable".into(),
+                                    ),
+                                ),
+                                ("seq".into(), starriver_kernel::json::JsonValue::UInt(seq)),
+                                ("spanFrom".into(), starriver_kernel::json::JsonValue::UInt(from)),
+                                ("spanUntil".into(), starriver_kernel::json::JsonValue::UInt(until)),
+                            ]),
+                            surface_op: None,
+                            source_event_seqs: Vec::new(),
+                        })
+                        .collect();
+                    match store::append_batch(&mut db, &header, &bridge, materialized) {
+                        Ok(()) => {
+                            tracing::error!(
+                                session = %id.0,
+                                from = from,
+                                until = until,
+                                lost = until - from + 1,
+                                "persistence gap bridged with session/gap tombstones; \
+                                 events in the span are lost"
+                            );
+                            result = store::append_batch(&mut db, &header, &events, materialized);
+                        }
+                        Err(bridge_error) => {
+                            tracing::error!(
+                                session = %id.0,
+                                error = ?bridge_error,
+                                "session/gap bridge failed; batch stays rejected"
+                            );
+                        }
+                    }
+                }
+            }
+            result
         };
         // Firehose appends carry no ack (write-behind), so a failed batch is
         // otherwise silent data loss. LiveAppend acks are dummy senders; only
@@ -952,7 +1015,46 @@ mod tests {
         second.attach();
     }
 
+    /// BUG-154 recovery: a firehose span that never reached the writer must
+    /// not orphan the session — the gap gets one `session/gap` tombstone and
+    /// later batches land contiguously.
     #[tokio::test]
+    async fn firehose_gap_bridges_with_tombstone_and_session_stays_appendable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.db");
+        let (db, store_id) = open_db(&path);
+        let coordinator = WriteCoordinator::spawn(
+            db,
+            store_id.clone(),
+            cordis_rslite::EventBus::new(),
+            TEST_WINDOW_MS,
+            16,
+        );
+        let id = SessionId("g".into());
+        let head = header("g");
+        coordinator.forward_live(
+            id.clone(),
+            head.clone(),
+            vec![event(0, "turn/start"), event(1, "assistant/message")],
+        );
+        coordinator.flush().await.unwrap();
+        // Events 2..=6 never reached the writer; the next batch starts at 7.
+        coordinator.forward_live(id.clone(), head.clone(), vec![event(7, "user/message")]);
+        coordinator.flush().await.unwrap();
+        let read = rusqlite::Connection::open(&path).unwrap();
+        let stored = store::load_stored(&read, &store_id, &id)
+            .unwrap()
+            .expect("session persisted");
+        // The span 2..=6 is bridged by per-seq tombstones; the batch lands after.
+        assert_eq!(stored.events.len(), 8);
+        for (index, stored_event) in stored.events.iter().enumerate().skip(2).take(5) {
+            assert_eq!(stored_event.seq, index as u64);
+            assert_eq!(stored_event.event_type, "session/gap");
+        }
+        assert_eq!(stored.events[7].event_type, "user/message");
+        assert_eq!(stored.events[7].seq, 7);
+    }
+
     async fn append_batches_group_by_session_independently() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.db");

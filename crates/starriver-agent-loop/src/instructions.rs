@@ -90,7 +90,7 @@ fn discover_inner(root: &Path) -> (Vec<InstructionFile>, HashMap<String, ()>) {
     (files, seen)
 }
 
-/// The user-global layer (the global counterpart of the per-project file): a single fixed
+/// The user-global layer (`$DSH_HOME/AGENTS.md` parity): a single fixed
 /// `$HOME/.starriver/AGENTS.md`, absent when HOME is unset or the file is
 /// missing/oversized. Label carries the `(global)` marker.
 pub fn global_layer(home: Option<&Path>) -> Option<InstructionFile> {

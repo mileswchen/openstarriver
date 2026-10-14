@@ -479,9 +479,9 @@ impl AgentRuntime {
     /// request still requires the bearer token). Browsers and third-party
     /// frontends connect to the same protocol via `HttpSseTransport`.
     ///
-    /// Pairing survives restarts: `{port, token}` is persisted in `~/.starriver/http_server.json`
-    /// and reused on next launch — otherwise every desktop restart would rotate port+token and
-    /// invalidate all phone pairings, forcing a re-scan. When the port is taken, fall back to a random port and update the persisted state.
+    /// 配对跨重启：`{port, token}` 持久化在 `~/.starriver/http_server.json`
+    /// 并在下次启动复用——否则每次重启桌面都随机换端口+Token，手机配对全部
+    /// 失效、必须重新扫码。端口被占时回退随机端口并更新持久化状态。
     #[napi]
     pub fn start_http_server(&self) -> Result<String> {
         let dispatch = protocol_catalog::dispatcher(self.protocol.clone(), self.host.clone());
@@ -517,7 +517,7 @@ impl AgentRuntime {
         ));
         let server = match spawned {
             Ok(server) => server,
-            // Persisted port taken (stale leftover / concurrent holder) → fall back to a random port + new token.
+            // 持久化端口被占（异常残留/并发占用）→ 回退随机端口+新 Token。
             Err(_) if saved.is_some() => runtime
                 .block_on(http_server::spawn_with(
                     dispatch,

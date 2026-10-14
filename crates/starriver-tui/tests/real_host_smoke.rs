@@ -25,7 +25,7 @@ fn temp_config() -> (tempfile::TempDir, PathBuf, PathBuf) {
 }
 
 #[test]
-#[ignore = "needs a local filesystem temp DB; no model network access"]
+#[ignore = "需要本地文件系统写临时 DB；不接入模型网络"]
 fn real_host_boots_and_execute_fails_without_engine() {
     let (_dir, config, _db) = temp_config();
     let host = Host::new(Some(config.to_string_lossy().into_owned())).expect("host boots");
@@ -58,7 +58,7 @@ fn real_host_boots_and_execute_fails_without_engine() {
 /// On the real host verify /compact /usage /export (needs a real DB-seeded session) and
 /// /init /diff (needs a real filesystem and git repo). No model calls.
 #[test]
-#[ignore = "needs a temp DB and a temp git repo; no model network access"]
+#[ignore = "需要临时 DB、临时 git 仓库；不接入模型网络"]
 fn real_host_slash_commands_against_temp_db_and_repo() {
     let (dir, config, db) = temp_config();
 
@@ -157,7 +157,7 @@ fn real_host_slash_commands_against_temp_db_and_repo() {
 /// On the real host verify the full /backtrack path: seed 3 user/assistant turns → backtrack to the 2nd
 /// user → fork a new thread → assert the new session history contains only turn 1 and input prefills Q2.
 #[test]
-#[ignore = "needs a temp DB; no model network access"]
+#[ignore = "需要临时 DB；不接入模型网络"]
 fn real_host_fork_backtracks_to_user_message() {
     use starriver_kernel::config::SessionConfig;
     use starriver_kernel::types::Message;
@@ -244,7 +244,7 @@ fn real_host_fork_backtracks_to_user_message() {
 /// On the real host verify /delete's second-confirmation delete: seed → /delete → confirm →
 /// assert list_sessions excludes it and resume clears.
 #[test]
-#[ignore = "needs a temp DB; no model network access"]
+#[ignore = "需要临时 DB；不接入模型网络"]
 fn real_host_delete_session() {
     use starriver_kernel::config::SessionConfig;
     use starriver_kernel::types::Message;
@@ -291,7 +291,7 @@ fn real_host_delete_session() {
 /// → /archive moves out of the default list into the archive → /unarchive picker restores back →
 /// host API with None clears the override back to the derived title.
 #[test]
-#[ignore = "needs a temp DB; no model network access"]
+#[ignore = "需要临时 DB；不接入模型网络"]
 fn real_host_rename_and_archive() {
     use starriver_kernel::config::SessionConfig;
     use starriver_session::legacy::SessionStore;

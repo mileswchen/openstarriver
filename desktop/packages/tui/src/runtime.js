@@ -31,9 +31,9 @@ function getRuntime(configPath) {
     const addon = loadNative();
     const { AgentRuntime } = addon;
     runtime = new AgentRuntime(configPath || null);
-    // Install the script executor: the Rust ScriptRuntime delivers
-    // {id, path, params} via a ThreadsafeFunction; without an executor the script tool fails silently. The real
-    // consumers (app.tsx / gui/server.ts) import this directly — it must be wired here.
+    // 安装脚本执行器：Rust 侧 ScriptRuntime 经 ThreadsafeFunction 下发
+    // {id, path, params}，没有执行器时脚本工具静默失败。真实消费者
+    // （app.tsx / gui/server.ts）都直接 import 本函数，必须在这里接线。
     setupScriptExecutor(runtime);
   }
   return runtime;

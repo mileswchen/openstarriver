@@ -79,6 +79,16 @@ pub struct LlmModelContext {
     pub context_window: u64,
 }
 
+/// Fallback context window when neither the provider profile nor the model
+/// directory declares one. Kept in one place so every consumer (model
+/// registry display, agent-loop compaction threshold, TUI footer estimate)
+/// reasons about the same number. 128k is deliberately conservative: an
+/// underestimated window only makes compaction kick in earlier, while an
+/// overestimated one lets contexts grow until providers start failing
+/// (WI-198: this constant must also reach the agent-loop, not just the
+/// registry display).
+pub const DEFAULT_MODEL_CONTEXT_WINDOW: usize = 128_000;
+
 /// Display metadata for one registered provider route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlmProviderInfo {
@@ -560,6 +570,14 @@ impl Default for RetryPolicy {
                 "SERVER",
                 "TIMEOUT",
                 "TRANSPORT",
+                // WI-200: the loop detector inside the agent step aborts a
+                // stream whose text degenerates into an n-gram repetition
+                // loop (observed live: glm-5.3-flash repeated the same
+                // sentence for 8h on a 102k poisoned context). A re-ask is
+                // the recovery — with the step's escalation ladder
+                // (compaction → lower reasoning → anti-loop notice)
+                // diverging the retry from the exact context that looped.
+                "DEGENERATE_LOOP",
             ]
             .into_iter()
             .map(String::from)
@@ -1115,7 +1133,7 @@ impl BlockAssembler {
 
     /// The assembled assistant message over [`BlockAssembler::blocks`].
     /// An omitted source defaults to the assembler plugin attribution,
- /// matching default `{ kind: 'plugin', plugin: 'starriver-kernel/assembler' }`.
+ /// matching default `{ kind: 'plugin', plugin: 'dsh-llm/assembler' }`.
     pub fn message(&self, source: Option<MessageSource>) -> Message {
         let source = source.unwrap_or_else(|| MessageSource::Plugin {
             plugin: "starriver-kernel/assembler".into(),

@@ -669,10 +669,6 @@ export function toolIconFor(name: string, hint?: string): string {
 const TOOL_TITLES: Record<string, string> = {
   bash: 'Shell', shell: 'Shell', sh: 'Shell', zsh: 'Shell',
   powershell: 'Shell', pwsh: 'Shell', cmd: 'Shell',
-  terminal: 'Terminal', terminal_start: 'Terminal Start', terminal_list: 'Terminals',
-  terminal_read: 'Terminal Read', terminal_write: 'Terminal Write',
-  terminal_signal: 'Terminal Signal', terminal_wait: 'Terminal Wait',
-  terminal_kill: 'Terminal Kill',
   read: 'Read', write: 'Write', edit: 'Edit', patch: 'Patch', delete: 'Delete',
   git: 'Git', grep: 'Grep', glob: 'Glob', ls: 'List', find: 'Find',
   lsp_symbols: 'Symbols', lsp_diagnostics: 'Diagnostics',
@@ -686,13 +682,10 @@ function truncateOneLine(s: string, n: number): string {
   return chars.slice(0, n).join('') + '…';
 }
 
-/** Tool name from a tool row's label ("🔧 patch: x" / "patch: x" → "patch").
- *  Placeholder rows ("🔧 terminal_start..." — args not arrived yet) carry a
- *  trailing ellipsis that is NOT part of the name — strip it, or TOOL_ICONS /
- *  TOOL_TITLES both miss and the row falls back to the generic square. */
+/** Tool name from a tool row's label ("🔧 patch: x" / "patch: x" → "patch"). */
 function toolNameOf(content: string): string {
   const m = content.replace(/^🔧\s*/, '').match(/^([^:\s]+)/);
-  return m ? m[1].replace(/(\.{3}|…)+$/, '') : '';
+  return m ? m[1] : '';
 }
 
 /** WI-151 follow-up: code/output block copy button — clipboard API first,
@@ -766,28 +759,19 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 }
 
 /** Tool-call JSON arguments → the human-relevant field (command/path/file/…)
- *  flattened to one line for the tool card label; '' when absent/unparseable.
- *  terminal-family tools expose input/shell directly; tools with no single
- *  command field (terminal wait/read/kill/signal, unknown MCP tools…) fall
- *  back to the FULL argument object — the same shape the trajectory view
- *  shows — so no field is omitted (capped; the card body wraps). */
+ *  flattened to one line for the tool card label; '' when absent/unparseable. */
 export function toolCommandOf(input: unknown): string {
   if (!input) return '';
   try {
     const params = typeof input === 'string' ? JSON.parse(input) : input;
-    const flatten = (s: string) => s.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
     const cmd = params.command || params.path || params.file || params.pattern || params.query || params.url
       || params.old_string?.slice(0, 60)
       || (params.template ? `${params.template}: ${(params.prompt || '').slice(0, 60)}` : '')
-      || params.input
-      || params.shell
       || '';
-    if (typeof cmd === 'string' && cmd) return flatten(cmd);
-    const keys = Object.keys(params ?? {});
-    if (keys.length === 0) return '';
-    let json = JSON.stringify(params);
-    if (json.length > 400) json = json.slice(0, 400) + '…';
-    return flatten(json);
+    if (typeof cmd !== 'string') return '';
+    // Flatten newlines so a multiline bash command stays on one row and
+    // ToolRow renders it as a single code block (it unescapes on display).
+    return cmd.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
   } catch { return ''; }
 }
 
@@ -823,11 +807,7 @@ function StatusIcon({ ok }: { ok: boolean }) {
 
 /** Tools whose argument is a shell command — rendered as a "bash" code block so the
  *  command gets its own line instead of running together with the label text. */
-const COMMAND_TOOLS = new Set(['bash', 'shell', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd',
-  // terminal-family args render with bash highlighting: write's input IS
-  // shell text; start's shell name and the bare ids stay single-line.
-  'terminal', 'terminal_start', 'terminal_write', 'terminal_read',
-  'terminal_wait', 'terminal_signal', 'terminal_list', 'terminal_kill']);
+const COMMAND_TOOLS = new Set(['bash', 'shell', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd']);
 
 /** A tool execution card.
  *
@@ -987,10 +967,8 @@ function TerminalRow({ term, onKill }: {
     const timer = setInterval(() => setTick(n => n + 1), 1000);
     return () => clearInterval(timer);
   }, []);
-  // Byte-exact marker contract: a command has a precise lifecycle — running
-  // the moment it is sent, done · exit N as soon as the end marker shows up
-  // in the output stream; fall back to the host session status without
-  // marker info.
+  // 逐字节实时一致（dsh 式标记契约）：命令有精确生命周期——发出即 running，
+  // 结束标记一出现即 done · exit N；无标记信息时回退 host 会话状态。
   const cmd = term.command;
   const baseMs = cmd?.startedAtMs ?? term.startedAtMs;
   const startedText = new Date(baseMs).toLocaleTimeString(undefined, { hour12: false });
@@ -999,18 +977,12 @@ function TerminalRow({ term, onKill }: {
   const done = cmd?.finishedAtMs != null;
   const statusText = done ? `done · exit ${cmd?.exitCode ?? 0}` : term.status;
   const statusClass = done ? 'done' : term.status;
-  const shortId = term.id.slice(0, 8);
-  const cmdText = cmd?.text?.trim();
   return (
     <div className="terminal-row" title={term.id}>
-      <div className="terminal-row-main">
-        <span className="terminal-started">{startedText}</span>
-        <span className="terminal-id" title={term.id}>{shortId}</span>
-        <span className={`terminal-status ${statusClass}`}>{statusText}</span>
-        <span className="terminal-elapsed">{elapsed}</span>
-        <button type="button" className="terminal-kill" title={t('coding.terminalKill')} onClick={onKill}>✕</button>
-      </div>
-      {cmdText && <div className="terminal-row-cmd" title={cmdText}>{cmdText}</div>}
+      <span className="terminal-started">{startedText}</span>
+      <span className="terminal-elapsed">{elapsed}</span>
+      <span className={`terminal-status ${statusClass}`}>{statusText}</span>
+      <button type="button" className="terminal-kill" title={t('coding.terminalKill')} onClick={onKill}>✕</button>
     </div>
   );
 }
@@ -1434,7 +1406,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
           {q && (
             <div className="traj-ledger-hits">{t('coding.trajSearchHits', { n: totalRows })}</div>
           )}
-          {/* Timeline minimap: three lanes (Input / Model / Tools), one
+          {/* DSH timeline minimap: three lanes (Input / Model / Tools), one
               bar per row, equal-width sequence positions; click scrolls. */}
           <div className="traj-timeline" aria-hidden="true">
             <div className="traj-timeline-labels">
@@ -1519,7 +1491,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
                             )}
                           </span>
                         </div>
-                        {/* Collapsed-calls summary row under the assistant */}
+                        {/* DSH collapsed-calls summary row under the assistant */}
                         {row.kind === 'assistant' && groupCollapsed && (
                           <div className="traj-ledger-fold" role="row"
                             onClick={() => setCollapsedCalls((prev) => {
@@ -2172,21 +2144,17 @@ export function ToolRow({
   const title = TOOL_TITLES[tname] || (
     tname && /^[a-zA-Z]/.test(tname) ? tname[0].toUpperCase() + tname.slice(1) : 'Tool'
   );
-  // Placeholder row ("🔧 terminal_start..." — args not arrived yet, or an
-  // arg-less tool start): nothing to show — render no TEXT args block, and
-  // the summary must not repeat the tool name.
-  const placeholderOnly = /^🔧?\s*[A-Za-z][\w.-]*(\.{3}|…)$/.test(content.trim());
   // For shell tools the command is the whole command; for other tools it is the
   // parameter after "tool:" (path/query/url…), or the label itself as a fallback.
-  const cmdText = placeholderOnly ? null : (command ?? (/^[A-Za-z][\w.-]*:/.test(label) ? label.replace(/^[^:]+:\s*/, '') : label));
+  const cmdText = command ?? (/^[A-Za-z][\w.-]*:/.test(label) ? label.replace(/^[^:]+:\s*/, '') : label);
   const unescaped = (s: string) => s.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
   // WI-150: no character cap here — .tool-row-summary-text ellipsizes via CSS,
   // so wide windows show more of the command and narrow ones truncate cleanly.
-  const summaryFull = placeholderOnly ? '' : (cmdText || label || whole).replace(/\s+/g, ' ').trim();
+  const summaryFull = (cmdText || label || whole).replace(/\s+/g, ' ').trim();
   const finalOk = ok ?? (result !== undefined ? null : (labelOk ?? bodyOk));
   const resultText = result !== undefined ? result : body;
-  // File-content tools (read/write/edit/patch): highlight the result body by path extension (2026-10-04 scheme addendum).
-  const resultHtml = isDiffContent(resultText) ? null : highlightCodeHtml(resultText, fileResultLang(tname, cmdText ?? ''));
+  // 文件内容型工具(read/write/edit/patch)的结果体按路径扩展名高亮(2026-10-04 方案补充)。
+  const resultHtml = isDiffContent(resultText) ? null : highlightCodeHtml(resultText, fileResultLang(tname, cmdText));
   const hasResult = result !== undefined || bodyOk !== null || body.length > 0 ||
     labelOk !== null || streaming;
 
@@ -2496,8 +2464,14 @@ export function PlanChecklist({ source }: { source: string }) {
   return <>{out}</>;
 }
 
-function PlanReviewCard({ plan, onApplyPreset, onDecide }: {
+export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }: {
   plan: string;
+  /** The session's folded permission preset — preselected on the mode step so
+   *  re-approving a plan never silently downgrades the session (2026-10-14:
+   *  the card hardcoded `manual`, the user clicked through to 标准, and the
+   *  write downgraded a danger-full-access session to workspace-write, which
+   *  then refused out-of-workspace edits mid-task). */
+  currentPreset?: string;
   /** Approve + apply the chosen permission preset; the host writes the
       preset first and only then sends the approval decision. */
   onApplyPreset: (preset: string) => void;
@@ -2506,7 +2480,11 @@ function PlanReviewCard({ plan, onApplyPreset, onDecide }: {
 }) {
   const { t } = useI18n();
   const [step, setStep] = useState<'review' | 'mode' | 'risk'>('review');
-  const [mode, setMode] = useState('manual');
+  const [mode, setMode] = useState(
+    currentPreset && PLAN_REVIEW_MODES.some((m) => m.value === currentPreset)
+      ? currentPreset
+      : 'manual',
+  );
   const [draft, setDraft] = useState('');
   const [riskChecked, setRiskChecked] = useState(false);
 
@@ -3278,7 +3256,7 @@ export function useTaskStop(
   }, [stopping, sendCancel]);
 
   // Session switch / remount: drop the previous session's stop state instead
-   // of letting "stopping" leak into the newly opened one.
+  // of letting 停止中/stopping leak into the newly opened one.
   const reset = useCallback(() => {
     cancelSentRef.current = false;
     setStopping(false);
@@ -3795,7 +3773,7 @@ interface StarriverBridge {
   /** WI-92: inject a user message into the RUNNING turn (kernel steer). */
   steerSession(sessionId: string, task: string): Promise<{ steered: boolean }>;
   /** WI-93: background terminal panel. */
-  listTerminals?(): Promise<{ terminals: { id: string; status: string; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number; text?: string } | null }[] }>;
+  listTerminals?(): Promise<{ terminals: { id: string; status: string; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number } | null }[] }>;
   killTerminal?(id: string): Promise<{ killed: boolean }>;
   /** WI-101: paginated session messages. */
   getSessionMessagesPage?(sessionId: string, limit?: number, before?: number): Promise<{ messages: ChatMessage[]; total: number; hasMore: boolean }>;
@@ -7202,69 +7180,6 @@ export function ConfirmDeleteModal(props: {
   );
 }
 
-/** WI-94 v3: choosing 目标模式 in the ExecutionModePicker opens this dialog —
- *  the token budget is part of selecting the mode. Prefilled from the
- *  persisted default; 「不限」= 0. Confirm applies the budget and enters goal
- *  mode; cancel leaves the picker untouched (v2's composer param strip and
- *  v1's bare input are both gone — the budget never warrants permanent
- *  chrome above the composer). */
-export function GoalBudgetDialog(props: {
-  defaultBudget: number;
-  onConfirm: (budget: number) => void;
-  onCancel: () => void;
-}) {
-  const { t } = useI18n();
-  const [unlimited, setUnlimited] = useState(props.defaultBudget === 0);
-  const [value, setValue] = useState<string>(props.defaultBudget > 0 ? String(props.defaultBudget) : '');
-  const confirm = () => {
-    if (!unlimited && (Number(value) || 0) <= 0) return;
-    props.onConfirm(unlimited ? 0 : (Number(value) || 0));
-  };
-  return (
-    <div className="modal-overlay" onClick={props.onCancel}>
-      <div className="modal-card" style={{ width: 360 }} onClick={(e) => e.stopPropagation()}>
-        <div className="modal-title">🎯 {t('coding.executionGoal')}</div>
-        <div className="goal-budget-dialog-row">
-          <span className="modal-label">{t('coding.goalBudget')}</span>
-          <input
-            type="number"
-            min={0}
-            autoFocus
-            value={unlimited ? '' : value}
-            disabled={unlimited}
-            placeholder={t('coding.goalBudgetPlaceholder')}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') confirm();
-              if (e.key === 'Escape') props.onCancel();
-            }}
-          />
-          <label className="goal-budget-dialog-unlimited">
-            <input
-              type="checkbox"
-              checked={unlimited}
-              onChange={(e) => {
-                setUnlimited(e.target.checked);
-                if (!e.target.checked && !value) setValue(props.defaultBudget > 0 ? String(props.defaultBudget) : '1024000');
-              }}
-            />
-            {t('coding.goalUnlimited')}
-          </label>
-        </div>
-        <div className="modal-hint">{t('coding.goalParamHint')}</div>
-        <div className="modal-actions">
-          <button className="modal-btn" onClick={props.onCancel}>{t('common.cancel')}</button>
-          <button
-            className="modal-btn primary"
-            disabled={!unlimited && (Number(value) || 0) <= 0}
-            onClick={confirm}
-          >{t('common.ok')}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** Risk confirmation for the danger permission preset (RiskConfirmation
     parity): Enable stays disabled until the acknowledge checkbox is ticked. */
 export function PermissionRiskModal(props: {
@@ -7327,9 +7242,6 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const [terminalsOpen, setTerminalsOpen] = useState(false);
   // WI-97: goal object for the current session (from goal.get).
   const [goalInfo, setGoalInfo] = useState<{ objective: string; tokenBudget?: number; tokensUsed: number; status: string } | null>(null);
-  // Mirror for the live event switch (its closure would otherwise read stale state).
-  const goalInfoRef = useRef(goalInfo);
-  useEffect(() => { goalInfoRef.current = goalInfo; }, [goalInfo]);
   // WI-101: pagination — whether earlier messages exist beyond the loaded page.
   // WI-126: full history loads up front — the "load earlier" paging state
   // (hasEarlier/earliestSeqRef/loadingEarlierRef) is gone.
@@ -7339,43 +7251,19 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const loadGenRef = useRef(0);
   // WI-98: doctor report rows.
   const [doctorReport, setDoctorReport] = useState<{ name: string; status: string; detail: string }[] | null>(null);
-  // WI-94 v2: goal budget split. The persisted value is only a DEFAULT that
-  // prefills the param strip (edited in place on the New Task screen — there
-  // is no settings page yet); the EFFECTIVE budget lives per-session in
-  // goalInfo.tokenBudget and always goes through goal.set. The old global
-  // localStorage readout ('starriver-goal-budget') fed the progress bar
-  // without ever reaching the host — that desync is what v2 removes. The old
-  // key is read once as a migration fallback.
-  const [goalDefaultBudget, setGoalDefaultBudget] = useState<number>(() => {
+  // WI-94: goal-mode token budget (persisted; empty = unlimited). The used
+  // side reuses the WI-90 sessionUsage accumulator.
+  const [goalBudget, setGoalBudget] = useState<number>(() => {
+    try { return Number(localStorage.getItem('starriver-goal-budget')) || 0; } catch { return 0; }
+  });
+  const setGoalBudgetPersisted = (n: number) => {
+    setGoalBudget(n);
     try {
-      const raw = localStorage.getItem('starriver-goal-default-budget')
-        ?? localStorage.getItem('starriver-goal-budget');
-      if (raw != null) return Number(raw) || 0;
+      if (n > 0) localStorage.setItem('starriver-goal-budget', String(n));
+      else localStorage.removeItem('starriver-goal-budget');
     } catch { /* storage unavailable */ }
-    return 1024000;
-  });
-  const setGoalDefaultBudgetPersisted = (n: number) => {
-    setGoalDefaultBudget(n);
-    try { localStorage.setItem('starriver-goal-default-budget', String(n)); } catch { /* storage unavailable */ }
   };
-  // Pending strip value for the NEXT goal start; 0 = unlimited.
-  const [goalPendingBudget, setGoalPendingBudget] = useState<number>(goalDefaultBudget);
-  // WI-94 v3: selecting 目标模式 opens the budget dialog first. Confirm
-  // applies the budget AND enters goal mode; cancel leaves the picker as-is.
-  const [goalBudgetDialogOpen, setGoalBudgetDialogOpen] = useState(false);
-  // WI-94 v2: inline budget edit on the running goal card.
-  const [goalEditingBudget, setGoalEditingBudget] = useState(false);
-  // WI-94 v4: floating goal widget — collapsed shows only the budget
-  // progress readout; expanded adds the objective and actions. The choice
-  // persists across restarts.
-  const [goalFloatExpanded, setGoalFloatExpanded] = useState<boolean>(() => {
-    try { return localStorage.getItem('starriver-goal-float-expanded') !== '0'; } catch { return true; }
-  });
-  const setGoalFloatExpandedPersisted = (v: boolean) => {
-    setGoalFloatExpanded(v);
-    try { localStorage.setItem('starriver-goal-float-expanded', v ? '1' : '0'); } catch { /* storage unavailable */ }
-  };
-  const [terminals, setTerminals] = useState<{ id: string; status: string; startedAtMs: number; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number; text?: string } | null }[]>([]);
+  const [terminals, setTerminals] = useState<{ id: string; status: string; startedAtMs: number; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number } | null }[]>([]);
   // Terminal ids whose idle state was already surfaced at a turn's settle —
   // one reminder per terminal per idle episode (re-armed once it shows
   // activity again).
@@ -7408,7 +7296,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // so the Enter handler never reads a stale closure.
   const sendingRef = useRef(false);
   sendingRef.current = sending;
-  // Debounce timer for remote-turn replay (driven by traceSnapshot).
+  // 远端回合重放的防抖计时器（traceSnapshot 驱动）。
   const remoteResyncTimerRef = useRef<number | null>(null);
   const queueSeqRef = useRef(0);
   const [queueItems, setQueueItems] = useState<{ id: string; text: string }[]>([]);
@@ -7775,23 +7663,6 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         .then((m) => {
           if (gen !== loadGenRef.current) return;
           setMode(m && m !== 'standard' ? m : null);
-          // WI-97 fix: goal state lives host-side but goalInfo was only ever
-          // populated by the arm dialog or a live goalStatus stream — after an
-          // app restart / renderer reload the float (and goal card) vanished
-          // even though the goal was still armed. Read it back on open.
-          if (m === 'goal') {
-            window.starriver.getGoal?.(sessionId)
-              .then((g) => {
-                if (gen !== loadGenRef.current || !g) return;
-                setGoalInfo({
-                  objective: g.objective,
-                  tokenBudget: g.tokenBudget,
-                  tokensUsed: g.tokensUsed ?? 0,
-                  status: g.status ?? 'active',
-                });
-              })
-              .catch((e) => console.error('[Coding] getGoal(session) failed:', e));
-          }
         })
         .catch((e) => console.error('[Coding] getAgentMode(session) failed:', e));
       // Permission preset read-back: the picker reflects the session's folded
@@ -7883,29 +7754,11 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       showError(t('coding.modeLocked'));
       return;
     }
-    // WI-94 v3: entering goal mode opens the budget dialog — the budget is
-    // part of choosing the mode. pendingMode is only applied on confirm, so
-    // cancelling leaves the picker on the previous mode.
-    if (newMode === 'goal') {
-      setGoalBudgetDialogOpen(true);
-      return;
-    }
     setPendingMode(newMode);
     setMode(newMode);
     // Staged phase must track the staged mode (only Plan has a planning phase).
     setPlanPhase(newMode === 'plan' ? 'planning' : 'executing');
   }, [activeSessionId, showError, t]);
-
-  // WI-94 v3: dialog confirmed — persist the budget (New Task screen edits
-  // the default in place; there is no settings page yet) and enter goal mode.
-  const confirmGoalBudgetDialog = useCallback((budget: number) => {
-    setGoalPendingBudget(budget);
-    if (messages.length === 0 && !activeSessionId) setGoalDefaultBudgetPersisted(budget);
-    setGoalBudgetDialogOpen(false);
-    setPendingMode('goal');
-    setMode('goal');
-    setPlanPhase('executing');
-  }, [messages.length, activeSessionId]);
 
  // WI-5 (ui-agent-preset parity): staged agent preset for NEW sessions
   // the roster loads once, the staged id rides the first execute, the host
@@ -7948,7 +7801,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // switch / session remount Stop resolved to "" — the click armed the
     // 20s watchdog and NEVER sent a cancel (host log for session
     // e3d6121b on 2026-10-07: zero `cancel requested` all day while the
-     // user pressed Stop twice).
+    // user pressed 结束 twice).
     sessionIdRef.current = activeSessionId;
     // BUG-92: view state is per-session — reset it on EVERY switch (A→B
     // included), not only when leaving for the empty/new-task state. The
@@ -7984,10 +7837,10 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // turn task (and the slot) lives on. This is ALSO what keeps the
     // composer honest per OPEN session: `sending` is reset above (it
     // belonged to session A's execute), so an idle session B must show
-     // Send — the button keys on `sending || staleBusy`, and only the
+    // 发送 — the button keys on `sending || staleBusy`, and only the
     // backend slot registry knows whether B itself is running. staleBusy
     // deliberately keeps the composer in SEND mode (BUG-96/141 contract);
-     // it only swaps the button to Stop.
+    // it only swaps the button to 停止.
     window.starriver.listRunningSessions?.().then((ids: string[]) => {
       setStaleBusy(Array.isArray(ids) && ids.includes(activeSessionId));
     }).catch(() => {});
@@ -8599,19 +8452,6 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // Handle slash commands
     let taskText = text;
 
-    // WI-94 v2: goal-mode composer start. In goal mode with no active goal
-    // the first message IS the objective — the param strip's budget rides
-    // goal.set instead of living in a separate card input (v1's duplicate
-    // input + button). Slash commands opt out; /goal stays the explicit path.
-    // A fresh session consumes the arm at TaskStarted (the session id only
-    // exists once execute creates it); an existing session (e.g. after
-    // /goal clear) arms immediately below.
-    let goalArm: { objective: string; budget: number } | null = null;
-    if (mode === 'goal' && !goalInfo && !stagedChat && !text.startsWith('/')) {
-      goalArm = { objective: text, budget: goalPendingBudget };
-      taskText = `Work toward this goal autonomously: ${goalArm.objective}. When fully achieved, state GOAL COMPLETE.`;
-    }
-
     // Client-side commands (intercepted before LLM):
     if (text === '/compact' || text.startsWith('/compact ')) {
       const sid = sessionIdRef2.current;
@@ -8850,8 +8690,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         const budget = budgetStr ? Number(budgetStr.replace(/[^0-9]/g, '')) || undefined : undefined;
         await window.starriver.setGoal?.(sid, obj, budget).catch(console.error);
         setGoalInfo({ objective: obj, tokenBudget: budget, tokensUsed: 0, status: 'active' });
-        // WI-94 v4: no chat echo — the floating goal widget is the
-        // confirmation (a one-shot tool message just duplicated it forever).
+        addMessage('tool', `🎯 ${t('coding.goalSet')}: ${obj}`, false, 'goal');
         taskText = `Work toward this goal autonomously: ${obj}. When fully achieved, state GOAL COMPLETE.`;
       } else {
         addMessage('tool', `🎯 ${goalInfo ? `${goalInfo.objective} (${goalInfo.status})` : t('coding.goalUsage')}`, false, 'goal');
@@ -8931,16 +8770,6 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // preset here; the composer's onChange path handles mid-session switches.
     const freshPermissionPreset = sessionIdRef2.current || stagedChat ? undefined
       : (permissionPresetRef.current || undefined);
-    // WI-94 v2: existing-session goal arm (e.g. right after /goal clear) —
-    // the sid is already known, so goal.set goes out before the turn runs.
-    // Fresh sessions consume goalArm inside TaskStarted instead.
-    if (goalArm && sessionIdRef2.current) {
-      const budgetArg = goalArm.budget > 0 ? goalArm.budget : undefined;
-      window.starriver.setGoal?.(sessionIdRef2.current, goalArm.objective, budgetArg)
-        .catch((e) => console.error('[Coding] setGoal (composer arm) failed:', e));
-      setGoalInfo({ objective: goalArm.objective, tokenBudget: budgetArg, tokensUsed: 0, status: 'active' });
-      // WI-94 v4: no chat echo — the floating goal widget confirms the arm.
-    }
     const send = (cb: (err: string | null, event: any) => void) => window.starriver.execute(taskText, sessionIdRef2.current || undefined, cb, freshExecutionMode, runAgent, stagedChat ? undefined : isolated, freshAgentPreset, freshPermissionPreset);
     send((err, event) => {
       if (err) {
@@ -9002,8 +8831,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       // TaskStarted may pass — it re-engages its own session (and carries
       // session_id); anything else would pollute the open transcript with
       // another session's stream.
-      // Byte-exact live view (open-turn snapshot stream): turns started remotely (phone/Web)
-      // align on the desktop via "replay session history" — snapshot events must pass the idle gate.
+      // 逐字节实时一致（开放回合快照流）：远端（手机/Web）发起的回合以
+      // 「重放会话历史」在桌面对齐——快照事件需穿过空闲门。
       if (!sendingRef.current
           && (event.type || event.eventType) !== 'TaskStarted'
           && (event.type || event.eventType) !== 'traceSnapshot') {
@@ -9033,17 +8862,6 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
             if (!sessionIdRef2.current) {
               sessionIdRef2.current = event.session_id;
               setActiveSessionId(event.session_id);
-              // WI-94 v2: fresh goal-mode session — the first message was the
-              // objective; arm it now that the session exists (strip budget
-              // rides along). Local-only until goal.set lands; the goalStatus
-              // stream then keeps tokensUsed/status live (BUG-87).
-              if (goalArm) {
-                const budgetArg = goalArm.budget > 0 ? goalArm.budget : undefined;
-                window.starriver.setGoal?.(event.session_id, goalArm.objective, budgetArg)
-                  .catch((e) => console.error('[Coding] setGoal (composer arm) failed:', e));
-                setGoalInfo({ objective: goalArm.objective, tokenBudget: budgetArg, tokensUsed: 0, status: 'active' });
-                // WI-94 v4: no chat echo — the floating goal widget confirms.
-              }
               // The host files the fresh session under its workspace before
               // the first execution spawns, so this refresh already sees the
               // projcache row — the new task appears under its workspace
@@ -9089,21 +8907,6 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           if (event.session_id || sessionIdRef2.current) {
               refreshQueueRef.current(event.session_id || sessionIdRef2.current);
             }
-          // WI-97/Q1: a goal continuation round opens a turn with NO user
-          // message (the host re-arms silently), so the live transcript never
-          // splits it off — the whole autonomous run collapsed into the
-          // sending message's single turn group and the Turn rail showed one
-          // tick for dozens of rounds. Mark the boundary when the previous
-          // turn wasn't opened by a local send (queue auto-claims echo their
-          // own bubbles above; local sends add theirs before execute).
-          {
-            const msgs = messagesRef.current;
-            const last = msgs[msgs.length - 1];
-            const obj = goalInfoRef.current?.objective;
-            if (obj && (!last || last.role !== 'user')) {
-              addMessage('user', `▶ ${obj}`);
-            }
-          }
           // New turn: the previous turn's fully-completed todo list is stale
           // noise on a fresh run — suppress it (watermark at the current end
           // of stream) until this turn writes a fresh todo_write.
@@ -9242,7 +9045,17 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
               durationMsTool: durationMs,
             } : m));
           } else {
-            addMessage('tool', event.ok ? '✓' : '✗ ' + (event.output || '').slice(0, 200), false);
+            // BUG-147 defense-in-depth: an unpaired OK result with no card
+            // payload carries zero renderable information — the inline path
+            // would draw a bare "Tool ✓成功" ghost card (the compaction-prune
+            // leak's shape; the orphan path drops its output by
+            // construction). The relay now filters prune rewrites at the
+            // source; this catches anything that still slips through.
+            // Unpaired errors and meta cards keep rendering — those carry
+            // real signal.
+            if (!event.ok || event.meta) {
+              addMessage('tool', event.ok ? '✓' : '✗ ' + (event.output || '').slice(0, 200), false);
+            }
           }
           delete toolMsgIdRef.current[event.id || ''];
           break;
@@ -9360,9 +9173,9 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           }
           break;
         case 'traceSnapshot': {
-          // Byte-exact live view (open-turn snapshot stream): for turns started remotely (phone/Web),
-          // the desktop aligns via "replay session history" — the user message/thinking/context all live in the
-          // history the snapshot reflects. Local desktop turns take the optimistic path (already gated by sending) — zero impact.
+          // 逐字节实时一致（开放回合快照流）：远端（手机/Web）发起的回合，
+          // 桌面以「重放会话历史」对齐——用户消息/思考/context 全在快照反映的
+          // 历史里。桌面本地回合走乐观渲染（sending 门已挡掉），零影响。
           const snapSid: string | undefined = event.sessionId ?? event.session_id;
           if (snapSid && snapSid === sessionIdRef2.current && !sendingRef.current) {
             if (remoteResyncTimerRef.current == null) {
@@ -9674,7 +9487,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         }
       }
     }, freshExecutionMode);
-  }, [input, sending, addMessage, updateMessage, loadSessions, attachments, t, isolated, refreshGitStatus, workspaces, activeWorkspaceId, lang, setLang, openBacktrack, pendingMode, pendingPreset, agentPresets, stagedChat, mode, rejectImages, goalInfo, goalPendingBudget]);
+  }, [input, sending, addMessage, updateMessage, loadSessions, attachments, t, isolated, refreshGitStatus, workspaces, activeWorkspaceId, lang, setLang, openBacktrack, pendingMode, pendingPreset, agentPresets, stagedChat, mode, rejectImages]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -10393,7 +10206,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       >
         {/* New Task screen: the Coding / Chat switch sits in the empty state
             above (it IS the hero); this row is contextual. Coding: workspace
-            picker + execution mode (creation-time binding). Chat: pick an
+            picker + execution mode (DSH creation-time binding). Chat: pick an
             existing workspace for the Chat Agent or stay ungrouped — no
             create, no execution mode. Everything hides once Send creates the
             session — the locked mode/preset then show in the bottom status
@@ -10424,10 +10237,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
             )}
           </div>
         )}
-        {/* WI-97: goal status card (objective + status). In goal mode the
-            merged card below (WI-94 v2) renders status + budget together,
-            so the standalone card only covers non-goal modes here. */}
-        {goalInfo && mode !== 'goal' && (
+        {/* WI-97: goal status card (objective + status). */}
+        {goalInfo && (
           <div className={`goal-status-card ${goalInfo.status}`} data-testid="goal-status-card">
             <span>🎯 {goalInfo.objective}</span>
             <span className="goal-status-badge">{goalInfo.status}</span>
@@ -10448,125 +10259,39 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
             ))}
           </div>
         )}
-        {/* WI-94 v4: goal-mode budget UX.
-            • Choosing 目标模式 in the mode picker opens the budget dialog (no
-              permanent budget chrome; the objective is typed in the composer
-              and Enter/send() arms the goal with the dialog's budget).
-            • Active goal → one floating widget (PIP, bottom-right): collapsed
-              = budget progress readout only; expanded = objective + budget +
-              actions. Budget is the per-session goalInfo.tokenBudget (host
-              truth), editable inline, always written back through goal.set. */}
-        {goalBudgetDialogOpen && (
-          <GoalBudgetDialog
-            defaultBudget={goalDefaultBudget}
-            onConfirm={confirmGoalBudgetDialog}
-            onCancel={() => setGoalBudgetDialogOpen(false)}
-          />
-        )}
-        {mode === 'goal' && goalInfo && (() => {
-          const budget = goalInfo.tokenBudget ?? 0;
-          // Host accounting (goalStatus stream, BUG-87) is authoritative for
-          // the goal loop; fall back to the WI-90 session accumulator until
-          // the first broadcast lands.
-          const used = goalInfo.tokensUsed || (sessionUsage.in + sessionUsage.out);
-          const pct = budget > 0 ? Math.min(100, Math.round((used / budget) * 100)) : 0;
-          const over80 = budget > 0 && pct >= 80;
-          const over95 = budget > 0 && pct >= 95;
-          // Every budget write goes through goal.set — the UI never holds a
-          // budget the host does not know about (v1's desync bug).
-          const applyBudget = (v: number) => {
-            setGoalEditingBudget(false);
-            const sid = sessionIdRef2.current;
-            if (!sid) return;
-            const budgetArg = v > 0 ? v : undefined;
-            window.starriver.setGoal?.(sid, goalInfo.objective, budgetArg)
-              .catch((e) => console.error('[Coding] setGoal (budget edit) failed:', e));
-            setGoalInfo(prev => prev ? { ...prev, tokenBudget: budgetArg } : prev);
-          };
-          const nums = budget > 0
-            ? `${used.toLocaleString()} / ${budget.toLocaleString()} (${pct}%)`
-            : (t('coding.goalUnlimitedRunning') as string).replace('{used}', used.toLocaleString());
-          const bar = budget > 0 ? (
-            <div className="goal-budget-bar">
-              <div className="goal-budget-fill" style={{ width: `${pct}%` }} />
-            </div>
-          ) : null;
-          const toggleFloat = () => setGoalFloatExpandedPersisted(!goalFloatExpanded);
-          // WI-94 v4: one floating widget (PIP) instead of two stacked cards —
-          // collapsed = budget readout only; expanded = objective + budget.
+        {mode === 'goal' && (() => {
+          const used = sessionUsage.in + sessionUsage.out;
+          const pct = goalBudget > 0 ? Math.min(100, Math.round((used / goalBudget) * 100)) : 0;
+          const over80 = goalBudget > 0 && pct >= 80;
+          const over95 = goalBudget > 0 && pct >= 95;
           return (
-            <div
-              className={`goal-float${goalFloatExpanded ? '' : ' collapsed'}${over95 ? ' over95' : over80 ? ' over80' : ''}`}
-              data-testid="goal-float"
-            >
-              <div className="goal-float-head" onClick={toggleFloat}>
-                <span className="goal-float-dot" />
-                {goalFloatExpanded ? (
-                  <span className="goal-float-title">🎯 {goalInfo.objective}</span>
-                ) : (
-                  <span className="goal-float-mini">
-                    {bar}
-                    <span className="goal-budget-nums">{nums}</span>
+            <div className={`goal-budget-card${over95 ? ' over95' : over80 ? ' over80' : ''}`} data-testid="goal-budget-card">
+              <span className="goal-budget-label">🎯 {t('coding.goalBudget')}</span>
+              {goalBudget > 0 ? (
+                <>
+                  <span className="goal-budget-nums">
+                    {used.toLocaleString()} / {goalBudget.toLocaleString()} ({pct}%)
                   </span>
-                )}
-                <button
-                  type="button"
-                  className="goal-float-toggle"
-                  aria-label={goalFloatExpanded ? 'collapse' : 'expand'}
-                  onClick={(e) => { e.stopPropagation(); toggleFloat(); }}
-                >{goalFloatExpanded ? '▾' : '▸'}</button>
-              </div>
-              {goalFloatExpanded && (
-                <div className="goal-float-body">
-                  <div className="goal-float-status">
-                    <span className="goal-status-badge">{over95 ? t('coding.goalBudgetLimited') : goalInfo.status}</span>
-                    <span className="goal-budget-nums">{nums}</span>
-                    {over80 && !over95 && <span className="goal-budget-near">⚠ {t('coding.goalBudgetNearLimit')}</span>}
-                    {over95 && <span className="goal-budget-warn">⚠ {t('coding.goalBudgetExceeded')}</span>}
+                  <div className="goal-budget-bar">
+                    <div className="goal-budget-fill" style={{ width: `${pct}%` }} />
                   </div>
-                  {bar}
-                  {goalEditingBudget ? (
-                    <span className="inline-budget">
-                      <input
-                        type="number"
-                        min={0}
-                        autoFocus
-                        defaultValue={budget}
-                        className="goal-budget-input"
-                        placeholder={t('coding.goalBudgetPlaceholder')}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') applyBudget(Number((e.target as HTMLInputElement).value) || 0);
-                          if (e.key === 'Escape') setGoalEditingBudget(false);
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="btn-mini"
-                        onClick={(e) => {
-                          const el = e.currentTarget.previousElementSibling as HTMLInputElement | null;
-                          applyBudget(Number(el?.value) || 0);
-                        }}
-                      >✓</button>
-                    </span>
-                  ) : (
-                    <div className="goal-float-actions">
-                      <button
-                        type="button"
-                        className="link"
-                        data-testid="goal-budget-edit"
-                        onClick={() => setGoalEditingBudget(true)}
-                      >{t('coding.goalBudgetEdit')}</button>
-                      {over95 && (
-                        <button
-                          type="button"
-                          className="btn-mini"
-                          data-testid="goal-budget-topup"
-                          onClick={() => applyBudget(budget + 512000)}
-                        >{t('coding.goalBudgetTopup')}</button>
-                      )}
-                    </div>
-                  )}
-                </div>
+                  {over95 && <span className="goal-budget-warn">⚠ {t('coding.goalBudgetExceeded')}</span>}
+                </>
+              ) : (
+                <input
+                  type="number"
+                  min={0}
+                  placeholder={t('coding.goalBudgetPlaceholder')}
+                  className="goal-budget-input"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const v = Number((e.target as HTMLInputElement).value) || 0;
+                      setGoalBudgetPersisted(v);
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                  defaultValue=""
+                />
               )}
             </div>
           );
@@ -10585,6 +10310,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
             planReview && sessionIdRef2.current ? (
               <PlanReviewCard
                 plan={planReview.plan}
+                currentPreset={permissionPresetRef.current}
                 onApplyPreset={(preset) => {
                   // Approve + apply: the preset write lands BEFORE the plan
                   // decision so execution starts under the chosen mode; a
@@ -10594,6 +10320,16 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
                     .setPermissionPreset(sid, preset)
                     .catch((e) => console.error('[Coding] setPermissionPreset (plan approval) failed:', e))
                     .then(() => {
+                      // The card's pick is now the engine's truth — sync the
+                      // composer picker so the UI can't advertise a broader
+                      // mode than the ledger holds (2026-10-14: the picker
+                      // kept showing 完全访问 while the card's 标准 write had
+                      // confined the session to workspace-write; the model
+                      // read that from the runtime context and every
+                      // out-of-workspace edit failed with sandbox confine).
+                      setPermissionPresetState(preset);
+                      permissionPresetRef.current = preset;
+                      setPlanPhase('executing');
                       window.starriver
                         .planReviewDecision(sid, planReview.requestId, true)
                         .catch((e) => console.error('[Coding] planReviewDecision failed:', e));
@@ -10631,10 +10367,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           onDrop={handleDrop}
           placeholder={stagedChat
             ? t('chat.placeholder')
-            : (sending ? t('coding.queuePlaceholder')
-              : (pendingMode === 'goal' && isNewTask && !goalInfo) ? t('coding.goalStartPlaceholder')
-              : (mode === 'goal' && goalInfo) ? t('coding.goalFollowupPlaceholder')
-              : t('coding.placeholder'))}
+            : (sending ? t('coding.queuePlaceholder') : t('coding.placeholder'))}
           queueDock={queueItems.length > 0 ? (
             <ul className="queue-dock" data-testid="queue-dock">
               {queueItems.map((q) => (
@@ -11615,9 +11348,9 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
               stamp; legacy ungrouped rows fall back to chat). */}
           {(() => {
             const ungrouped = ws.sessions.filter(s => !s.workspaceId);
-            // WI-152: scheduled-run grouping — a run_history projection hit, or the session carries
-            // a scheduled origin stamp; older sessions (records rolled out) fall back to the task name
-            // (the title was overwritten with the exact task name at creation).
+            // WI-152: scheduled-run 分组 —— run_history 投影命中,或会话自带
+            // scheduled origin 戳;旧会话(记录已滚出)按任务名兜底(标题在
+            // 创建时被精确盖为任务名)。
             const taskNames = new Set(Array.from(taskRuns.values()));
             const isRun = (s: SessionInfo) =>
               taskRuns.has(s.id) || s.origin === 'scheduled' || (!!s.title && taskNames.has(s.title));
@@ -12203,13 +11936,13 @@ export function SettingsPluginsSection() {
 }
 
 /** Subagent delegation (Settings → Coding): enable a template and bind its
-    child model (selectable-child-models parity). An enabled
+    child model (DSH authorize-selectable-child-models parity). An enabled
     template without a bound model runs the child on the calling agent's
     route. Self-fetching: reads the config and model registry on mount. */
-/** Xcode-style code-highlight palette panel (2026-10-04 scheme: configurable colors).
- *  One light group × 11 tokens, flat with no folding (the dark group renders with default values and is not editable in settings);
- *  a swatch change applies instantly (applyCodeTokens injects style overrides),
- *  rows differing from the default show a ↺ per-row reset; persisted in localStorage, no save button. */
+/** Xcode 风格的代码高亮配色面板(2026-10-04 方案:配色可配置)。
+ *  仅浅色一组 × 11 个 token,平铺无折叠(dark 组保留默认值渲染,不在设置里编辑);
+ *  色块即改即生效(applyCodeTokens 注入覆盖 style),
+ *  与默认值不同的行显示 ↺ 单行还原;localStorage 持久化,无保存按钮。 */
 const CODE_TOKEN_ROWS: Array<{ key: CodeTokenKey; label: string }> = [
   { key: 'comment', label: 'codeToken.comment' },
   { key: 'keyword', label: 'codeToken.keyword' },

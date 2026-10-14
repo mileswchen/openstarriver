@@ -3,7 +3,7 @@
 // If desktop/electron/assets/AppIcon.icon exists (an Icon Composer document),
 // compile it with actool into Assets.car, copy it into the packaged app and
 // set CFBundleIconName so macOS 26+ renders the author-controlled Liquid
-// Glass artwork — no system-generated corrective border ("white edge").
+// Glass artwork — no system-generated corrective border ("白边").
 // Falls back silently to the legacy icns (CFBundleIconFile) when absent.
 //
 // Notes:

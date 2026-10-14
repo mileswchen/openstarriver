@@ -4,7 +4,7 @@ import { render } from '@testing-library/react';
 import { I18nProvider } from './i18n';
 import { ThinkingRow, MessageRow } from './app';
 
-describe('ThinkingRow — Coding thinking rows', () => {
+describe('ThinkingRow — Coding 思维链(DSH 方案)', () => {
   it('renders one collapsible row per reasoning message, frozen to the first line', () => {
     const { container } = render(<I18nProvider><ThinkingRow m={{ id: 't1', role: 'thinking', content: '先看目录结构\n再写代码\n最后跑测试' }} /></I18nProvider>);
     const rows = container.querySelectorAll('.thinking-row-details');

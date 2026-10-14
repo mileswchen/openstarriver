@@ -1,17 +1,17 @@
 #!/bin/bash
-# Starriver Desktop — three-platform installer packaging script
+# Starriver Desktop — 三平台安装包打包脚本
 #
-#   bash package.sh mac          → macOS DMG + zip (arm64, native build; Developer ID signing + notarization + stapling)
-#   bash package.sh linux        → Linux AppImage + deb (x86_64; native cargo on Linux hosts, zigbuild cross-compile elsewhere)
-#   bash package.sh win          → Windows NSIS setup.exe (x86_64 cross-compile, zigbuild + wine)
-#   bash package.sh all          → all of the above, in order
+#   bash package.sh mac          → macOS DMG + zip（arm64，原生构建；Developer ID 签名 + 公证 + 装订）
+#   bash package.sh linux        → Linux AppImage + deb（x86_64；Linux 主机原生 cargo，其余主机 zigbuild 交叉）
+#   bash package.sh win          → Windows NSIS setup.exe（x86_64 交叉，zigbuild + wine）
+#   bash package.sh all          → 以上三个按序执行
 #
-# Output directory: desktop/electron/dist/
-# Dependencies: cargo-zigbuild (brew install cargo-zigbuild), zig (brew install zig),
-#       wine (win only; brew install --cask wine-stable).
+# 输出目录：desktop/electron/dist/
+# 依赖：cargo-zigbuild（brew install cargo-zigbuild）、zig（brew install zig）、
+#       wine（仅 win；brew install --cask wine-stable）。
 #
-# Network: electron-builder pulls the Electron distribution and packaging tools from github
-#       by default; on restricted networks set ELECTRON_MIRROR and ELECTRON_BUILDER_BINARIES_MIRROR to speed it up, e.g.:
+# 网络：electron-builder 默认从 github 拉 Electron 分发包与打包工具；在受限网络可设
+#       ELECTRON_MIRROR 与 ELECTRON_BUILDER_BINARIES_MIRROR 加速，例如：
 #         ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ \
 #         ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ \
 #         bash package.sh all
@@ -23,8 +23,8 @@ DIST_DIR="$ELECTRON_DIR/dist"
 RELEASE="$ROOT/target/release"
 NODE_FILE="$RELEASE/starriver_desktop.node"
 
-# WI-152: workspace-write sandboxes lock down the system temp dir (electron-builder's
-# mkdtemp dies on the first call). Probe once; on failure fall back to <repo>/.tmp-build/tmp.
+# WI-152: workspace-write 沙箱会把系统临时目录禁掉(electron-builder 的
+# mkdtemp 第一步就死)。探测一次;不可写就落到仓库内 .tmp-build/tmp。
 if ! mktemp -d "${TMPDIR:-/tmp}/starriver-tmp-probe-XXXXXX" >/dev/null 2>&1; then
   mkdir -p "$ROOT/.tmp-build/tmp"
   TMPDIR="$ROOT/.tmp-build/tmp"
@@ -40,20 +40,6 @@ case "$TARGET" in
   all)   PLATFORM_STR="all three platforms" ;;
   *) echo "Usage: bash package.sh [mac|linux|win|all]"; exit 1 ;;
 esac
-
-# /usr/bin/strip is an xcode-select shim: it probes `xcodebuild -find strip
-# 2> /dev/null`, and workspace-write sandboxes deny the /dev/null redirect —
-# the shim dies (exit 72) and even triggers a bogus CLT-install prompt. The
-# toolchain's real strip needs no probe. Prefer it; fall back to the shim;
-# never hard-fail the package over symbol compression (rust#157750 workaround).
-strip_mac() {
-  local f="$1"
-  local ts="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip"
-  if [ -x "$ts" ] && "$ts" -x "$f"; then return 0; fi
-  if strip -x "$f"; then return 0; fi
-  echo "[strip] WARNING: strip failed for $f — shipping unstripped" >&2
-  return 0
-}
 
 echo "=== Starriver Desktop — package: $PLATFORM_STR ==="
 
@@ -102,16 +88,17 @@ sync_node() {
   cp "$artifact" "$NODE_FILE"
   echo "[napi] synced -> $NODE_FILE ($(ls -lh "$NODE_FILE" | awk '{print $5}'))"
   if [[ "$platform" == "mac" ]]; then
-    # workspace release disables cargo strip (rust#157750: llvm-objcopy emits a mis-aligned
-    # LINKEDIT string pool that macOS 27 dyld rejects); compress symbols here with the system strip — it keeps alignment.
-    strip_mac "$NODE_FILE" && echo "[napi] stripped + $(codesign --force --sign - "$NODE_FILE" && echo 'ad-hoc codesigned (macOS)')"
+    # workspace release 关闭了 cargo strip（rust#157750：llvm-objcopy 产出错位的
+    # LINKEDIT 字符串池，macOS 27 dyld 拒载），这里用系统 strip 压符号——它保持对齐。
+    strip -x "$NODE_FILE"
+    codesign --force --sign - "$NODE_FILE" && echo "[napi] stripped + ad-hoc codesigned (macOS)"
   fi
 }
 
 build_daemon() {
-  # $1 = platform. Build starriverd (FPM P4b daemon) and sync it into target/release/
-  # for electron-builder extraResources to collect (same path convention as NAPI).
-  # A failed Windows cross-build only warns: the Windows package falls back to embedded (daemon preferred on macOS/Linux).
+  # $1 = platform. 编译 starriverd（FPM P4b daemon）并同步到 target/release/
+  # 供 electron-builder extraResources 收集（与 NAPI 同路径约定）。
+  # Windows 交叉构建失败时只警告：Windows 包可退回 embedded（daemon 优先 macOS/Linux）。
   local p="$1"
   local out=""
   case "$p" in
@@ -145,8 +132,8 @@ build_daemon() {
       ;;
   esac
   if [ -f "$out" ]; then
-  # Same as sync_node: cargo strip disabled (rust#157750); macOS uses system strip to compress symbols (keeps alignment).
-    if [[ "$p" == "mac" ]]; then strip_mac "$out"; fi
+    # 同 sync_node：cargo strip 已关（rust#157750），macOS 用系统 strip 压符号（保持对齐）
+    if [[ "$p" == "mac" ]]; then strip -x "$out"; fi
     echo "[daemon] -> $out ($(ls -lh "$out" | awk '{print $5}'))"
   else
     echo "ERROR: daemon artifact missing: $out" >&2
@@ -155,9 +142,9 @@ build_daemon() {
 }
 
 build_acp() {
-  # $1 = platform. ACP server (WI-70, editor/automation integration entry): built on the same
-  # chain as starriverd and shipped in resources/. Failure only warns — ACP is an incremental
-  # channel; the desktop app itself does not depend on it.
+  # $1 = platform. ACP 服务器（WI-70，编辑器/自动化集成入口）：与 starriverd
+  # 同链路编译并随安装包进 resources/。构建失败只警告——ACP 是增量通道，
+  # 桌面端自身不依赖它。
   local p="$1"
   case "$p" in
     mac)
@@ -167,7 +154,7 @@ build_acp() {
       # (2026-10-03). Strip in place; the binary ships via extraResources.
       echo "[acp] cargo build -p starriver-acp --release" >&2
       (cd "$ROOT" && cargo build -p starriver-acp --release) \
-        && strip_mac "$RELEASE/starriver-acp" \
+        && strip -x "$RELEASE/starriver-acp" \
         && echo "[acp] -> $RELEASE/starriver-acp ($(ls -lh "$RELEASE/starriver-acp" | awk '{print $5}'))" >&2 \
         || echo "[acp] WARNING: starriver-acp build failed — 包不带 ACP 服务器" >&2
       ;;
@@ -199,9 +186,9 @@ build_acp() {
 }
 
 build_sbx_helper() {
-  # $1 = platform. Windows sandbox helper (writetoken backend): shipped in resources/,
-  # discovered at runtime via <install>/resources candidates in helper_path. Only win produces
-  # the real binary; failure only warns — Windows sandbox degrades to approval gating (docs/design/33 §11).
+  # $1 = platform. Windows 沙箱 helper（writetoken 后端）：随安装包进 resources/，
+  # 运行期 helper_path 以 <install>/resources 候选发现。仅 win 产出真身；
+  # 构建失败只警告——Windows 沙箱将降级为审批门控（docs/design/33 §十一）。
   local p="$1"
   [ "$p" = "win" ] || return 0
   echo "[sbx] cargo zigbuild --target x86_64-pc-windows-gnu --release -p starriver-sandbox --bin starriver-sbx-helper" >&2
@@ -214,9 +201,9 @@ build_sbx_helper() {
 }
 
 setup_binutils_path() {
-  # fpm (deb) on macOS 26+ produces an empty archive with the system /usr/bin/ar (only
-  # __.SYMDEF SORTED, all members lost). GNU binutils' `gar` produces the ar container deb
-  # needs. binutils is keg-only and not on the default PATH — prepend it here for fpm to probe (fpm tries ar/gar in order).
+  # fpm（deb）在 macOS 26+ 上用系统 /usr/bin/ar 会产出空包（只有 __.SYMDEF SORTED，
+  # 成员全部丢失）。GNU binutils 的 `gar` 能正确产出 deb 需要的 ar 容器。binutils 是
+  # keg-only，未进默认 PATH，这里把它补上供 fpm 探测（fpm 依次尝试 ar/gar）。
   local binutils_bin="$(brew --prefix 2>/dev/null)/opt/binutils/bin"
   if [ -x "$binutils_bin/gar" ]; then
     export PATH="$binutils_bin:$PATH"
@@ -227,13 +214,13 @@ setup_binutils_path() {
 }
 
 setup_libnode() {
-  # Windows NAPI cross-compilation needs the libnode import library:
-  #   - napi-build's windows.rs probes for a `libnode.dll` file (panics otherwise)
-  #   - zig ld resolves `node.lib` / `node.dll` / `libnode.a` for `-lnode` (paths_first)
-  # Node headers are pulled from npmmirror here, NAPI export symbols parsed, and a GNU import
-  # library generated with zig dlltool. Cached at <repo>/target/win-libnode/, idempotent. Only sets LIBNODE_PATH, does not build.
+  # Windows NAPI 交叉编译需要 libnode 导入库：
+  #   - napi-build 的 windows.rs 探测 `libnode.dll` 文件是否存在（否则 panic）
+  #   - zig ld 用 `-lnode` 时按 paths_first 找 `node.lib` / `node.dll` / `libnode.a`
+  # 这里从 npmmirror 拉 Node 头文件，解析 NAPI 导出符号，用 zig dlltool 生成 GNU 导入库。
+  # 产物缓存在 <repo>/target/win-libnode/，幂等。只设置 LIBNODE_PATH，不构建。
   local dir="$ROOT/target/win-libnode"
-  local node_ver="v18.18.2"   # Node version embedded in Electron 28; NAPI ABI stable across versions
+  local node_ver="v18.18.2"   # Electron 28 内嵌的 Node 版本；NAPI ABI 跨版本稳定
   if [ -f "$dir/libnode.a" ]; then
     export LIBNODE_PATH="$dir"
     echo "[napi] libnode import lib cached at $dir" >&2
@@ -247,14 +234,14 @@ setup_libnode() {
     -o "$hdr_tmp/hdrs.tgz" || { echo "ERROR: fetch node headers failed" >&2; rm -rf "$hdr_tmp"; return 1; }
   tar xzf "$hdr_tmp/hdrs.tgz" -C "$hdr_tmp"
   local inc="$hdr_tmp/node-$node_ver/include/node"
-  # Parse NAPI export function names (NAPI_EXTERN declarations)
+  # 解析 NAPI 导出函数名（NAPI_EXTERN 声明）
   {
     grep -oE "NAPI_EXTERN[^;]*napi_[a-zA-Z0-9_]+" "$inc/js_native_api.h" 2>/dev/null
   } | grep -oE "napi_[a-zA-Z0-9_]+" | sort -u > "$dir/exports.txt"
-  # Registration functions: node_api_module_register / napi_module_register differ in declaration form — add both explicitly
+  # 注册函数：node_api_module_register / napi_module_register 声明形式不同，显式补上
   { echo "napi_module_register"; echo "node_api_module_register"; } >> "$dir/exports.txt"
   sort -u "$dir/exports.txt" -o "$dir/exports.txt"
-  # .def → GNU import library
+  # .def → GNU 导入库
   {
     echo "LIBRARY node.exe"
     echo "EXPORTS"
@@ -270,8 +257,8 @@ setup_libnode() {
 }
 
 setup_wine_path() {
-  # wine may not be on PATH right after install — add the common locations for electron-builder's makensis.
-  # New wine merged wine64 → a single `wine` launcher; probe both.
+  # wine 装完后可能不在 PATH，把常见位置补进去供 electron-builder 的 makensis 使用。
+  # 新 wine 合并了 wine64 → 只有一个 `wine` 启动器，两者都探测。
   local candidates=(
     "/Applications/Wine Stable.app/Contents/Resources/wine/bin"
     "$(brew --prefix 2>/dev/null)/bin"
@@ -291,17 +278,17 @@ build_frontend() {
   cd "$ELECTRON_DIR"
   npm run bundle
   npx tsc
-  # sandboxed preload cannot require relatively — must be bundled single-file; overwrite tsc output after tsc runs.
+  # sandboxed preload 不能相对 require，必须打成单文件；须在 tsc 之后覆盖其输出。
   npm run bundle:preload
 }
 
 notarize_mac() {
-  # Notarization + stapling after Developer ID signing (required for official distribution;
-  # packages without notarization get Gatekeeper-rejected on other Macs on first open). Credentials come from
-  # a notarytool store-credentials keychain profile (default starriver-notary); NOTARIZE=0 skips.
-  # Flow verified 2026-10-02: zip the app (ditto) → notarytool submit --wait
-  # → stapler staple back into .app → spctl verify → rebuild the DMG from the stapled app
-  # (the DMG electron-builder produces first contains an app without the staple ticket and must be overwritten).
+  # Developer ID 签名后的公证 + 装订（正式分发必需；跳过公证的包在其它 Mac
+  # 上首次打开会被 Gatekeeper 拒）。凭据来自 notarytool store-credentials
+  # 存入钥匙串的 profile（默认 starriver-notary）；NOTARIZE=0 跳过。
+  # 流程与 2026-10-02 实测一致：app 打 zip（ditto）→ notarytool submit --wait
+  # → stapler staple 回写 .app → spctl 验证 → 用已装订 app 重打 DMG
+  # （electron-builder 先产的 DMG 内是不带装订票的 app，必须覆盖）。
   if [ "${NOTARIZE:-1}" != "1" ]; then
     echo "[notary] NOTARIZE=0 — 跳过公证"
     return 0
@@ -336,17 +323,17 @@ notarize_mac() {
   local dmg="$DIST_DIR/Starriver-$version-arm64.dmg"
   echo "[notary] 用已装订 app 重打 DMG -> $dmg"
   rm -f "$dmg"
-  # Rebuild from a staging dir instead of -srcfolder <app> directly: a bare app loses the
-  # Applications symlink and the DMG installs as a lonely icon that cannot be dragged
-  # (user report 2026-10-03). Staging = stapled app + /Applications symlink;
-  # cp -pR keeps the signature and staple ticket, hdiutil keeps the symlink itself.
+  # 从暂存目录重打,而不是直接 -srcfolder <app>:裸 app 会丢掉
+  # Applications 快捷方式,装出来的 DMG 只有一个孤零零的图标,无法拖拽
+  # 安装(2026-10-03 用户报告)。暂存 = 装订后的 app + /Applications 符号
+  # 链接;cp -pR 保留签名与装订票,hdiutil 保留符号链接本体。
   local stage
   stage=$(mktemp -d)
   cp -pR "$app" "$stage/Starriver.app"
   ln -s /Applications "$stage/Applications"
-  # Drag-install layout: a pre-generated .DS_Store template (icon view, 128px, Starriver left /
-  # Applications right). The template is generated once via Finder scripting (see assets/dmg/);
-  # at build time it is only copied — no runtime AppleScript/TCC permissions needed.
+  # 拖拽安装布局:预生成的 .DS_Store 模板(图标视图、128px、Starriver 左 /
+  # Applications 右)。模板用 Finder 脚本一次性生成(见 assets/dmg/),构建时
+  # 只拷贝——不依赖运行时 AppleScript/TCC 权限。
   local ds_template="$ELECTRON_DIR/assets/dmg/ds-store-template"
   if [ -f "$ds_template" ]; then
     cp "$ds_template" "$stage/.DS_Store"
@@ -361,9 +348,9 @@ notarize_mac() {
     return 1
   fi
   rm -rf "$stage"
-  # Self-check: mount and verify the drag-install layout (the Applications symlink must exist). 2026-10-03 incident:
-  # the 03:11 DMG was a bare package again (old command/stale script rerun); found only when the user could not install.
-  # Since then a missing symlink in the artifact is a hard failure — no shipping broken packages.
+  # 自检:挂载验证拖拽安装布局(Applications 链接必须在)。2026-10-03 事故:
+  # 03:11 的 DMG 又变裸包(旧命令/旧脚本缓冲重跑),用户装不了才发现。
+  # 从此产物缺链接直接判失败,不允许带病出包。
   local mnt
   mnt=$(mktemp -d)/v
   if hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg" >/dev/null 2>&1; then
@@ -384,14 +371,14 @@ run_electron_builder() {
   local extra=()
   case "$target" in
     mac)   extra=(--mac --arm64) ;;
-    linux) extra=(--linux --x64); setup_binutils_path ;;  # force x64 + GNU ar (fixes empty deb)
+    linux) extra=(--linux --x64); setup_binutils_path ;;  # 强制 x64 + GNU ar（修 deb 空包）
     win)   extra=(--win --x64); setup_wine_path ;;
   esac
   echo "[builder] npx electron-builder ${extra[*]}"
   cd "$ELECTRON_DIR"
-  # ELECTRON_BUILDER_EXTRA: extra CLI args (remote build farms pass --config.mac.identity=null
-  # to skip Developer ID signing — the cert lives on the dev machine's keychain; mini only ships adhoc packages).
-  # Left unquoted so multiple args split on whitespace.
+  # ELECTRON_BUILDER_EXTRA: 追加 CLI 参数（远程构建农场传 --config.mac.identity=null
+  # 跳过 Developer ID 签名——证书在开发机钥匙串里，mini 只出 adhoc 包）。
+  # 不加引号以支持多参数按空白拆分。
   # Retry ×3: codesign --timestamp hits Apple's timestamp server per file; a
   # transient network blip mid-bundle ("The timestamp service is not
   # available", 2026-10-03) killed an otherwise fine build at bn.lproj.
@@ -416,17 +403,7 @@ package_one() {
   build_acp "$p"
   build_sbx_helper "$p"
   sync_node "$p" "$(build_napi "$p")"
-  # gen-icons regenerates png/ico/icns from the logo source. iconutil shells
-  # out with a /dev/null redirect, which workspace-write sandboxes deny —
-  # under those, keep the previously generated icon.icns (logo unchanged).
-  if ! python3 "$ROOT/desktop/scripts/gen-icons.py"; then
-    if [ -f "$ELECTRON_DIR/assets/icon.icns" ]; then
-      echo "[icons] WARNING: 图标再生成失败(iconutil 沙箱受限) — 沿用现有 assets/icon.icns"
-    else
-      echo "[icons] ERROR: 图标生成失败且无现成 icon.icns" >&2
-      exit 1
-    fi
-  fi
+  python3 "$ROOT/desktop/scripts/gen-icons.py"
   build_frontend
   run_electron_builder "$p"
   if [ "$p" = "mac" ]; then
@@ -437,10 +414,10 @@ package_one() {
   echo "=== $p package done ==="
 }
 
-# 2026-10-04: remove the mac unpack dir after a successful build. dist/mac-arm64/Starriver.app gets
-# indexed by Spotlight as a real app: every build adds another clickable Starriver icon to
-# Launchpad/Spotlight, confusing it with the installed copy (the ghost-icon source of this
-# investigation), and clicking it bypasses the single-instance lock into a second instance.
+# 2026-10-04: 出包成功后删掉 mac 解包目录。dist/mac-arm64/Starriver.app 会被
+# Spotlight 当正经应用索引:开发机每出一次包,"应用"窗口/聚焦搜索就多一个可点的
+# Starriver 图标,与已安装副本混淆(本次排查的幽灵图标来源),误点还会绕过单实例
+# 锁造成双实例。安装包产物(DMG/zip)不受影响;调试需要解包副本时 KEEP_UNPACKED=1。
 cleanup_unpacked() {
   local dir="$DIST_DIR/mac-arm64"
   if [ "${KEEP_UNPACKED:-0}" = "1" ]; then

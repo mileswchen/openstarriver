@@ -919,7 +919,7 @@ fn bare_model_variant(key: &str) -> &str {
 /// own model rides the agent's profile default, matching interactive runs
 /// (which pass `resolve_agent_config(agent).model`). A run that used to fall
 /// through with `None` put the kernel's literal "mock" placeholder plus the
-/// first registered provider on the wire — Zhipu answers error 1211 (model not found).
+/// first registered provider on the wire — Zhipu answers 1211 模型不存在.
 fn scheduled_run_model(task_key: Option<&str>, agent_default: Option<&str>) -> Option<String> {
     task_key
         .map(bare_model_variant)

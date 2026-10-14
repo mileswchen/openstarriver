@@ -369,8 +369,8 @@ impl EventRenderer {
                 },
                 Style::default().fg(Color::Cyan),
             )),
-            // Byte-exact live view (open-turn snapshot stream): the TUI is an on-machine rich client and
-            // needs no snapshot re-rendering (the event stream already carries all structured content).
+            // 逐字节实时一致（开放回合快照流）：TUI 是同机富客户端，无需
+            // 快照重渲染（事件流已含全部结构内容）。
             UiEvent::TraceSnapshot { .. } => {}
         }
         out

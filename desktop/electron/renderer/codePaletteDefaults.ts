@@ -1,4 +1,4 @@
-// Default code-highlight palettes (Xcode Default Light/Dark, 2026-10-04 scheme:
+// Default code-highlight palettes (Xcode Default Light/Dark, 2026-10-04 方案:
 // docs/superpowers/specs/2026-10-04-code-palette-config-design.md).
 // Lives at renderer root next to themes.ts — contrib/ is linted hex-free
 // (__contrib_registry.test.tsx), and palettes are definition data, not UI code.
@@ -9,7 +9,7 @@ export type CodeTokenKey =
 export type CodePaletteMode = 'light' | 'dark';
 export type CodePalette = Partial<Record<CodeTokenKey, string>>;
 
-/** Mirrors styles.css :root --code-* (Xcode Default Light, 2026-10-04 palette). */
+/** Mirrors styles.css :root --code-* (Xcode Default Light, 2026-10-04 方案色表). */
 export const DEFAULT_LIGHT: Record<CodeTokenKey, string> = {
   comment: '#707F8C',
   keyword: '#AD3DA4',
@@ -24,7 +24,7 @@ export const DEFAULT_LIGHT: Record<CodeTokenKey, string> = {
   'diff-del': '#C43C3C',
 };
 
-/** Mirrors themes.ts DARK (Xcode Default Dark first draft). */
+/** Mirrors themes.ts DARK (Xcode Default Dark 初稿). */
 export const DEFAULT_DARK: Record<CodeTokenKey, string> = {
   comment: '#6C7986',
   keyword: '#FC5FA3',

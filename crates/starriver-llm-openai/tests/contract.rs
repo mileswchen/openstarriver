@@ -294,6 +294,62 @@ async fn stalled_stream_surfaces_idle_timeout() {
     );
 }
 
+/// WI-197: a mid-stream connection death must surface the reqwest CAUSE
+/// chain (the top-line Display is just "error decoding response body"), the
+/// provider request id from the response headers, and the stream telemetry
+/// (bytes received / duration) so the failure can be reconciled against the
+/// provider's request log.
+#[tokio::test]
+async fn mid_stream_drop_carries_cause_chain_request_id_and_telemetry() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = socket.read(&mut buf).await;
+        let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                    x-request-id: req_dead42\r\ntransfer-encoding: chunked\r\n\r\n";
+        let _ = socket.write_all(head.as_bytes()).await;
+        // Declare a 64-byte chunk but write only part of it, then DROP the
+        // socket — hyper's chunk decoder hits an unexpected EOF with a real
+        // source chain instead of a clean stream end.
+        let _ = socket
+            .write_all(b"40\r\ndata: {\"choices\":[{\"delta\":{\"content\":")
+            .await;
+        let _ = socket.flush().await;
+        drop(socket);
+    });
+
+    let chunks: Vec<_> = adapter(port, 5_000).stream(options()).collect().await;
+    let error = chunks
+        .iter()
+        .find_map(|chunk| match chunk {
+            Err(error) => Some(error.clone()),
+            _ => None,
+        })
+        .expect("the dropped stream must surface an error");
+    assert_eq!(error.code(), "TRANSPORT");
+    let (message, request_id) = match &error {
+        starriver_kernel::llm::LlmError::Call {
+            message, request_id, ..
+        } => (message.clone(), request_id.clone()),
+        other => panic!("expected LlmError::Call, got {other:?}"),
+    };
+    assert!(
+        message.contains("caused by:"),
+        "the reqwest source chain must be flattened into the message: {message}"
+    );
+    assert!(
+        message.contains("stream received"),
+        "the byte/duration telemetry must ride the message: {message}"
+    );
+    assert_eq!(
+        request_id.as_deref(),
+        Some("req_dead42"),
+        "the response-header request id must survive to the error"
+    );
+}
+
 #[tokio::test]
 async fn http_errors_normalize_with_retry_after_and_request_id() {
     let port = serve_once(

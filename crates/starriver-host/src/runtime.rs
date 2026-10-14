@@ -50,8 +50,8 @@ pub struct HostRuntime {
     /// once per process, shared by both extraction pipelines, read out by
     /// `memory.status`.
     pub(crate) memory_budget: Arc<starriver_memory::TokenBudget>,
-    /// Byte-exact live view (open-turn snapshot stream): per-session projection epochs
-    /// (+1 on compaction/fork/rollback; a client epoch mismatch triggers a full re-pull).
+    /// 逐字节实时一致（开放回合快照流）：per-session 投影世代
+    /// （compaction/fork/回滚 +1；客户端 epoch 不一致即全量重拉）。
     pub(crate) trace_epochs: Arc<StdMutex<HashMap<String, u64>>>,
     pub(crate) runtime_handle: tokio::runtime::Handle,
     /// BUG-5: start_scheduler_tick idempotence guard.
@@ -1667,7 +1667,7 @@ impl HostRuntime {
         let running_guard = running_guard;
         let spawn_agent_preset = agent_preset;
         let spawn_agent_name = agent_name.clone();
-        // Byte-exact live view: build the snapshot context before spawning (avoids escaping borrows).
+        // 逐字节实时一致：快照上下文在 spawn 前构建（避免借用逃逸）。
         let trace_ctx = Some(crate::plugin_kernel::TraceSnapContext {
             inner: Arc::clone(&inner_arc),
             epochs: Arc::clone(&self.trace_epochs),
@@ -1925,9 +1925,6 @@ impl HostRuntime {
 
             let mut round_task = task.clone();
             let mut goal_rounds = 0usize;
-            // WI-97 fix: normalized final reply of the previous round — the
-            // anti-replay guard compares against it.
-            let mut last_round_text: Option<String> = None;
             // File the session under its workspace BEFORE the first execution
             // spawns (directory at creation). The old post-spawn attach raced
             // TaskStarted: the UI's immediate sidebar refresh read the
@@ -1983,7 +1980,7 @@ impl HostRuntime {
                         break;
                     }
                 };
-                let round_stop: Option<&'static str> = {
+                {
                     // WI-103: mid-run route rewrites — a later
                     // set_agent_active_model for this agent lands on every
                     // subsequent LLM call of this turn.
@@ -2008,23 +2005,12 @@ impl HostRuntime {
                     // terminal event) and leak the session input slot; the
                     // parked messages stay durable and resume with the next
                     // execute.
-                    // WI-97 fix: the goal loop needs what the round actually
-                    // said, whether the user stopped it, and whether any tool
-                    // ran — collect while waiting instead of discarding the
-                    // stream. These fold across the consecutive driver turns
-                    // of one round.
-                    let mut round_text = String::new();
-                    let mut round_cancelled = false;
-                    let mut round_tool_calls = 0usize;
                     loop {
-                        let settle = crate::plugin_kernel::wait_terminal_collecting(
+                        crate::plugin_kernel::wait_terminal(
                             Arc::clone(&agent),
                             bus.clone(),
                         )
                         .await;
-                        round_text.push_str(&settle.assistant_text);
-                        round_cancelled |= settle.cancelled;
-                        round_tool_calls += settle.tool_calls;
                         use starriver_kernel::agent::AgentStatus;
                         if agent.status() == AgentStatus::Idle {
                             tokio::task::yield_now().await;
@@ -2066,64 +2052,6 @@ impl HostRuntime {
                         title_provider.clone(),
                         title_model.clone(),
                     );
-
-                    // WI-97 fix — goal-loop stop conditions, evaluated before
-                    // the continuation check below re-arms another round.
-                    // 1) User Stop: session.cancel aborts the live turn, but
-                    //    the loop used to re-arm a fresh continuation round
-                    //    regardless — Stop could not end a goal run and
-                    //    killing the app was the only off switch. The goal
-                    //    itself stays Active; the next execute re-enters the
-                    //    loop by design.
-                    // 2) Model declared completion: the continuation prompt's
-                    //    own contract ("state GOAL COMPLETE and stop") —
-                    //    until now nothing detected it, so a finished goal
-                    //    restarted the same turn forever (bounded only by the
-                    //    round cap / budget).
-                    // 3) Anti-replay: a round with no tool activity whose
-                    //    reply repeats the previous round verbatim is an idle
-                    //    replay, not progress — stop before it regenerates
-                    //    the same turn up to the round cap.
-                    if round_cancelled {
-                        tracing::info!(session = %sid,
-                            "goal round cancelled by user; stopping the goal loop");
-                        Some("cancelled")
-                    } else {
-                        let declared = {
-                            let inner = inner_arc.lock().await;
-                            inner.as_ref().is_some_and(|i| {
-                                crate::agents::goal_complete_if_declared(
-                                    i,
-                                    &sid,
-                                    &round_text,
-                                )
-                            })
-                        };
-                        if declared {
-                            tracing::info!(session = %sid,
-                                "goal declared complete by the model; stopping the goal loop");
-                            broadcast_goal_status(&inner_arc, &event_tx, &sid).await;
-                            Some("complete")
-                        } else {
-                            let normalized = normalize_ws(&round_text);
-                            let replay = round_tool_calls == 0
-                                && !normalized.is_empty()
-                                && last_round_text.as_deref() == Some(normalized.as_str());
-                            if replay {
-                                tracing::warn!(session = %sid,
-                                    "goal round repeated the previous reply with no tool activity; stopping the loop");
-                                Some("replay")
-                            } else {
-                                if !normalized.is_empty() {
-                                    last_round_text = Some(normalized);
-                                }
-                                None
-                            }
-                        }
-                    }
-                };
-                if round_stop.is_some() {
-                    break;
                 }
                 // WI-97/BUG-87: goal continuation — drive the next round as a
                 // fresh execute (fresh relay, fresh route rewrite, events and
@@ -2483,7 +2411,7 @@ async fn account_goal_usage(
     }
     let tokens = ev["inputTokens"].as_u64().unwrap_or(0)
         .saturating_add(ev["outputTokens"].as_u64().unwrap_or(0));
-    {
+    let broadcast = {
         let inner = inner_arc.lock().await;
         let Some(inner) = inner.as_ref() else { return };
         let mut goals = inner.goals.lock().unwrap();
@@ -2494,24 +2422,6 @@ async fn account_goal_usage(
                 g.status = crate::GoalStatus::BudgetLimited;
             }
         }
-    }
-    broadcast_goal_status(inner_arc, event_tx, sid).await;
-}
-
-/// WI-97: project the session's current goal state onto the event stream
-/// (`goalStatus`) so UIs track status flips that did not ride a usage event
-/// (the model's GOAL COMPLETE declaration) and keep the single payload
-/// shape in one place.
-async fn broadcast_goal_status(
-    inner_arc: &std::sync::Arc<tokio::sync::Mutex<Option<crate::RuntimeInner>>>,
-    event_tx: &tokio::sync::broadcast::Sender<serde_json::Value>,
-    sid: &str,
-) {
-    let payload = {
-        let inner = inner_arc.lock().await;
-        let Some(inner) = inner.as_ref() else { return };
-        let goals = inner.goals.lock().unwrap();
-        let Some(g) = goals.get(sid) else { return };
         let mut payload = serde_json::json!({
             "type": "goalStatus",
             "version": 1,
@@ -2525,13 +2435,7 @@ async fn broadcast_goal_status(
         }
         payload
     };
-    let _ = event_tx.send(payload);
-}
-
-/// Whitespace-normalized text for the goal loop's anti-replay comparison
-/// (a re-rendered identical reply differs only in wrapping).
-fn normalize_ws(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    let _ = event_tx.send(broadcast);
 }
 
 // ── WI-163: MCP discovery retry wiring ──────────────────────────────────────

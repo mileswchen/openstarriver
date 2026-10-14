@@ -31,7 +31,7 @@ pub type Dispatcher = Arc<
 pub struct HttpServer {
     port: u16,
     token: String,
-    /// Process instance id (sent with serverHello; regenerated on every spawn).
+    /// 进程实例 id（随 serverHello 下发；每次 spawn 重新生成）。
     instance_id: String,
     cancel: CancellationToken,
     handle: tokio::task::JoinHandle<()>,
@@ -140,8 +140,8 @@ pub async fn spawn_with(
     let history: Arc<Mutex<VecDeque<(u64, EventEnvelope)>>> = Arc::new(Mutex::new(VecDeque::new()));
     let next_seq = Arc::new(AtomicU64::new(0));
     let heartbeat = std::time::Duration::from_secs(options.heartbeat_secs.max(1));
-    // Process instance id: sent with the event stream so clients can detect a server restart
-    // (global_seq restarts from 0, so a client's persisted stale after= watermark would filter out all new events).
+    // 进程实例 id：随事件流下发给客户端做「服务端重启」检测（global_seq 在
+    // 重启后从 0 重新计数，客户端持久化的 after= 旧水位会把新事件全部滤掉）。
     let instance_id = uuid::Uuid::new_v4().simple().to_string();
     let emit = make_emit(&events, &history, &next_seq).expect("emit sink always constructible");
     let handle = runtime.spawn(serve(
@@ -646,9 +646,9 @@ async fn serve_sse(
     let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n";
     stream.write_all(head.as_bytes()).await?;
     stream.flush().await?;
-    // serverHello: subscription confirmation + instance id + current watermark. The client (phone)
-    // compares the persisted instance id and resets after= on change — global_seq restarts from
-    // 0 after a restart, so a stale watermark would filter out all new events (the root cause of a permanently deaf phone). Must be written after the headers.
+    // serverHello：订阅确认 + 实例 id + 当前水位。客户端（手机）比对持久化的
+    // 实例 id，发现更替即清零 after= 重连——global_seq 重启后从 0 计数，旧
+    // 水位会把新事件全部滤掉（手机永久耳聋的根因）。必须在头部之后写。
     {
         let watermark = next_seq.load(std::sync::atomic::Ordering::SeqCst);
         let hello = serde_json::json!({

@@ -183,41 +183,6 @@ pub fn tool_call_label(name: &str, arg: &str) -> String {
     }
 }
 
-/// Argument summary for a tool-call display line: the first string value
-/// among the known keys, in order. Terminal-family tools expose input/shell
-/// directly; when no single command field matches (terminal wait/read/kill/
-/// signal), surface the FULL argument object so nothing is omitted (capped).
-/// Terminal keys are gated on the name prefix so an unrelated tool's `id`
-/// never leaks as noise.
-pub fn tool_call_arg(name: &str, parsed: &Option<serde_json::Value>) -> String {
-    let terminal = name.starts_with("terminal");
-    let mut keys: Vec<&str> = vec!["file", "path", "command"];
-    if terminal {
-        keys.extend_from_slice(&["input", "shell"]);
-    }
-    if let Some(hit) = keys.iter().find_map(|key| {
-        parsed
-            .as_ref()
-            .and_then(|value| value.get(*key))
-            .and_then(|value| value.as_str())
-    }) {
-        if !hit.is_empty() {
-            return hit.to_string();
-        }
-    }
-    if terminal {
-        if let Some(value) = parsed {
-            let compact = value.to_string();
-            let mut out: String = compact.chars().take(400).collect();
-            if compact.chars().count() > 400 {
-                out.push('…');
-            }
-            return out;
-        }
-    }
-    String::new()
-}
-
 /// Slash command dispatch: when a task starts with `/skill`, inject the skill body and drop the command token.
 pub fn apply_slash_dispatch(task: &str, skill: Option<&SkillProfile>) -> (String, Option<String>) {
     let Some(cmd) = task.split_whitespace().next() else {

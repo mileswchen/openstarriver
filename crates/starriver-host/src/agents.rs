@@ -844,7 +844,7 @@ impl HostRuntime {
         true
     }
 
-    /// Send Now (queue dock "Send Now"): abort the live turn, if any, and hand
+    /// Send Now (queue dock 「立即」): abort the live turn, if any, and hand
     /// the durable queue to the driver in ONE host call. Cancel FIRST, flush
     /// SECOND: `cancel(keep_inbox=true)` parks the queue and aborts the
     /// running turn; `pending_flush` then unparks and wakes, so the parked
@@ -1114,40 +1114,9 @@ pub(crate) fn goal_continuation_for(
     let g = goals.get(session_id)?;
     match g.status {
         crate::GoalStatus::Active => Some(format!(
-            "Continue working toward the goal: {}. Assess current progress, decide the next concrete step, and do it. When the goal is fully achieved, state {GOAL_COMPLETE_MARKER} and stop.",
+            "Continue working toward the goal: {}. Assess current progress, decide the next concrete step, and do it. When the goal is fully achieved, state GOAL COMPLETE and stop.",
             g.objective
         )),
         _ => None,
-    }
-}
-
-/// The exact token the continuation prompt asks the model to state when the
-/// objective is fully achieved. Matched case-insensitively in the round's
-/// final assistant text.
-pub(crate) const GOAL_COMPLETE_MARKER: &str = "GOAL COMPLETE";
-
-/// WI-97 fix: completion detection — the model declared the objective
-/// achieved by stating [`GOAL_COMPLETE_MARKER`] in its final reply. Flips an
-/// Active goal to Complete so the post-turn loop stops re-arming
-/// continuation rounds (until now nothing ever set `Complete`, so an Active
-/// goal restarted the same turn forever and only killing the app stopped
-/// it). Returns true when the status actually flipped.
-pub(crate) fn goal_complete_if_declared(
-    inner: &crate::RuntimeInner,
-    session_id: &str,
-    final_text: &str,
-) -> bool {
-    if !final_text.to_lowercase().contains(&GOAL_COMPLETE_MARKER.to_lowercase()) {
-        return false;
-    }
-    let mut goals = inner.goals.lock().unwrap();
-    let Some(g) = goals.get_mut(session_id) else {
-        return false;
-    };
-    if g.status == crate::GoalStatus::Active {
-        g.status = crate::GoalStatus::Complete;
-        true
-    } else {
-        false
     }
 }

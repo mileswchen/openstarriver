@@ -56,7 +56,7 @@ impl ToolExecutor for TerminalStart {
     fn execute(
         &self,
         arguments: Value,
-        ctx: ToolRunContext,
+        _ctx: ToolRunContext,
     ) -> cordis_rslite::BoxFuture<Result<Value, ToolError>> {
         let service = Arc::clone(&self.service);
         Box::pin(async move {
@@ -65,10 +65,8 @@ impl ToolExecutor for TerminalStart {
                 .get("shell")
                 .and_then(|s| s.as_str())
                 .map(str::to_string);
-            // Owner attribution: the starting session (agent id) keys the
-            // turn-end reap and the kill_owner cleanup scope.
             let id = service
-                .start_owned(ctx.execution.agent_id, shell)
+                .start(shell)
                 .map_err(|e| terminal_failure("START_FAILED", e))?;
             Ok(Value::new(serde_json::json!({
                 "output": format!("terminal started: {id}")

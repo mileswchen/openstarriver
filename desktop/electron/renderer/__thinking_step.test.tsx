@@ -44,7 +44,7 @@ beforeEach(() => {
   };
 });
 
-describe('CodingView thinking rows split per turn step', () => {
+describe('CodingView 思维链按 Turn Step 分行(DSH 方案)', () => {
   it('每一步的 reasoning 各自成行并挂在对应 step 分组内', async () => {
     const { CodingView, WorkspaceProvider, WorkspaceSection } = await import('./app');
     render(<I18nProvider><WorkspaceProvider><WorkspaceSection onOpenCoding={() => {}} /><CodingView debugEnabled={false} /></WorkspaceProvider></I18nProvider>);

@@ -582,7 +582,6 @@ fn terminal_list() -> MethodSpec<HostRuntime> {
                             "startedAtMs": c.started_ms,
                             "finishedAtMs": c.finished_ms,
                             "exitCode": c.exit_code,
-                            "text": c.text,
                         })),
                     })
                 })
@@ -1036,7 +1035,7 @@ fn session_trace() -> MethodSpec<HostRuntime> {
         |call: HostCall<'_>| {
             let session_id = required_string(&call.params, "sessionId")?;
             let mut trace = session_trace_json(&call.host.get_session_trace(session_id.clone()));
-            // Byte-exact live view (open-turn snapshot stream): send the projection epoch with the full hydration.
+            // 逐字节实时一致（开放回合快照流）：随全量水合下发投影世代。
             if let Some(obj) = trace.as_object_mut() {
                 obj.insert("epoch".into(), json!(call.host.trace_epoch(&session_id)));
             }
@@ -1061,8 +1060,8 @@ fn session_compact() -> MethodSpec<HostRuntime> {
         |call: HostCall<'_>| {
             let session_id = required_string(&call.params, "sessionId")?;
             let keep_recent = call.params.get("keepRecent").and_then(Value::as_u64);
-            // Byte-exact live view: history is about to be rewritten — bump the projection epoch first (clients fully re-pull;
-            // the re-pull happens after the rewrite completes).
+            // 逐字节实时一致：历史将被重写，投影世代先 +1（客户端据此全量重拉；
+            // 重拉发生在重写完成之后）。
             call.host.bump_trace_epoch(&session_id);
             let result = call
                 .host

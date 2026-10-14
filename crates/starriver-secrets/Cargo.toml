@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "File-backed credential records + secret reference resolution"
+description = "File-backed credential records + secret reference resolution (DSH credentials parity)"
 
 [dependencies]
 anyhow = { workspace = true }

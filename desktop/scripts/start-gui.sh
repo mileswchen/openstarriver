@@ -1,6 +1,6 @@
 #!/bin/bash
-# Starriver Desktop — launch the Bun SSR GUI (browser access)
-# No Electron needed — open http://localhost:5173 in a browser
+# Starriver Desktop — 启动 Bun SSR GUI (浏览器访问)
+# 不需要 Electron，直接浏览器打开 http://localhost:5173
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -8,19 +8,19 @@ DESKTOP="$ROOT/desktop"
 
 cd "$DESKTOP"
 
-# Check Bun
+# 检查 Bun
 if ! command -v bun &> /dev/null; then
     echo "ERROR: bun not found. Install: curl -fsSL https://bun.sh/install | bash"
     exit 1
 fi
 
-# Install dependencies (if needed)
+# 安装依赖 (如果需要)
 if [ ! -d "node_modules" ]; then
     echo "Installing bun dependencies..."
     bun install --silent
 fi
 
-# Check the .node file
+# 检查 .node 文件
 NODE_FILE=""
 for path in "$ROOT/target/debug/starriver_desktop.node" "$ROOT/target/release/starriver_desktop.node"; do
     if [ -f "$path" ]; then

@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod agent_loop;
 pub mod approval;
+pub mod degenerate_loop;
 pub mod rules_file;
 pub mod context;
 pub mod event_mapper;

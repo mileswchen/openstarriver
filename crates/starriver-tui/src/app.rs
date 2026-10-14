@@ -404,20 +404,30 @@ impl AppState {
     }
 
     /// WI-77: context window of the current provider's model entry
-    /// (default 65536 when the provider doesn't declare one).
+    /// (provider declaration → WI-201 builtin table → 65536).
     pub fn context_window(&self) -> u64 {
         let provider = self
             .current_model
             .as_deref()
             .and_then(|m| m.split('/').next());
-        provider
-            .and_then(|pid| {
-                self.model_entries
-                    .iter()
-                    .find(|e| e.id == pid)
-                    .and_then(|e| e.context_window).map(u64::from)
-            })
-            .unwrap_or(65_536)
+        let declared = provider.and_then(|pid| {
+            self.model_entries
+                .iter()
+                .find(|e| e.id == pid)
+                .and_then(|e| e.context_window)
+                .map(u64::from)
+        });
+        declared.or_else(|| {
+            // WI-201: entries created before the model declared a window (or
+            // without one at all) still show the real bound for known models.
+            let model = self
+                .current_model
+                .as_deref()
+                .and_then(|m| m.rsplit('/').next())?;
+            let provider = provider?;
+            starriver_host::settings::builtin_context_window(provider, model)
+        })
+        .unwrap_or(65_536)
     }
 
     /// Estimated context fill ratio (0..=100) from cumulative usage.
@@ -1250,7 +1260,7 @@ impl AppState {
                 self.mode = Mode::Approval;
                 Ok(false)
             }
-// Byte-exact live view (open-turn snapshot stream): the TUI is an on-machine rich client — ignored.
+            // 逐字节实时一致（开放回合快照流）：TUI 同机富客户端，忽略。
             UiEvent::TraceSnapshot { .. } => Ok(false),
 
         }

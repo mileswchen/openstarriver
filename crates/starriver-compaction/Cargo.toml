@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Compaction capability: pressure/overflow-triggered conversation condensation"
+description = "Compaction capability: pressure/overflow-triggered conversation condensation (DSH compaction seam parity)"
 
 [lib]
 name = "starriver_compaction"

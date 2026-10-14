@@ -59,7 +59,7 @@ const DARK = `:root {
   --shadow-accent: 0 2px 6px rgba(0, 0, 0, 0.5);
   --scrollbar-thumb: #3a3f52;
   --scrollbar-thumb-hover: #4a5168;
-  /* Code syntax — Xcode Default (Dark) palette (first draft, tuned by eye; docs:
+  /* Code syntax — Xcode Default (Dark) palette (初稿,按观感校准;docs:
      docs/superpowers/specs/2026-10-04-xcode-code-highlight-design.md) */
   --code-comment: #6C7986;
   --code-keyword: #FC5FA3;

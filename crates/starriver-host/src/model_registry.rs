@@ -70,7 +70,13 @@ impl ModelEntry {
         starriver_kernel::types::GenerationConfig {
             max_tokens: self.max_tokens.unwrap_or(8192),
             temperature: self.temperature.unwrap_or(0.7),
-            context_window: self.context_window.unwrap_or(128000),
+            context_window: self
+                .context_window
+                .or_else(|| {
+                    crate::settings::builtin_context_window(&self.id, &self.default_model)
+                        .map(|w| w as usize)
+                })
+                .unwrap_or(starriver_kernel::llm::DEFAULT_MODEL_CONTEXT_WINDOW),
             api_format: self.api_format.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
         }
@@ -661,6 +667,19 @@ mod tests {
         assert_eq!(cfg.context_window, 128000);
         assert_eq!(cfg.temperature, 0.7);
         assert_eq!(cfg.api_format, "openai-chat");
+    }
+
+    /// WI-201: entries without a declared window pick up the builtin table
+    /// value for known GLM Coding Plan routes; an explicit declaration still
+    /// outranks it.
+    #[test]
+    fn generation_config_uses_builtin_window_for_glm_routes() {
+        let mut entry = ModelEntry::default();
+        entry.id = "glm".into();
+        entry.default_model = "glm-5.3-flash".into();
+        assert_eq!(entry.generation_config().context_window, 200_000);
+        entry.context_window = Some(4096);
+        assert_eq!(entry.generation_config().context_window, 4096);
     }
 
     #[test]

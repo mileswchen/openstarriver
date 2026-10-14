@@ -12,7 +12,7 @@ use starriver_kernel::tools::{ToolDefinition, ToolError, ToolExecutor, ToolRunCo
 use super::common::{invalid_input, text_content};
 
 /// Item state: `status` accepts the model-conventional strings
-/// (pending/in_progress/completed — the todo vocabulary models are
+/// (pending/in_progress/completed — the /Claude todo vocabulary models are
 /// trained on); legacy `checked: bool` still works and a `checked: true` wins
 /// over a pending `status`.
 fn item_state(item: &serde_json::Value) -> (bool, bool) {

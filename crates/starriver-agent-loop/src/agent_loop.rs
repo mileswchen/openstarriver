@@ -82,6 +82,13 @@ pub fn resolve_preset_options(
             .or_else(|| preset.compaction_tuning.clone()),
         provider: caller.provider.or_else(|| preset.provider.clone()),
         model: caller.model.or_else(|| preset.model.clone()),
+        // WI-199: fallback route — caller's explicit pick wins over the preset.
+        fallback_provider: caller
+            .fallback_provider
+            .or_else(|| preset.fallback_provider.clone()),
+        fallback_model: caller
+            .fallback_model
+            .or_else(|| preset.fallback_model.clone()),
         max_tokens: caller.max_tokens.or(preset.max_tokens),
         system: caller.system.or_else(|| preset.system.clone()),
         system_sections: if caller.system_sections.is_empty() {
@@ -1003,6 +1010,8 @@ mod tests {
                 context_window: None,
                 compaction_threshold_ratio: None,
                 compaction_retain_ratio: None,
+                fallback_provider: None,
+                fallback_model: None,
                 image_projection: None,
                 image_resolver: None,
                 mcp_status_feed: None,

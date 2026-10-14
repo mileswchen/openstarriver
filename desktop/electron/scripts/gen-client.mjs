@@ -1,8 +1,8 @@
 // FPM P1: generate `renderer/client/client.gen.ts` from
-// `protocol.schema.json` (the Rust MethodRegistry is the single source of truth).
+// `protocol.schema.json` (Rust MethodRegistry 是唯一事实源)。
 //
-// Usage: `npm run gen:client`; consistency is enforced by
-// `renderer/__protocol_client.test.tsx` (fails when the schema changes without regenerating).
+// 用法：`npm run gen:client`；一致性由
+// `renderer/__protocol_client.test.tsx` 校验（schema 变了而生成文件没更新则失败）。
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -12,7 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const schemaPath = join(here, '..', 'protocol.schema.json');
 const outPath = join(here, '..', 'renderer', 'client', 'client.gen.ts');
 
-/** schema → TS types (supported subset: string/integer/number/boolean/array/object/any). */
+/** schema → TS 类型（支持子集：string/integer/number/boolean/array/object/any）。 */
 function tsType(s) {
   if (!s || typeof s !== 'object' || Object.keys(s).length === 0) return 'unknown';
   switch (s.type) {

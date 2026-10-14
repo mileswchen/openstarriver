@@ -110,33 +110,6 @@ fn tool_call_label_flattens_multiline_args() {
 }
 
 #[test]
-fn tool_call_arg_exposes_terminal_params() {
-    // terminal-family params must reach the history line: input/shell pick
-    // directly; wait/read/kill/signal surface the FULL argument object.
-    let write = Some(serde_json::json!({ "id": "t-1", "input": "ls -la\n" }));
-    assert_eq!(
-        crate::helpers::tool_call_arg("terminal_write", &write),
-        "ls -la\n"
-    );
-    let start = Some(serde_json::json!({ "shell": "bash" }));
-    assert_eq!(crate::helpers::tool_call_arg("terminal_start", &start), "bash");
-    let wait = Some(serde_json::json!({ "id": "t-1", "timeoutMs": 60000 }));
-    assert_eq!(
-        crate::helpers::tool_call_arg("terminal_wait", &wait),
-        r#"{"id":"t-1","timeoutMs":60000}"#
-    );
-    let kill = Some(serde_json::json!({ "id": "t-9" }));
-    assert_eq!(crate::helpers::tool_call_arg("terminal_kill", &kill), r#"{"id":"t-9"}"#);
-    // Non-terminal tools do not consume terminal keys: `id` must not leak
-    // UUID noise.
-    let other = Some(serde_json::json!({ "id": "abc-uuid" }));
-    assert_eq!(crate::helpers::tool_call_arg("read", &other), "");
-    // File/command keys behave unchanged.
-    let bash = Some(serde_json::json!({ "command": "git status" }));
-    assert_eq!(crate::helpers::tool_call_arg("bash", &bash), "git status");
-}
-
-#[test]
 fn display_pieces_split_tool_blocks_into_tool_rows() {
     // A surface assistant message merges prose with tool_use/tool_result blocks.
     // Display splitting must emit the tool pieces as separate `tool` rows with

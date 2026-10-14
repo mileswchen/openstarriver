@@ -1,4 +1,4 @@
-// User-tunable code-highlight palette (WI-177 follow-up, 2026-10-04 scheme:
+// User-tunable code-highlight palette (WI-177 follow-up, 2026-10-04 方案:
 // docs/superpowers/specs/2026-10-04-code-palette-config-design.md).
 // The --code-* tokens consumed by styles.css are ordinary CSS custom properties,
 // so a palette = one injected <style> with scoped overrides. Light overrides are

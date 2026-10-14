@@ -29,17 +29,17 @@ pub struct WebToolOverrides {
     pub web_search: Option<ToolDefinition>,
 }
 
-/// Byte-exact live view (open-turn snapshot stream): snapshot context injected by the host.
-/// `inner` reads the session ledger through the exact same path as session.trace (load_projection_parts);
-/// `epochs` is the per-session projection epoch table (bumped on compaction/fork/rollback;
-/// the relay also bumps it when it sees a Compaction event).
+/// 逐字节实时一致（开放回合快照流）：由 host 注入的快照上下文。
+/// `inner` 走与 session.trace 完全相同的账本读取路径（load_projection_parts）；
+/// `epochs` 是 per-session 投影世代表（compaction/fork/回滚时递增，中继亦会
+/// 在见到 Compaction 事件时递增）。
 #[derive(Clone)]
 pub struct TraceSnapContext {
     pub inner: Arc<tokio::sync::Mutex<Option<crate::RuntimeInner>>>,
     pub epochs: Arc<StdMutex<HashMap<String, u64>>>,
 }
 
-/// Per-run snapshot source (the id is only known inside execute_with_meta_in, hence built at runtime).
+/// 每次运行的快照源（id 在 execute_with_meta_in 内才确定，故运行时构建）。
 struct TraceSnapSource {
     session_id: String,
     ctx: TraceSnapContext,
@@ -63,8 +63,8 @@ impl TraceSnapSource {
         map.insert(self.session_id.clone(), next);
     }
 
-    /// Compute the open-turn snapshot after a structured event: no user entry (turn not
-    /// started yet) or identical content to last time → None.
+    /// 结构事件后计算开放回合快照：无 user 条目（回合未开始）或内容与上次
+    /// 相同 → None。
     async fn compute(&mut self) -> Option<UiEvent> {
         let inner = self.ctx.inner.clone();
         let session_id = self.session_id.clone();
@@ -76,7 +76,7 @@ impl TraceSnapSource {
         let epoch = self.epoch();
         let event =
             crate::sessions::build_trace_snapshot(&session_id, epoch, turn_index, slice, &tool_names)?;
-        // Identical content is skipped: hash the serialized text.
+        // 相同内容跳过：对序列化文本做哈希。
         use std::hash::{Hash, Hasher};
         let text = serde_json::to_string(&event).ok()?;
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -192,6 +192,23 @@ pub fn coding_preset(settings: &crate::settings::Settings) -> AgentOptions {
         context_window: settings.agent.context_window,
         compaction_threshold_ratio: settings.agent.compaction_threshold_ratio,
         compaction_retain_ratio: settings.agent.compaction_retain_ratio,
+        // WI-199: same-step escalation ladder rung ③ — fallback route
+        // ("provider/model"). A malformed route (no "/" or empty halves) is
+        // ignored; settings validation surfaces typos in the UI.
+        fallback_provider: settings
+            .agent
+            .fallback_route
+            .as_deref()
+            .and_then(|route| route.split_once('/'))
+            .filter(|(provider, model)| !provider.is_empty() && !model.is_empty())
+            .map(|(provider, model)| provider.to_string()),
+        fallback_model: settings
+            .agent
+            .fallback_route
+            .as_deref()
+            .and_then(|route| route.split_once('/'))
+            .filter(|(provider, model)| !provider.is_empty() && !model.is_empty())
+            .map(|(_, model)| model.to_string()),
         // Backlog #7: per-step parallel tool-call budget from settings.
         max_parallel_tool_calls: settings.agent.max_parallel_tool_calls,
         // BUG-138: per-turn tool-call budget (repeat breaker) from settings.
@@ -425,11 +442,6 @@ pub struct PluginKernel {
     pub plan_review_bridge: Arc<crate::plan_review_bridge::PlanReviewBridge>,
     /// WI-93: shared PTY registry handle (background terminal panel).
     pub(crate) terminal_service: std::sync::Arc<crate::terminal::TerminalService>,
-    /// Bus subscription handle for the turn-end background-terminal reap —
-    /// a cordis EffectHandle unsubscribes on drop, so the kernel must hold
-    /// it (same reason UiEventStream keeps `_session_handle`).
-    #[allow(dead_code)]
-    terminal_reaper: std::sync::Mutex<Option<EffectHandle>>,
     /// WI-103: per-agent routes switched through `set_agent_active_model`
     /// while a turn may still be running. The execute path clears an
     /// agent's entry once it seeded the run from the profile (the two then
@@ -1090,20 +1102,6 @@ impl PluginKernel {
         {
             let _ = tools.register(definition);
         }
-        // Turn-end background-terminal reap: the kernel bus is shared by
-        // EVERY session (interactive, scheduled tick, subagents), so one
-        // `turn/end` listener here reconciles terminals per starting
-        // session — closing PTYs with no in-flight marked command. The
-        // handle lives on the kernel; dropping it would unsubscribe.
-        let reaper_service = Arc::clone(&terminal_service);
-        let terminal_reaper = bus.on_sync::<starriver_kernel::session::SessionEventOccurred, _>(
-            move |occurred| {
-                if occurred.event.event_type == "turn/end" {
-                    reaper_service.reap_turn_end(&occurred.session.id.0);
-                }
-                Ok(cordis_rslite::Value::new(()))
-            },
-        );
         // PTC transport: the `run_code` definition plus its ptc-only guard.
         // Presentation stays inert until an execution mode flips the flag via
         // `apply_execution_mode` — until then schemas list every tool and
@@ -1205,7 +1203,6 @@ impl PluginKernel {
             ctx,
             registry,
             terminal_service: terminal_service_handle,
-            terminal_reaper: std::sync::Mutex::new(Some(terminal_reaper)),
             desired_routes: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -1679,8 +1676,8 @@ impl PluginKernel {
         images: Vec<starriver_kernel::llm::ContentBlock>,
         agent_preset: Option<String>,
         permission_preset: Option<crate::preset::Preset>,
-        // Byte-exact live view (open-turn snapshot stream): when Some, the relay computes
-        // an open-turn projection for structured events and broadcasts TraceSnapshot; None keeps the old behavior.
+        // 逐字节实时一致（开放回合快照流）：Some 时中继对结构事件计算
+        // 开放回合投影并广播 TraceSnapshot；None 保持既有行为。
         trace: Option<TraceSnapContext>,
     ) -> anyhow::Result<KernelExecution> {
         let resume = session_id.is_some();
@@ -1941,7 +1938,7 @@ impl PluginKernel {
         // Register listeners synchronously so no event is missed between the
         // publication above and the followup below.
         let mut stream = bridge::subscribe_ui_events(&bus, &agent);
-        // Byte-exact live view: after a structured event, broadcast the open-turn projection as a snapshot (when Some).
+        // 逐字节实时一致：结构事件后把开放回合投影作为快照广播（Some 时）。
         let mut snap_source = trace.as_ref().map(|ctx| TraceSnapSource {
             session_id: id.0.clone(),
             ctx: ctx.clone(),
@@ -1979,8 +1976,8 @@ impl PluginKernel {
                                     break;
                                 }
                             }
-                            // Compaction rewrites history: bump the projection epoch (clients fully re-pull on mismatch),
-                            // this event itself produces no snapshot.
+                            // Compaction 重写历史：递增投影世代（客户端据此全量重拉），
+                            // 本事件自身不产快照。
                             if matches!(event, UiEvent::Compaction { .. }) {
                                 if let Some(s) = snap_source.as_mut() {
                                     s.bump_epoch();
@@ -2037,9 +2034,9 @@ impl PluginKernel {
                 }
             }
         });
-        // Byte-exact live view: dedicated session-ledger snapshot task (user/message instant,
-        // 250ms debounce, turn/end final frame) — the UiEvent relay never sees user/message, which
-        // delayed the user message and first thinking row until the first tool/text event (30s+ observed).
+        // 逐字节实时一致：独立会话账本快照任务（user/message 即时、250ms 去抖、
+        // turn/end 终帧）——UiEvent 中继触发不到 user/message，会让用户消息与
+        // 首个思考行延迟到首个工具/正文事件（实测 30s+）。
         if let Some(ctx) = trace {
             tokio::spawn(Self::run_trace_snapshot_task(
                 bus.clone(),
@@ -2068,11 +2065,11 @@ impl PluginKernel {
         Ok(KernelExecution { handle })
     }
 
-    /// Byte-exact live view: session ledger changes → open-turn projection snapshot (250ms debounced broadcast).
-    /// Independent of the UiEvent relay: ledger events like user/message produce no UiEvent (translate
-    /// drops them); relaying on UiEvents delayed the user message + first thinking row until the
-    /// first tool/text event (30s+ observed). This listens on the session bus, coalesces changes
-    /// within 250ms into one snapshot, and exits after turn/end sends the final frame.
+    /// 逐字节实时一致：会话账本变更 → 开放回合投影快照（250ms 去抖广播）。
+    /// 独立于 UiEvent 中继：user/message 等账本事件不产生 UiEvent（translate
+    /// 丢弃），中继触发会让「用户消息+首个思考行」延迟到首个工具/正文事件
+    /// （实测 30s+）。这里以会话总线为准，250ms 内的变更合并为一次快照；
+    /// turn/end 发终帧后退出。
     #[allow(clippy::too_many_arguments)]
     async fn run_trace_snapshot_task(
         bus: cordis_rslite::EventBus,
@@ -2096,7 +2093,7 @@ impl PluginKernel {
         });
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        interval.tick().await; // consume the immediate first tick
+        interval.tick().await; // 消耗立即触发的一次
         let mut dirty = false;
         loop {
             tokio::select! {
@@ -2196,7 +2193,7 @@ impl PluginKernel {
         options.provider = Some(owning_provider.unwrap_or_else(|| self.default_provider()));
         // BUG-143: a null-model run used to carry the caller/preset's literal
         // "mock" to the wire (provider = first registered → the provider
-// answered "model not found", e.g. Zhipu error 1211 (model not found) on scheduled
+        // answered "model not found", e.g. Zhipu 1211 模型不存在 on scheduled
         // Run Now). A run that reaches the wire without a concrete model now
         // resolves its provider's default model; the literal placeholder only
         // survives for the mock provider itself (tests).
@@ -2220,6 +2217,32 @@ impl PluginKernel {
             let settings = crate::settings::load_settings();
             if let Some(value) = settings_max_tokens_for(&settings, model_id) {
                 options.max_tokens = Some(value as u64);
+            }
+        }
+        // WI-198: context-window fallback wiring. The preset only forwards
+        // the EXPLICIT settings.agent.context_window; when neither the caller
+        // nor settings declared a window, options.context_window stayed None
+        // and the loop's compaction block (`if let Some(window) =
+        // options.context_window`) never ran — context grew unbounded until
+        // the provider choked (2026-10-14 incident: a zhipu session at
+        // 102,743 tokens, past the 0.8×128k default threshold, with
+        // compaction never armed). Resolve the window from the provider entry
+        // owning the EFFECTIVE model (options.model, post BUG-143 default
+        // fill; same ownership rules as max_tokens above): an entry-level
+        // declaration wins, an entry without one gets the platform default
+        // (128k — the same fallback generation_config() arms everywhere
+        // else). Precedence: explicit settings.agent.context_window >
+        // provider-declared window > 128k default. Providers unknown to
+        // settings (the tests' mock) stay None — no window, no compaction,
+        // exactly the preset-era behavior.
+        if options.context_window.is_none() {
+            let settings = crate::settings::load_settings();
+            if let Some(model_id) = options.model.as_deref() {
+                if let Some(window) = provider_entry_for(&settings, model_id)
+                    .map(|p| p.generation_config().context_window)
+                {
+                    options.context_window = Some(window as u64);
+                }
             }
         }
         let mcp_names = self.mcp_tool_names();
@@ -2389,50 +2412,18 @@ impl KernelExecution {
     }
 }
 
-/// What one [`wait_terminal_collecting`] wait observed before the turn
-/// settled: the assistant text streamed while waiting, whether the terminal
-/// was a user cancel, and how many tool calls ran. The goal round loop folds
-/// these across the consecutive driver turns of one round.
-pub struct TurnSettle {
-    pub assistant_text: String,
-    pub cancelled: bool,
-    pub tool_calls: usize,
-}
-
-/// [`wait_terminal`] plus goal-loop inputs: accumulates every finished
-/// `AssistantText` block (the authoritative message event — deltas are not
-/// forwarded here), counts tool calls, and reports a `Cancelled` terminal so
-/// the caller can honor both the model's GOAL COMPLETE declaration and a
-/// user Stop. Same terminal semantics as [`wait_terminal`].
-pub async fn wait_terminal_collecting(
-    agent: Arc<dyn Agent>,
-    bus: cordis_rslite::EventBus,
-) -> TurnSettle {
+/// Wait until the turn settles (turnEnd/turnError/Cancelled). Owns its
+/// arguments (no `&self` capture) so the future stays `Send`.
+pub async fn wait_terminal(agent: Arc<dyn Agent>, bus: cordis_rslite::EventBus) {
     let mut stream = bridge::subscribe_ui_events(&bus, &agent);
-    let mut settle = TurnSettle {
-        assistant_text: String::new(),
-        cancelled: false,
-        tool_calls: 0,
-    };
     while let Some(event) = stream.recv().await {
         match event {
-            UiEvent::AssistantText { text, .. } => settle.assistant_text.push_str(&text),
-            UiEvent::ToolCall { .. } => settle.tool_calls += 1,
-            UiEvent::TurnEnd { .. } | UiEvent::TurnError { .. } => return settle,
-            UiEvent::Cancelled { .. } => {
-                settle.cancelled = true;
-                return settle;
+            UiEvent::TurnEnd { .. } | UiEvent::TurnError { .. } | UiEvent::Cancelled { .. } => {
+                return;
             }
             _ => {}
         }
     }
-    settle
-}
-
-/// Wait until the turn settles (turnEnd/turnError/Cancelled). Owns its
-/// arguments (no `&self` capture) so the future stays `Send`.
-pub async fn wait_terminal(agent: Arc<dyn Agent>, bus: cordis_rslite::EventBus) {
-    let _ = wait_terminal_collecting(agent, bus).await;
 }
 
 pub mod bridge {
@@ -2649,6 +2640,19 @@ pub mod bridge {
                 },
             }],
             "tool/result" => {
+                // BUG-147: compaction's prune phase rewrites an OLD tool
+                // result in place (`SurfaceOp::Replace` — ledger bookkeeping
+                // shadowing the original, which stays in the log). That is
+                // not new activity: forwarding it as a fresh
+                // `UiEvent::ToolResult` made the desktop render an orphan
+                // "Tool / 成功" card no live ToolCallStart could pair with.
+                // Fresh results ride `Some(Append)` and keep flowing.
+                if matches!(
+                    event.surface_op,
+                    Some(starriver_kernel::session::SurfaceOp::Replace { .. })
+                ) {
+                    return Vec::new();
+                }
                 let Ok(message) = Message::from_json(
                     event
                         .data
@@ -2815,6 +2819,65 @@ pub mod bridge {
 
 #[cfg(test)]
 mod tests {
+    /// BUG-147: compaction prune rewrites an old tool result in place
+    /// (SurfaceOp::Replace). The relay must not surface that rewrite as a
+    /// fresh UiEvent::ToolResult — the desktop rendered it as an orphan
+    /// "Tool / 成功" card no live ToolCallStart could pair with. Fresh
+    /// (Append) results keep flowing with their call identity.
+    #[test]
+    fn translate_drops_prune_rewritten_tool_results() {
+        use starriver_kernel::llm::{
+            CallId, ContentBlock, Message, MessageId, MessageRole, MessageSource,
+        };
+        use starriver_kernel::session::{SessionEvent, SurfaceOp};
+
+        let message = Message {
+            id: MessageId("m1".into()),
+            role: MessageRole::User,
+            content: vec![ContentBlock::ToolResult {
+                call_id: CallId("c-old".into()),
+                content: vec![ContentBlock::Text(
+                    "[head retained]\n[earlier output pruned]\n[tail retained]".into(),
+                )],
+                is_error: false,
+            }],
+            source: MessageSource::Tool {
+                call_id: CallId("c-old".into()),
+            },
+        };
+        let event = |surface_op| SessionEvent {
+            seq: 1,
+            time: 0,
+            event_type: "tool/result".into(),
+            data: starriver_kernel::json::JsonValue::Object(vec![(
+                "message".into(),
+                message.to_json().unwrap(),
+            )]),
+            surface_op,
+            source_event_seqs: Vec::new(),
+        };
+
+        // The prune rewrite (Replace) is ledger bookkeeping — never a fresh
+        // tool result for the UI.
+        let rewritten = event(Some(SurfaceOp::Replace { start: 7, end: 7 }));
+        assert!(
+            bridge::translate(&rewritten, "s1").is_empty(),
+            "a SurfaceOp::Replace tool/result must not forward to the UI"
+        );
+
+        // Fresh results (Append) keep flowing with their call identity.
+        let fresh = event(Some(SurfaceOp::Append));
+        let out = bridge::translate(&fresh, "s1");
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            UiEvent::ToolResult { id, ok, .. } => {
+                assert_eq!(id, "c-old");
+                assert!(*ok);
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
     /// WI-35: a truncated instructions owned-message surfaces as an
     /// InstructionsBudget UiEvent; untruncated/foreign plugin messages don't.
     #[test]
@@ -2914,48 +2977,6 @@ mod tests {
         let persistence = temp_persistence(&bus);
         let kernel = PluginKernel::new(ctx, bus, persistence);
         assert!(kernel.registry().list().is_empty());
-    }
-
-    #[tokio::test]
-    async fn turn_end_reaps_idle_background_terminals_of_that_session() {
-        let (bus, ctx) = bus_and_ctx();
-        let persistence = temp_persistence(&bus);
-        let kernel = PluginKernel::new(ctx, bus.clone(), persistence);
-
-        // A terminal owned by session s1 sits idle (started, nothing running).
-        let id = kernel
-            .terminal_service
-            .start_owned(Some("s1".into()), Some("sh".into()))
-            .expect("start");
-        // Another session's terminal must be untouched by s1's turn end.
-        let other = kernel
-            .terminal_service
-            .start_owned(Some("s2".into()), Some("sh".into()))
-            .expect("start other");
-
-        // s1's turn ends: the kernel-level listener reaps that session's
-        // terminals with no in-flight marked command — synchronously on the
-        // shared bus, so by the time append returns the session is gone.
-        let session = starriver_kernel::session::Session::new(
-            starriver_kernel::session::SessionId("s1".into()),
-            bus,
-        );
-        session
-            .append("turn/end", starriver_kernel::json::JsonValue::Null)
-            .unwrap();
-
-        let remaining: Vec<String> = kernel
-            .terminal_service
-            .list()
-            .into_iter()
-            .map(|(id, _, _, _)| id)
-            .collect();
-        assert!(
-            !remaining.contains(&id),
-            "s1's idle terminal must be reaped at turn end"
-        );
-        assert!(remaining.contains(&other), "other sessions' terminals survive");
-        let _ = kernel.terminal_service.kill(&other);
     }
 
     #[tokio::test]
@@ -3188,6 +3209,67 @@ mod tests {
             restored.visible_tools.is_none(),
             "exiting review releases the whitelist — back to register-equals-visible"
         );
+    }
+
+    #[tokio::test]
+    async fn default_agent_options_resolves_context_window_fallback() {
+        use crate::testutil::with_temp_home;
+
+        // WI-198 regression: the loop's compaction block is
+        // `if let Some(window) = options.context_window` — an unset window
+        // silently disabled compaction for every provider that never
+        // declared one (2026-10-14 incident: a zhipu session grew to
+        // 102,743 tokens, past the 0.8×128k default threshold, with
+        // compaction never armed). default_agent_options must arm the
+        // window: settings.agent.context_window > provider declaration >
+        // 128k platform default.
+        let (bus, ctx) = bus_and_ctx();
+        let persistence = temp_persistence(&bus);
+        let kernel = PluginKernel::new(ctx, bus, persistence);
+
+        let write_settings = |home: &std::path::Path, yaml: &str| {
+            let dir = home.join(".starriver");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("settings.yaml"), yaml).unwrap();
+        };
+        let provider_yaml = |window: Option<u32>| {
+            let window_line = window
+                .map(|w| format!("      context_window: {w}\n"))
+                .unwrap_or_default();
+            format!(
+                "llm:\n  providers:\n    - id: zhipu\n      name: Zhipu\n      model_type: cloud\n      provider_type: openai-compat\n      base_url: https://open.bigmodel.example\n      api_key: \"!file:model/zhipu\"\n      default_model: glm-4.7\n{window_line}      models:\n        - id: glm-4.7\n          name: GLM-4.7\n"
+            )
+        };
+
+        with_temp_home(|home| {
+            // 1) A provider that never declared a window gets the platform
+            //    default — the compaction threshold (0.8×128k) is armed.
+            write_settings(home, &provider_yaml(None));
+            let options = kernel.default_agent_options(Some("glm-4.7".into()));
+            assert_eq!(
+                options.context_window,
+                Some(128_000),
+                "undeclared provider window must fall back to the 128k default \
+                 so the loop's compaction block actually runs"
+            );
+
+            // 2) A provider-declared window outranks the implicit default.
+            write_settings(home, &provider_yaml(Some(256_000)));
+            let options = kernel.default_agent_options(Some("glm-4.7".into()));
+            assert_eq!(options.context_window, Some(256_000));
+
+            // 3) The explicit settings.agent.context_window still wins over
+            //    the provider declaration (preset passthrough precedence).
+            write_settings(
+                home,
+                &format!(
+                    "{}agent:\n  context_window: 65536\n",
+                    provider_yaml(Some(256_000))
+                ),
+            );
+            let options = kernel.default_agent_options(Some("glm-4.7".into()));
+            assert_eq!(options.context_window, Some(65_536));
+        });
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Starriver Desktop — one-shot build & deploy script
-# Usage: ./scripts/setup.sh [debug|release]
+# Starriver Desktop — 一键构建部署脚本
+# 用法: ./scripts/setup.sh [debug|release]
 set -euo pipefail
 
 MODE="${1:-debug}"
@@ -29,7 +29,7 @@ if [ ! -f "$DYLIB" ]; then
 fi
 echo "  Rust build OK ($DYLIB)"
 
-# ── 2. Copy dylib → .node (Electron-loadable format) ──
+# ── 2. Copy dylib → .node (Electron 可加载格式) ──
 echo ""
 echo "[2/4] Copying dylib → .node..."
 cp "$DYLIB" "$NODE_FILE"
