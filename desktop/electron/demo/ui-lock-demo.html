@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Starriver 定时锁 — 交互 Demo</title>
+<style>
+  /* Demo 的样式即正式实现的视觉基准：确认后迁移进 renderer/styles.css + app.tsx 内联样式 */
+  :root {
+    --accent: #2563eb;
+    --surface: #ffffff;
+    --text: #1f2328;
+    --text-muted: #6a737d;
+    --border: #e2e5e9;
+    --bg-soft: #f5f5f5;
+    --danger: #d75644;
+    --font: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font); color: var(--text); background: var(--bg-soft); }
+
+  /* ── 假想的应用底面（代替真实 app shell）── */
+  .fake-app { height: 100vh; display: flex; flex-direction: column; }
+  .fake-titlebar { height: 40px; display: flex; align-items: center; padding: 0 16px; background: #ececec; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-muted); gap: 12px; }
+  .fake-body { flex: 1; display: flex; }
+  .fake-sidebar { width: 220px; background: #f0f0f0; border-right: 1px solid var(--border); padding: 14px; font-size: 13px; color: var(--text-muted); display: flex; flex-direction: column; gap: 10px; }
+  .fake-sidebar b { color: var(--text); font-weight: 600; }
+  .fake-main { flex: 1; padding: 22px; overflow: auto; }
+  .fake-main h2 { font-size: 16px; margin: 0 0 10px; }
+  .fake-msg { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-size: 13px; }
+
+  /* ── Demo 控制台（仅 Demo 存在，正式版无此面板）── */
+  .demo-panel { position: fixed; right: 16px; bottom: 16px; z-index: 9000; background: #111827; color: #e5e7eb; border-radius: 10px; padding: 14px 16px; width: 300px; font-size: 12.5px; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+  .demo-panel h3 { margin: 0 0 8px; font-size: 13px; color: #fff; }
+  .demo-panel .clock { font-family: var(--mono); font-size: 20px; color: #7dd3fc; margin: 2px 0 8px; }
+  .demo-panel .hint { color: #9ca3af; line-height: 1.5; margin: 6px 0 8px; }
+  .demo-panel button { width: 100%; margin-top: 6px; padding: 7px 10px; border: 1px solid #374151; border-radius: 6px; background: #1f2937; color: #e5e7eb; cursor: pointer; font-size: 12.5px; text-align: left; }
+  .demo-panel button:hover { background: #374151; }
+  .demo-panel .speed { display: flex; gap: 6px; margin-top: 6px; }
+  .demo-panel .speed button { text-align: center; padding: 5px 0; }
+  .demo-panel .speed button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* ══ 正式实现的锁屏层样式（对应 renderer/styles.css 的 .ui-lock-*）══ */
+  .ui-lock-overlay {
+    position: fixed; inset: 0; z-index: 4000;
+    background: rgba(17, 24, 39, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ui-lock-card {
+    background: var(--surface); border-radius: 12px; width: 380px;
+    padding: 26px 28px 24px; text-align: center;
+    box-shadow: 0 16px 48px rgba(0,0,0,.35);
+  }
+  .ui-lock-card .lock-icon { font-size: 30px; }
+  .ui-lock-card h1 { font-size: 17px; margin: 8px 0 4px; }
+  .ui-lock-card .desc { font-size: 12.5px; color: var(--text-muted); margin: 0 0 16px; line-height: 1.6; }
+  .ui-lock-card .label { font-size: 12px; color: var(--text-muted); text-align: left; margin: 0 0 6px; }
+  .ui-lock-code-row { display: flex; gap: 8px; margin-bottom: 16px; }
+  .ui-lock-code {
+    flex: 1; font-family: var(--mono); font-size: 19px; letter-spacing: 3px;
+    background: var(--bg-soft); border: 1px dashed var(--border); border-radius: 8px;
+    padding: 9px 10px; user-select: all; overflow: hidden; white-space: nowrap; text-align: center;
+  }
+  .ui-lock-copy { padding: 0 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); cursor: pointer; font-size: 12.5px; color: var(--text); }
+  .ui-lock-copy:hover { background: var(--bg-soft); }
+  .ui-lock-input {
+    width: 100%; padding: 10px 12px; font-size: 15px; font-family: var(--mono); letter-spacing: 2px;
+    border: 1px solid var(--border); border-radius: 8px; outline: none;
+  }
+  .ui-lock-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37,99,235,.15); }
+  .ui-lock-unlock {
+    width: 100%; margin-top: 12px; padding: 10px 0; border: none; border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 14px; cursor: pointer;
+  }
+  .ui-lock-unlock:hover { filter: brightness(1.08); }
+  .ui-lock-error { color: var(--danger); font-size: 12.5px; margin-top: 10px; min-height: 16px; }
+  .ui-lock-shake { animation: ui-lock-shake .35s; }
+  @keyframes ui-lock-shake {
+    0%,100% { transform: translateX(0); }
+    20% { transform: translateX(-8px); }
+    40% { transform: translateX(8px); }
+    60% { transform: translateX(-5px); }
+    80% { transform: translateX(5px); }
+  }
+
+  /* ── Demo 的设置面板（正式版位于 设置→常规→定时锁 分区）── */
+  .demo-settings { position: fixed; left: 16px; top: 56px; z-index: 3500; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; width: 330px; box-shadow: 0 8px 30px rgba(0,0,0,.12); font-size: 13px; }
+  .demo-settings h3 { margin: 0 0 4px; font-size: 14px; }
+  .demo-settings .desc { color: var(--text-muted); font-size: 12px; line-height: 1.55; margin: 0 0 10px; }
+  .demo-settings label.row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; cursor: pointer; }
+  .demo-settings .times { display: flex; gap: 12px; margin-bottom: 6px; }
+  .demo-settings .times label { flex: 1; font-size: 12px; color: var(--text-muted); }
+  .demo-settings .times input { width: 100%; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+  .demo-settings .err { color: var(--danger); font-size: 12px; min-height: 15px; margin-top: 2px; }
+  .demo-settings .status { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<!-- 假想的应用底面：锁屏弹出的"受害者"，用于观察"覆盖但不卸载" -->
+<div class="fake-app">
+  <div class="fake-titlebar">Starriver Desktop <span id="fakeRun">· 会话运行中…</span></div>
+  <div class="fake-body">
+    <div class="fake-sidebar"><b>新任务</b><span>会话 A（运行中）</span><span>会话 B（队列）</span><span>定时任务</span><span>模型</span><span>设置</span></div>
+    <div class="fake-main">
+      <h2>会话 A</h2>
+      <div class="fake-msg">▶ 正在执行：重构 renderer 状态管理（第 3 步 / 共 7 步）…</div>
+      <div class="fake-msg" id="tick-msg">等待任务事件…</div>
+      <div class="fake-msg" style="color:var(--text-muted)">提示：锁屏只是覆盖层——下方界面保持挂载，模拟会话事件持续滚动即证明"锁屏期间会话继续运行"。</div>
+    </div>
+  </div>
+</div>
+
+<!-- Demo 设置面板：正式版位于 设置 → 常规 → 定时锁 分区 -->
+<div class="demo-settings">
+  <h3>定时锁</h3>
+  <p class="desc">在设定的时段内锁定界面，需输入随机口令解锁；后台会话不受影响。</p>
+  <label class="row"><input type="checkbox" id="d-enabled" checked /> 启用定时锁</label>
+  <div class="times">
+    <label>开始时间<input type="time" id="d-start" value="22:00" /></label>
+    <label>结束时间<input type="time" id="d-end" value="06:00" /></label>
+  </div>
+  <div class="err" id="d-err"></div>
+  <div class="status" id="d-status"></div>
+</div>
+
+<!-- Demo 控制台：快进时钟与场景切换（正式版无此面板） -->
+<div class="demo-panel">
+  <h3>Demo 控制台</h3>
+  <div class="clock" id="d-clock">22:00:00</div>
+  <div class="hint">时钟默认以 <b>1 秒 = 1 分钟</b> 快进。把"开始时间"改成 1~2 分钟后即可看到锁屏弹出。</div>
+  <button id="d-scenario-normal">场景①：常规窗口（22:00 – 23:00，即将锁定）</button>
+  <button id="d-scenario-wrap">场景②：跨午夜窗口（22:00 – 06:00）</button>
+  <button id="d-scenario-reset">重置：关闭定时锁并回到 21:59</button>
+  <div class="speed">
+    <button class="sp on" data-ms="1000">1s=1min</button>
+    <button class="sp" data-ms="200">1s=5min</button>
+    <button class="sp" data-ms="0">暂停</button>
+  </div>
+</div>
+
+<!-- 锁屏层：结构与正式实现 LockOverlay 一致 -->
+<div class="ui-lock-overlay" id="lock-overlay" style="display:none">
+  <div class="ui-lock-card">
+    <div class="lock-icon">🔒</div>
+    <h1>界面已锁定</h1>
+    <p class="desc" id="lock-desc">当前处于设定的锁定期，后台会话仍在继续运行。</p>
+    <div class="label">本次解锁口令</div>
+    <div class="ui-lock-code-row">
+      <div class="ui-lock-code" id="lock-code"></div>
+      <button class="ui-lock-copy" id="lock-copy">复制</button>
+    </div>
+    <input class="ui-lock-input" id="lock-input" placeholder="输入口令以解锁" autocomplete="off" spellcheck="false" />
+    <button class="ui-lock-unlock" id="lock-unlock">解锁</button>
+    <div class="ui-lock-error" id="lock-error"></div>
+  </div>
+</div>
+
+<script>
+/* ══ 与正式实现 renderer/uiLock.ts 相同的纯逻辑（Demo 为便于审阅做了内联） ══ */
+function isValidTime(t) { return /^([01]\d|2[0-3]):[0-5]\d$/.test(t); }
+function minutesOfDay(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
+function isInLockWindow(now, start, end) {
+  if (!isValidTime(start) || !isValidTime(end) || start === end) return false;
+  const n = now.getHours() * 60 + now.getMinutes();
+  const s = minutesOfDay(start), e = minutesOfDay(end);
+  return s < e ? (n >= s && n < e) : (n >= s || n < e);
+}
+// occurrence = 本次窗口的起点日期（跨午夜窗口起点回溯到昨日）
+function lockOccurrenceId(now, start, end) {
+  if (!isInLockWindow(now, start, end)) return null;
+  const d = new Date(now);
+  if (minutesOfDay(start) > minutesOfDay(end) && now.getHours() * 60 + now.getMinutes() < minutesOfDay(end)) {
+    d.setDate(d.getDate() - 1); // 跨午夜：凌晨处于昨晚开始的窗口
+  }
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+const CODE_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+function generateLockCode() {
+  const buf = new Uint32Array(10);
+  crypto.getRandomValues(buf);
+  let out = '';
+  for (let i = 0; i < 10; i++) out += CODE_CHARSET[buf[i] % CODE_CHARSET.length]; // 62 整除 2^32 不成立，Demo 从简；正式实现用拒绝采样
+  return out;
+}
+
+/* ══ 状态 ══ */
+const $ = (id) => document.getElementById(id);
+const state = {
+  now: new Date(),            // 模拟时钟
+  speedMs: 1000,              // 1 tick = 1 分钟
+  schedule: { enabled: true, start: '22:00', end: '06:00' },
+  locked: false,
+  code: '',
+  unlockedOccurrence: null,   // 已解锁的窗口（occurrence 内不重锁）
+};
+
+function tick() {
+  const s = state.schedule;
+  const occ = s.enabled ? lockOccurrenceId(state.now, s.start, s.end) : null;
+  if (occ && occ !== state.unlockedOccurrence) {
+    if (!state.locked || state.currentOcc !== occ) { state.code = generateLockCode(); }
+    state.locked = true; state.currentOcc = occ;
+  } else {
+    state.locked = false;
+  }
+  render();
+}
+
+function render() {
+  // 时钟
+  const p = (x) => String(x).padStart(2, '0');
+  $('d-clock').textContent = `${p(state.now.getHours())}:${p(state.now.getMinutes())}:${p(state.now.getSeconds())}`;
+  // 设置状态行
+  const s = state.schedule;
+  $('d-status').textContent = !s.enabled ? '定时锁已关闭'
+    : (isInLockWindow(state.now, s.start, s.end) ? `当前处于锁定期（${s.start} – ${s.end}）` : `当前不在锁定期（${s.start} – ${s.end}）`);
+  // 锁屏层
+  $('lock-overlay').style.display = state.locked ? 'flex' : 'none';
+  if (state.locked) {
+    $('lock-code').textContent = state.code.split('').join(' ');
+    $('lock-desc').textContent = `当前处于设定的锁定期（${s.start} – ${s.end}），后台会话仍在继续运行。`;
+  }
+}
+
+function submitCode() {
+  const input = $('lock-input'), err = $('lock-error');
+  if (input.value.trim() === state.code) {
+    state.unlockedOccurrence = state.currentOcc;
+    state.locked = false; input.value = ''; err.textContent = '';
+    render();
+  } else {
+    err.textContent = '口令不正确，请重试';
+    const card = document.querySelector('.ui-lock-card');
+    card.classList.remove('ui-lock-shake'); void card.offsetWidth; card.classList.add('ui-lock-shake');
+  }
+}
+
+/* ══ Demo 控制台逻辑 ══ */
+$('lock-unlock').addEventListener('click', submitCode);
+$('lock-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitCode(); });
+$('lock-copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(state.code); } catch {}
+  const b = $('lock-copy'); const old = b.textContent; b.textContent = '已复制';
+  setTimeout(() => { b.textContent = old; }, 1500);
+});
+setInterval(() => { // 模拟会话事件持续滚动（证明锁屏不中断会话）
+  if (Math.random() < 0.5) {
+    const m = $('tick-msg');
+    m.textContent = `▶ 事件流：ToolCall completed（${state.now.toTimeString().slice(0, 8)}）…`;
+  }
+}, 1500);
+(function loop() { // 快进时钟：setTimeout 循环以便运行时调速
+  setTimeout(() => {
+    if (state.speedMs > 0) { state.now = new Date(state.now.getTime() + 60000); tick(); }
+    loop();
+  }, state.speedMs || 1000);
+})();
+
+document.querySelectorAll('.sp').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('.sp').forEach((x) => x.classList.remove('on'));
+  b.classList.add('on');
+  state.speedMs = Number(b.dataset.ms);
+}));
+$('d-enabled').addEventListener('change', (e) => { state.schedule.enabled = e.target.checked; tick(); });
+for (const [id, key] of [['d-start', 'start'], ['d-end', 'end']]) {
+  $(id).addEventListener('change', (e) => {
+    const v = e.target.value;
+    const next = { ...state.schedule, [key]: v };
+    if (!isValidTime(next.start) || !isValidTime(next.end) || next.start === next.end) {
+      $('d-err').textContent = next.start === next.end ? '开始与结束时间不能相同' : '时间格式无效';
+      return; // 非法不落库（与正式实现一致）
+    }
+    $('d-err').textContent = '';
+    state.schedule = next;
+    state.unlockedOccurrence = null; state.currentOcc = null; state.locked = false; // 日程变更即时生效并重估
+    tick();
+  });
+}
+function setScenario(start, end, minutesFromMidnight, enabled = true) {
+  state.schedule = { enabled, start, end };
+  $('d-start').value = start; $('d-end').value = end; $('d-enabled').checked = enabled;
+  state.now = new Date(2026, 0, 1, Math.floor(minutesFromMidnight / 60), minutesFromMidnight % 60, 0);
+  state.unlockedOccurrence = null; state.currentOcc = null; state.locked = false;
+  tick();
+}
+$('d-scenario-normal').addEventListener('click', () => setScenario('22:00', '23:00', 21 * 60 + 58)); // 2 分钟后入窗
+$('d-scenario-wrap').addEventListener('click', () => setScenario('22:00', '06:00', 21 * 60 + 58));
+$('d-scenario-reset').addEventListener('click', () => setScenario('22:00', '06:00', 21 * 60 + 59, false));
+
+setScenario('22:00', '23:00', 21 * 60 + 58); // 初始：常规场景，时钟 21:58，2 分钟后锁定
+</script>
+</body>
+</html>

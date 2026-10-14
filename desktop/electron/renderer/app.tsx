@@ -24,6 +24,12 @@ import {
 import { syncPluginTabs } from './contrib/pluginHost';
 import { registerConversationNode, renderToolNode } from './contrib/conversationNodes';
 import { CompactionRow } from './contrib/CompactionRow';
+import {
+  DEFAULT_UI_LOCK_SCHEDULE, LOCK_TICK_MS,
+  evaluateUiLockTick, generateLockCode, isValidTime,
+  loadUiLockSchedule, saveUiLockSchedule,
+  type UiLockSchedule,
+} from './uiLock';
 import './themes';
 
 /* ─── types ─── */
@@ -11442,6 +11448,190 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
 }
 
 
+/* ─── 界面定时锁（Scheduled UI Lock）───
+ * 每日锁定期 + 每次随机 10 位字母数字口令的自律型锁屏。锁屏层只是
+ * fixed 覆盖层：下方应用树保持挂载，daemon 会话与事件流不受影响
+ * （"锁屏期间会话继续运行"）。纯逻辑见 ./uiLock；日程持久化在
+ * localStorage（starriver.uiLock），tick 时重读 — 设置改动即时生效。
+ * 定位是"继续使用的刻意摩擦"，不是安全边界：口令展示在锁屏上，
+ * DevTools 移除覆盖层不在防御范围。 */
+
+/** useUiLock：挂载即判定 + 15s tick + 聚焦/可见性补判定（休眠唤醒追上）。 */
+function useUiLock(): { locked: boolean; code: string; start: string; end: string; unlock: () => void } {
+  const [locked, setLocked] = useState(false);
+  const [code, setCode] = useState('');
+  const [win, setWin] = useState(() => {
+    const s = loadUiLockSchedule();
+    return { start: s.start, end: s.end };
+  });
+  // 已解锁的 occurrence（本窗口内不再重锁）；当前口令所属 occurrence。
+  const unlockedOccRef = useRef<string | null>(null);
+  const currentOccRef = useRef<string | null>(null);
+  const lastScheduleRef = useRef<string>('');
+
+  const tick = useCallback(() => {
+    const schedule = loadUiLockSchedule();
+    const sig = `${schedule.enabled}|${schedule.start}|${schedule.end}`;
+    if (sig !== lastScheduleRef.current) {
+      // 日程变更（含首次读取）：清空解锁记忆，按新日程重新评估。
+      lastScheduleRef.current = sig;
+      unlockedOccRef.current = null;
+      currentOccRef.current = null;
+    }
+    setWin((prev) => (prev.start === schedule.start && prev.end === schedule.end ? prev : { start: schedule.start, end: schedule.end }));
+    const verdict = evaluateUiLockTick(schedule, new Date(), unlockedOccRef.current, currentOccRef.current);
+    if (verdict) {
+      currentOccRef.current = verdict.occurrenceId;
+      if (verdict.relock) setCode(generateLockCode()); // 每个 occurrence 只生成一次新口令
+      setLocked(true);
+    } else {
+      setLocked(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    tick();
+    const id = window.setInterval(tick, LOCK_TICK_MS);
+    const catchUp = () => tick();
+    window.addEventListener('focus', catchUp);
+    document.addEventListener('visibilitychange', catchUp);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener('focus', catchUp);
+      document.removeEventListener('visibilitychange', catchUp);
+    };
+  }, [tick]);
+
+  const unlock = useCallback(() => {
+    unlockedOccRef.current = currentOccRef.current; // 本 occurrence 内不再重锁
+    setLocked(false);
+  }, []);
+
+  return { locked, code, start: win.start, end: win.end, unlock };
+}
+
+export function LockOverlay({ code, start, end, onUnlock }: {
+  code: string; start: string; end: string; onUnlock: () => void;
+}) {
+  const { t } = useI18n();
+  const [value, setValue] = useState('');
+  const [error, setError] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const valueRef = useRef('');
+  valueRef.current = value;
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const submit = () => {
+    if (valueRef.current.trim() === code) {
+      onUnlock();
+    } else {
+      setError(true);
+      setValue('');
+      inputRef.current?.focus();
+      window.setTimeout(() => setError(false), 400);
+    }
+  };
+  const copy = () => {
+    try { void navigator.clipboard?.writeText(code); } catch { /* clipboard 不可用 — 忽略 */ }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="ui-lock-overlay" data-testid="ui-lock-overlay" role="dialog" aria-modal="true" aria-label={t('uiLock.lockedTitle')}>
+      <div className="ui-lock-card">
+        <div style={{ fontSize: 30, lineHeight: 1 }}>🔒</div>
+        <h1 style={{ fontSize: 17, margin: '8px 0 4px' }}>{t('uiLock.lockedTitle')}</h1>
+        <p style={{ fontSize: 12.5, color: 'var(--text-muted)', margin: '0 0 16px', lineHeight: 1.6 }}>
+          {t('uiLock.lockedDesc')}<br />
+          {t('uiLock.window', { start, end })}
+        </p>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'left', marginBottom: 6 }}>{t('uiLock.codeLabel')}</div>
+        <div className="ui-lock-code-row">
+          <div className="ui-lock-code" data-testid="ui-lock-code">{code}</div>
+          <button type="button" className="ui-lock-copy" onClick={copy}>{copied ? t('uiLock.copied') : t('uiLock.copy')}</button>
+        </div>
+        <input
+          ref={inputRef}
+          className={'ui-lock-input' + (error ? ' ui-lock-shake' : '')}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+          placeholder={t('uiLock.inputLabel')}
+          aria-label={t('uiLock.inputLabel')}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button type="button" className="ui-lock-unlock" onClick={submit}>{t('uiLock.unlock')}</button>
+        <div className="ui-lock-error" data-testid="ui-lock-error">{error ? t('uiLock.wrongCode') : ''}</div>
+      </div>
+    </div>
+  );
+}
+
+/** App 三条返回路径（checking / error / shell 替换 / 主 shell）末尾统一挂载；
+ *  未锁定时渲染 null，锁定时覆盖全屏。 */
+export function UiLockGate() {
+  const lock = useUiLock();
+  if (!lock.locked) return null;
+  return <LockOverlay code={lock.code} start={lock.start} end={lock.end} onUnlock={lock.unlock} />;
+}
+
+/** 设置 → 常规 → 定时锁分区：启用开关 + 起止时间，合法变更即时持久化
+ *  （无保存按钮，与 localStorage 分区惯例一致）；无效/相同时间阻断保存。 */
+export function UiLockScheduleSection() {
+  const { t } = useI18n();
+  const [schedule, setSchedule] = useState<UiLockSchedule>(() => {
+    const s = loadUiLockSchedule();
+    // 兜底：本地存储可能被外部改坏 — 坏日程（start===end 等）回到默认，
+    // 让用户从已知状态重新配置。
+    return s.start === s.end ? { ...DEFAULT_UI_LOCK_SCHEDULE } : s;
+  });
+  const [errKey, setErrKey] = useState<string | null>(null);
+
+  const update = (patch: Partial<UiLockSchedule>) => {
+    const next = { ...schedule, ...patch };
+    if (!isValidTime(next.start) || !isValidTime(next.end) || next.start === next.end) {
+      setErrKey('uiLock.invalidRange'); // 无效/相同：行内报错且不落库
+      return;
+    }
+    setErrKey(null);
+    setSchedule(next);
+    saveUiLockSchedule(next);
+  };
+  const timeInputStyle: React.CSSProperties = {
+    width: '100%', marginTop: 4, padding: '6px 8px', border: '1px solid var(--border-strong)',
+    borderRadius: 6, fontSize: 13, background: 'var(--surface)', color: 'var(--text)',
+  };
+
+  return (
+    <div data-testid="ui-lock-section" style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 14 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{t('uiLock.title')}</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 10 }}>{t('uiLock.desc')}</div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 10, fontSize: 13.5 }}>
+        <input type="checkbox" aria-label="ui-lock-enabled" checked={schedule.enabled} onChange={(e) => update({ enabled: e.target.checked })} />
+        {t('uiLock.enable')}
+      </label>
+      <div style={{ display: 'flex', gap: 12 }}>
+        <label style={{ flex: 1, fontSize: 12, color: 'var(--text-muted)' }}>
+          {t('uiLock.start')}
+          <input type="time" aria-label="ui-lock-start" value={schedule.start} onChange={(e) => update({ start: e.target.value })} style={timeInputStyle} />
+        </label>
+        <label style={{ flex: 1, fontSize: 12, color: 'var(--text-muted)' }}>
+          {t('uiLock.end')}
+          <input type="time" aria-label="ui-lock-end" value={schedule.end} onChange={(e) => update({ end: e.target.value })} style={timeInputStyle} />
+        </label>
+      </div>
+      <div data-testid="ui-lock-error" style={{ color: 'var(--danger)', fontSize: 12, minHeight: 15, marginTop: 4 }}>
+        {errKey ? t(errKey) : ''}
+      </div>
+    </div>
+  );
+}
+
+
 /* ─── SettingsDialog ─── */
 
 /// Remote-companion pairing (iPhone): expose the protocol server address +
@@ -12131,6 +12321,7 @@ export function SettingsDialog({ onClose }: {
                   supported theme for now; boot forces the default so a stale
                   saved pick can't stick with no picker to undo it. */}
               <CodeTokenColorsSection />
+              <UiLockScheduleSection />
             </>
           )}
           {tab === 'coding' && (
@@ -12588,29 +12779,40 @@ function App() {
     syncPluginTabs().catch((error) => console.error('[plugin-host] sync failed:', error));
   }, []);
 
-  if (backendState === 'error') return <BackendErrorScreen error={backendError || ''} />;
+  if (backendState === 'error') return (
+    <>
+      <BackendErrorScreen error={backendError || ''} />
+      <UiLockGate />
+    </>
+  );
   if (backendState === 'checking') return (
-    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-soft)', color: 'var(--text-muted)', fontFamily: 'var(--font)' }}>
-      正在启动…
-    </div>
+    <>
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-soft)', color: 'var(--text-muted)', fontFamily: 'var(--font)' }}>
+        正在启动…
+      </div>
+      <UiLockGate />
+    </>
   );
 
   const shellReplacement = !shellDismissed ? getShellReplacement() : null;
   if (shellReplacement) {
     return (
-      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '6px 12px', borderBottom: '1px solid var(--border)',
-          background: 'var(--sidebar-bg)', fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0,
-        }}>
-          <span>Shell plugin: {shellReplacement.name}</span>
-          <button className="btn btn-secondary btn-small" onClick={() => setShellDismissed(true)}>
-            {t('settings.backToBuiltin')}
-          </button>
+      <>
+        <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '6px 12px', borderBottom: '1px solid var(--border)',
+            background: 'var(--sidebar-bg)', fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0,
+          }}>
+            <span>Shell plugin: {shellReplacement.name}</span>
+            <button className="btn btn-secondary btn-small" onClick={() => setShellDismissed(true)}>
+              {t('settings.backToBuiltin')}
+            </button>
+          </div>
+          <div style={{ flex: 1, minHeight: 0 }}>{shellReplacement.render({ debugEnabled })}</div>
         </div>
-        <div style={{ flex: 1, minHeight: 0 }}>{shellReplacement.render({ debugEnabled })}</div>
-      </div>
+        <UiLockGate />
+      </>
     );
   }
 
@@ -12670,6 +12872,8 @@ function App() {
       )}
     </div>
     <OpenSessionBridge setTab={setTab} />
+    {/* 定时锁覆盖层：最后挂载、fixed 全屏 — 覆盖一切但不卸载应用树（会话继续运行） */}
+    <UiLockGate />
     </WorkspaceProvider>
   );
 }

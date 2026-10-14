@@ -2382,3 +2382,57 @@ button[data-tip]:hover::after,
 @media (prefers-reduced-motion: reduce) {
   .sb-run-dot { animation: none; opacity: .85; }
 }
+
+/* ─── 界面定时锁（Scheduled UI Lock）───
+   锁屏层只是覆盖层：zIndex 4000 盖过 Settings(1000) 等一切浮层，
+   下方应用树保持挂载（后台会话继续运行）。视觉基准来自
+   demo/ui-lock-demo.html。 */
+.ui-lock-overlay {
+  position: fixed; inset: 0; z-index: 4000;
+  background: var(--overlay-strong, rgba(0, 0, 0, 0.55));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+}
+.ui-lock-card {
+  background: var(--surface); border-radius: 12px; width: 380px; max-width: calc(100vw - 48px);
+  padding: 26px 28px 20px; text-align: center;
+  box-shadow: var(--shadow-md, 0 16px 48px rgba(0, 0, 0, 0.35));
+}
+.ui-lock-card h1 { font-size: 17px; margin: 8px 0 4px; color: var(--text); }
+.ui-lock-code-row { display: flex; gap: 8px; margin-bottom: 16px; }
+.ui-lock-code {
+  flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 19px;
+  letter-spacing: 3px; color: var(--text);
+  background: var(--bg-soft); border: 1px dashed var(--border); border-radius: 8px;
+  padding: 9px 10px; user-select: all; overflow: hidden; white-space: nowrap; text-align: center;
+}
+.ui-lock-copy {
+  padding: 0 14px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); cursor: pointer; font-size: 12.5px; color: var(--text);
+}
+.ui-lock-copy:hover { background: var(--bg-soft); }
+.ui-lock-input {
+  width: 100%; padding: 10px 12px; font-size: 15px; color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 2px;
+  border: 1px solid var(--border-strong, var(--border)); border-radius: 8px; outline: none;
+  background: var(--surface);
+}
+.ui-lock-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft, rgba(47, 52, 66, 0.15)); }
+.ui-lock-unlock {
+  width: 100%; margin-top: 12px; padding: 10px 0; border: none; border-radius: 8px;
+  background: var(--accent); color: var(--on-accent, #fff); font-size: 14px; cursor: pointer;
+}
+.ui-lock-unlock:hover { filter: brightness(1.08); }
+.ui-lock-error { color: var(--danger); font-size: 12.5px; margin-top: 10px; min-height: 16px; }
+.ui-lock-shake { animation: ui-lock-shake 0.35s; }
+@keyframes ui-lock-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(5px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-lock-shake { animation: none; }
+}

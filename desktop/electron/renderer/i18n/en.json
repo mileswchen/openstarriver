@@ -30,6 +30,23 @@
     "diffAdd": "Diff additions",
     "diffDel": "Diff deletions"
   },
+  "uiLock": {
+    "title": "Scheduled UI Lock",
+    "desc": "Locks the interface during the configured window; unlock with a random passcode. Background sessions are unaffected.",
+    "enable": "Enable scheduled lock",
+    "start": "Start time",
+    "end": "End time",
+    "invalidRange": "Start and end must be valid and different times",
+    "lockedTitle": "Interface locked",
+    "lockedDesc": "The scheduled lock window is active. Background sessions keep running.",
+    "codeLabel": "Unlock passcode for this window",
+    "copy": "Copy",
+    "copied": "Copied",
+    "inputLabel": "Enter passcode to unlock",
+    "unlock": "Unlock",
+    "wrongCode": "Incorrect passcode, please retry",
+    "window": "Lock window: {start} – {end}"
+  },
   "chat": {
     "title": "Chat",
     "placeholder": "Type a message to start chatting",

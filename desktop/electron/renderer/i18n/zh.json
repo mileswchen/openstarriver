@@ -30,6 +30,23 @@
     "diffAdd": "Diff 新增",
     "diffDel": "Diff 删除"
   },
+  "uiLock": {
+    "title": "定时锁",
+    "desc": "在设定的时段内锁定界面，需输入随机口令解锁；后台会话不受影响。",
+    "enable": "启用定时锁",
+    "start": "开始时间",
+    "end": "结束时间",
+    "invalidRange": "开始与结束时间需为有效且不相同的时间",
+    "lockedTitle": "界面已锁定",
+    "lockedDesc": "当前处于设定的锁定期，后台会话仍在继续运行。",
+    "codeLabel": "本次解锁口令",
+    "copy": "复制",
+    "copied": "已复制",
+    "inputLabel": "输入口令以解锁",
+    "unlock": "解锁",
+    "wrongCode": "口令不正确，请重试",
+    "window": "锁定期：{start} – {end}"
+  },
   "chat": {
     "title": "对话",
     "placeholder": "输入消息…",
