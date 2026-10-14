@@ -606,6 +606,8 @@ const ICON_FOLDER_OPEN = '<svg width="13" height="13" viewBox="0 0 24 24" fill="
 const ICON_GIT_BRANCH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
 /* Sidebar phone button: opens the Remote Access (iPhone pairing) dialog. */
 const ICON_PHONE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>';
+// 界面定时锁（sidebar 左下角入口）— feather "lock"
+const ICON_LOCK = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 /* Thinking-row icon: monochrome stroke brain (Lucide), same style/size as the tool icons. */
 const ICON_SYSTEM = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 const ICON_CONTEXT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
@@ -11579,8 +11581,9 @@ export function UiLockGate() {
   return <LockOverlay code={lock.code} start={lock.start} end={lock.end} onUnlock={lock.unlock} />;
 }
 
-/** 设置 → 常规 → 定时锁分区：启用开关 + 起止时间，合法变更即时持久化
- *  （无保存按钮，与 localStorage 分区惯例一致）；无效/相同时间阻断保存。 */
+/** 定时锁配置：启用开关 + 起止时间，合法变更即时持久化
+ *  （无保存按钮，与 localStorage 分区惯例一致）；无效/相同时间阻断保存。
+ *  现挂在侧栏左下角锁形按钮弹出的 UiLockDialog 中（标题由对话框头部承载）。 */
 export function UiLockScheduleSection() {
   const { t } = useI18n();
   const [schedule, setSchedule] = useState<UiLockSchedule>(() => {
@@ -11607,8 +11610,7 @@ export function UiLockScheduleSection() {
   };
 
   return (
-    <div data-testid="ui-lock-section" style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 14 }}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{t('uiLock.title')}</div>
+    <div data-testid="ui-lock-section">
       <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 10 }}>{t('uiLock.desc')}</div>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 10, fontSize: 13.5 }}>
         <input type="checkbox" aria-label="ui-lock-enabled" checked={schedule.enabled} onChange={(e) => update({ enabled: e.target.checked })} />
@@ -12321,7 +12323,6 @@ export function SettingsDialog({ onClose }: {
                   supported theme for now; boot forces the default so a stale
                   saved pick can't stick with no picker to undo it. */}
               <CodeTokenColorsSection />
-              <UiLockScheduleSection />
             </>
           )}
           {tab === 'coding' && (
@@ -12363,6 +12364,36 @@ function RemoteAccessDialog({ onClose }: { onClose: () => void }) {
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: 'var(--text-muted)', padding: '0 2px' }}>✕</button>
         </div>
         <RemoteAccessSection />
+      </div>
+    </div>
+  );
+}
+
+/** 定时锁配置对话框：侧栏左下角锁形按钮打开（独立入口，不再占用设置常规 tab）。 */
+function UiLockDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'var(--overlay-strong)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+    }} onClick={onClose}>
+      <div style={{
+        background: 'var(--surface)', borderRadius: 10, width: 460,
+        padding: '16px 20px 18px', boxShadow: 'var(--shadow-md)',
+      }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <h3 style={{ margin: 0, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ display: 'inline-flex', color: 'var(--text-secondary)' }} dangerouslySetInnerHTML={{ __html: ICON_LOCK }} />
+            {t('uiLock.title')}
+          </h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: 'var(--text-muted)', padding: '0 2px' }}>✕</button>
+        </div>
+        <UiLockScheduleSection />
       </div>
     </div>
   );
@@ -12738,6 +12769,8 @@ function App() {
   };
   const [showSettings, setShowSettings] = useState(false);
   const [showRemoteAccess, setShowRemoteAccess] = useState(false);
+  // 定时锁配置入口：侧栏左下角锁形按钮（手机图标左侧）
+  const [showUiLock, setShowUiLock] = useState(false);
   // API Debug is currently off with no toggle surface (the Settings → Coding
   // switch was removed); the plumbing stays so the panel can be re-wired.
   const [debugEnabled] = useState(false);
@@ -12842,6 +12875,15 @@ function App() {
           </button>
           <button
             className="nav-item"
+            onClick={() => setShowUiLock(true)}
+            style={{ width: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 0, paddingTop: 12, paddingBottom: 12 }}
+            title={t('uiLock.title')}
+            aria-label={t('uiLock.title')}
+          >
+            <span className="nav-icon" dangerouslySetInnerHTML={{ __html: ICON_LOCK }} />
+          </button>
+          <button
+            className="nav-item"
             onClick={() => setShowRemoteAccess(true)}
             style={{ width: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 0, paddingTop: 12, paddingBottom: 12 }}
             title={t('settings.remoteTitle')}
@@ -12868,6 +12910,11 @@ function App() {
       {showRemoteAccess && (
         <RemoteAccessDialog
           onClose={() => setShowRemoteAccess(false)}
+        />
+      )}
+      {showUiLock && (
+        <UiLockDialog
+          onClose={() => setShowUiLock(false)}
         />
       )}
     </div>
