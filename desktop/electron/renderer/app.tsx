@@ -25,9 +25,9 @@ import { syncPluginTabs } from './contrib/pluginHost';
 import { registerConversationNode, renderToolNode } from './contrib/conversationNodes';
 import { CompactionRow } from './contrib/CompactionRow';
 import {
-  DEFAULT_UI_LOCK_SCHEDULE, LOCK_TICK_MS,
+  DEFAULT_UI_LOCK_SCHEDULE, LOCK_TICK_MS, UI_LOCK_APPLY_EVENT,
   evaluateUiLockTick, generateLockCode, isValidTime,
-  loadUiLockSchedule, saveUiLockSchedule,
+  loadUiLockSchedule, loadUiLockUnlockedOccurrence, saveUiLockSchedule, saveUiLockUnlockedOccurrence,
   type UiLockSchedule,
 } from './uiLock';
 import './themes';
@@ -11454,11 +11454,15 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
  * 每日锁定期 + 每次随机 10 位字母数字口令的自律型锁屏。锁屏层只是
  * fixed 覆盖层：下方应用树保持挂载，daemon 会话与事件流不受影响
  * （"锁屏期间会话继续运行"）。纯逻辑见 ./uiLock；日程持久化在
- * localStorage（starriver.uiLock），tick 时重读 — 设置改动即时生效。
+ * localStorage（starriver.uiLock），tick 时重读；设置弹窗点「确定」会派发
+ * UI_LOCK_APPLY_EVENT 立即重读生效（见 useUiLock）。
  * 定位是"继续使用的刻意摩擦"，不是安全边界：口令展示在锁屏上，
  * DevTools 移除覆盖层不在防御范围。 */
 
-/** useUiLock：挂载即判定 + 15s tick + 聚焦/可见性补判定（休眠唤醒追上）。 */
+/** useUiLock：挂载即判定 + 15s tick + 聚焦/可见性补判定（休眠唤醒追上）。
+ *  解锁记忆（unlockedOccurrence）持久化到 localStorage：跨启动生效——
+ *  当天（同一 occurrence）解锁过就不再锁；日程变更或设置里重新点
+ *  「确定」（UI_LOCK_APPLY_EVENT）时清除，重新武装。 */
 function useUiLock(): { locked: boolean; code: string; start: string; end: string; unlock: () => void } {
   const [locked, setLocked] = useState(false);
   const [code, setCode] = useState('');
@@ -11467,17 +11471,22 @@ function useUiLock(): { locked: boolean; code: string; start: string; end: strin
     return { start: s.start, end: s.end };
   });
   // 已解锁的 occurrence（本窗口内不再重锁）；当前口令所属 occurrence。
-  const unlockedOccRef = useRef<string | null>(null);
+  // 初值取持久化标记（undefined = 尚未从 localStorage 初始化的哨兵）。
+  const unlockedOccRef = useRef<string | null | undefined>(undefined);
   const currentOccRef = useRef<string | null>(null);
-  const lastScheduleRef = useRef<string>('');
+  // null = 尚未读到过日程（首帧不清解锁记忆，否则持久化标记会被误清）。
+  const lastScheduleRef = useRef<string | null>(null);
 
   const tick = useCallback(() => {
     const schedule = loadUiLockSchedule();
     const sig = `${schedule.enabled}|${schedule.start}|${schedule.end}`;
-    if (sig !== lastScheduleRef.current) {
-      // 日程变更（含首次读取）：清空解锁记忆，按新日程重新评估。
-      lastScheduleRef.current = sig;
+    if (unlockedOccRef.current === undefined) unlockedOccRef.current = loadUiLockUnlockedOccurrence();
+    const changed = lastScheduleRef.current !== null && sig !== lastScheduleRef.current;
+    lastScheduleRef.current = sig;
+    if (changed) {
+      // 日程变更（设置里点「确定」/外部改动）：清空解锁记忆（含持久化），按新日程重新评估。
       unlockedOccRef.current = null;
+      saveUiLockUnlockedOccurrence(null);
       currentOccRef.current = null;
     }
     setWin((prev) => (prev.start === schedule.start && prev.end === schedule.end ? prev : { start: schedule.start, end: schedule.end }));
@@ -11495,17 +11504,27 @@ function useUiLock(): { locked: boolean; code: string; start: string; end: strin
     tick();
     const id = window.setInterval(tick, LOCK_TICK_MS);
     const catchUp = () => tick();
+    const applyNow = () => {
+      // 「确定」= 重新设置/重新武装：清除已解锁标记（含持久化）后立即重判，
+      // 当前处于窗口内则立刻锁屏。
+      unlockedOccRef.current = null;
+      saveUiLockUnlockedOccurrence(null);
+      tick();
+    };
     window.addEventListener('focus', catchUp);
     document.addEventListener('visibilitychange', catchUp);
+    window.addEventListener(UI_LOCK_APPLY_EVENT, applyNow);
     return () => {
       window.clearInterval(id);
       window.removeEventListener('focus', catchUp);
       document.removeEventListener('visibilitychange', catchUp);
+      window.removeEventListener(UI_LOCK_APPLY_EVENT, applyNow);
     };
   }, [tick]);
 
   const unlock = useCallback(() => {
     unlockedOccRef.current = currentOccRef.current; // 本 occurrence 内不再重锁
+    if (unlockedOccRef.current) saveUiLockUnlockedOccurrence(unlockedOccRef.current); // 跨启动生效
     setLocked(false);
   }, []);
 
@@ -11544,13 +11563,13 @@ export function LockOverlay({ code, start, end, onUnlock }: {
   return (
     <div className="ui-lock-overlay" data-testid="ui-lock-overlay" role="dialog" aria-modal="true" aria-label={t('uiLock.lockedTitle')}>
       <div className="ui-lock-card">
-        <div style={{ fontSize: 30, lineHeight: 1 }}>🔒</div>
-        <h1 style={{ fontSize: 17, margin: '8px 0 4px' }}>{t('uiLock.lockedTitle')}</h1>
-        <p style={{ fontSize: 12.5, color: 'var(--text-muted)', margin: '0 0 16px', lineHeight: 1.6 }}>
+        <div className="ui-lock-badge" aria-hidden="true"><span className="nav-icon" dangerouslySetInnerHTML={{ __html: ICON_LOCK }} /></div>
+        <h1>{t('uiLock.lockedTitle')}</h1>
+        <p className="ui-lock-desc">
           {t('uiLock.lockedDesc')}<br />
           {t('uiLock.window', { start, end })}
         </p>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'left', marginBottom: 6 }}>{t('uiLock.codeLabel')}</div>
+        <div className="ui-lock-code-label">{t('uiLock.codeLabel')}</div>
         <div className="ui-lock-code-row">
           <div className="ui-lock-code" data-testid="ui-lock-code">{code}</div>
           <button type="button" className="ui-lock-copy" onClick={copy}>{copied ? t('uiLock.copied') : t('uiLock.copy')}</button>
@@ -11581,9 +11600,11 @@ export function UiLockGate() {
   return <LockOverlay code={lock.code} start={lock.start} end={lock.end} onUnlock={lock.unlock} />;
 }
 
-/** 定时锁配置：启用开关 + 起止时间，合法变更即时持久化
- *  （无保存按钮，与 localStorage 分区惯例一致）；无效/相同时间阻断保存。
- *  现挂在侧栏左下角锁形按钮弹出的 UiLockDialog 中（标题由对话框头部承载）。 */
+/** 定时锁配置：启用开关 + 起止时间 — macOS 惯例的草稿-确认模式。
+ *  修改只更新本地草稿；点「确定」校验通过才持久化，并派发
+ *  UI_LOCK_APPLY_EVENT 让 useUiLock 立即重判（当前处于锁定期内即刻锁屏，
+ *  否则按日程在进入窗口时锁定）。无效/相同时间行内报错且不落库；
+ *  Esc / 关闭按钮放弃草稿。挂在侧栏左下角锁形按钮弹出的 UiLockDialog 中。 */
 export function UiLockScheduleSection() {
   const { t } = useI18n();
   const [schedule, setSchedule] = useState<UiLockSchedule>(() => {
@@ -11595,39 +11616,40 @@ export function UiLockScheduleSection() {
   const [errKey, setErrKey] = useState<string | null>(null);
 
   const update = (patch: Partial<UiLockSchedule>) => {
-    const next = { ...schedule, ...patch };
-    if (!isValidTime(next.start) || !isValidTime(next.end) || next.start === next.end) {
+    setSchedule((prev) => ({ ...prev, ...patch })); // 草稿：不校验、不落库
+    setErrKey(null);
+  };
+
+  const confirm = () => {
+    if (!isValidTime(schedule.start) || !isValidTime(schedule.end) || schedule.start === schedule.end) {
       setErrKey('uiLock.invalidRange'); // 无效/相同：行内报错且不落库
       return;
     }
     setErrKey(null);
-    setSchedule(next);
-    saveUiLockSchedule(next);
-  };
-  const timeInputStyle: React.CSSProperties = {
-    width: '100%', marginTop: 4, padding: '6px 8px', border: '1px solid var(--border-strong)',
-    borderRadius: 6, fontSize: 13, background: 'var(--surface)', color: 'var(--text)',
+    saveUiLockSchedule(schedule);
+    window.dispatchEvent(new CustomEvent(UI_LOCK_APPLY_EVENT));
   };
 
   return (
-    <div data-testid="ui-lock-section">
-      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 10 }}>{t('uiLock.desc')}</div>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 10, fontSize: 13.5 }}>
-        <input type="checkbox" aria-label="ui-lock-enabled" checked={schedule.enabled} onChange={(e) => update({ enabled: e.target.checked })} />
+    <div className="ui-lock-section" data-testid="ui-lock-section">
+      <div className="ui-lock-note">{t('uiLock.desc')}</div>
+      <label className="ui-lock-enable-row">
+        <input type="checkbox" aria-label="ui-lock-enabled" className="ui-lock-switch" checked={schedule.enabled} onChange={(e) => update({ enabled: e.target.checked })} />
         {t('uiLock.enable')}
       </label>
-      <div style={{ display: 'flex', gap: 12 }}>
-        <label style={{ flex: 1, fontSize: 12, color: 'var(--text-muted)' }}>
+      <div className="ui-lock-fields">
+        <label className="ui-lock-field">
           {t('uiLock.start')}
-          <input type="time" aria-label="ui-lock-start" value={schedule.start} onChange={(e) => update({ start: e.target.value })} style={timeInputStyle} />
+          <input type="time" aria-label="ui-lock-start" className="ui-lock-time" value={schedule.start} onChange={(e) => update({ start: e.target.value })} />
         </label>
-        <label style={{ flex: 1, fontSize: 12, color: 'var(--text-muted)' }}>
+        <label className="ui-lock-field">
           {t('uiLock.end')}
-          <input type="time" aria-label="ui-lock-end" value={schedule.end} onChange={(e) => update({ end: e.target.value })} style={timeInputStyle} />
+          <input type="time" aria-label="ui-lock-end" className="ui-lock-time" value={schedule.end} onChange={(e) => update({ end: e.target.value })} />
         </label>
       </div>
-      <div data-testid="ui-lock-error" style={{ color: 'var(--danger)', fontSize: 12, minHeight: 15, marginTop: 4 }}>
-        {errKey ? t(errKey) : ''}
+      <div className="ui-lock-error" data-testid="ui-lock-error">{errKey ? t(errKey) : ''}</div>
+      <div className="ui-lock-dialog-actions">
+        <button type="button" className="ui-lock-confirm" onClick={confirm}>{t('uiLock.confirm')}</button>
       </div>
     </div>
   );
@@ -12369,7 +12391,8 @@ function RemoteAccessDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** 定时锁配置对话框：侧栏左下角锁形按钮打开（独立入口，不再占用设置常规 tab）。 */
+/** 定时锁配置对话框：侧栏左下角锁形按钮打开（独立入口，不再占用设置常规 tab）。
+ *  macOS sheet 视觉：15px/600 标题 + 发丝分隔线，Esc 或 ✕ 关闭（放弃草稿）。 */
 function UiLockDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   useEffect(() => {
@@ -12382,16 +12405,13 @@ function UiLockDialog({ onClose }: { onClose: () => void }) {
       position: 'fixed', inset: 0, background: 'var(--overlay-strong)',
       display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
     }} onClick={onClose}>
-      <div style={{
-        background: 'var(--surface)', borderRadius: 10, width: 460,
-        padding: '16px 20px 18px', boxShadow: 'var(--shadow-md)',
-      }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <h3 style={{ margin: 0, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className="ui-lock-dialog" role="dialog" aria-modal="true" aria-label={t('uiLock.title')} onClick={(e) => e.stopPropagation()}>
+        <div className="ui-lock-dialog-header">
+          <h3 className="ui-lock-dialog-title">
             <span style={{ display: 'inline-flex', color: 'var(--text-secondary)' }} dangerouslySetInnerHTML={{ __html: ICON_LOCK }} />
             {t('uiLock.title')}
           </h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: 'var(--text-muted)', padding: '0 2px' }}>✕</button>
+          <button type="button" className="ui-lock-close" onClick={onClose} aria-label={t('settings.close')}>✕</button>
         </div>
         <UiLockScheduleSection />
       </div>
@@ -12873,23 +12893,24 @@ function App() {
             <span className="nav-icon" dangerouslySetInnerHTML={{ __html: tabIcons.settings || "" }} />
             {t('nav.settings')}
           </button>
-          <button
-            className="nav-item"
-            onClick={() => setShowUiLock(true)}
-            style={{ width: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 0, paddingTop: 12, paddingBottom: 12 }}
-            title={t('uiLock.title')}
-            aria-label={t('uiLock.title')}
-          >
-            <span className="nav-icon" dangerouslySetInnerHTML={{ __html: ICON_LOCK }} />
-          </button>
-          <button
-            className="nav-item"
-            onClick={() => setShowRemoteAccess(true)}
-            style={{ width: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 0, paddingTop: 12, paddingBottom: 12 }}
-            title={t('settings.remoteTitle')}
-          >
-            <span className="nav-icon" dangerouslySetInnerHTML={{ __html: ICON_PHONE }} />
-          </button>
+          {/* 锁形（定时锁）+ 手机（远程配对）成组紧邻贴右缘 — 用户反馈两图标不应分开 */}
+          <div className="sb-footer-icons">
+            <button
+              className="nav-item sb-footer-icon"
+              onClick={() => setShowUiLock(true)}
+              title={t('uiLock.title')}
+              aria-label={t('uiLock.title')}
+            >
+              <span className="nav-icon" dangerouslySetInnerHTML={{ __html: ICON_LOCK }} />
+            </button>
+            <button
+              className="nav-item sb-footer-icon"
+              onClick={() => setShowRemoteAccess(true)}
+              title={t('settings.remoteTitle')}
+            >
+              <span className="nav-icon" dangerouslySetInnerHTML={{ __html: ICON_PHONE }} />
+            </button>
+          </div>
         </div>
       </aside>
       {/* Resize handle */}

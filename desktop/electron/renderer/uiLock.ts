@@ -13,7 +13,10 @@
  *   DevTools 移除覆盖层不在防御范围。
  * - "occurrence"（一次锁定窗口实例）= 当前窗口起点的日期（跨午夜窗口
  *   凌晨时段回溯到昨日起点）。解锁按 occurrence 记忆：本窗口内不再
- *   重锁，下一次 occurrence 到来自动重锁并生成新口令。
+ *   重锁，下一次 occurrence 到来自动重锁并生成新口令。自 2026-10-16
+ *   （用户决策）起，解锁记忆持久化到 localStorage（`starriver.uiLock.unlocked`），
+ *   跨启动生效——当天解锁过就不再锁；重新设置（设置弹窗点「确定」）
+ *   或次日新 occurrence 自动恢复锁定。
  */
 
 export interface UiLockSchedule {
@@ -28,6 +31,11 @@ export const UI_LOCK_STORAGE_KEY = 'starriver.uiLock';
 export const LOCK_CODE_LENGTH = 10;
 /** 主循环 tick：锁进入/退出的最大感知延迟 */
 export const LOCK_TICK_MS = 15_000;
+/** 设置弹窗点「确定」后派发：useUiLock 监听并立即重判（窗口内即刻锁屏，不必等 15s tick）。 */
+export const UI_LOCK_APPLY_EVENT = 'starriver.uiLock-apply';
+/** 持久化"本 occurrence 已解锁"标记（用户决策 2026-10-16）：解锁后跨启动不再重锁；
+ *  重新设置（弹窗点「确定」）或次日新 occurrence 自动恢复锁定。 */
+export const UI_LOCK_UNLOCKED_KEY = 'starriver.uiLock.unlocked';
 
 export const UI_LOCK_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -126,6 +134,28 @@ export function saveUiLockSchedule(schedule: UiLockSchedule, storage?: Storage):
   const store = storage ?? globalThis.localStorage;
   try {
     store?.setItem(UI_LOCK_STORAGE_KEY, JSON.stringify(schedule));
+  } catch {
+    /* storage 不可用 — 忽略 */
+  }
+}
+
+/** 读取持久化的"本 occurrence 已解锁"标记；缺失/格式非法回退 null。 */
+export function loadUiLockUnlockedOccurrence(storage?: Storage): string | null {
+  const store = storage ?? globalThis.localStorage;
+  try {
+    const raw = store?.getItem(UI_LOCK_UNLOCKED_KEY);
+    return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 写入/清除"本 occurrence 已解锁"标记；occ 为 null 即清除。storage 不可用时静默。 */
+export function saveUiLockUnlockedOccurrence(occ: string | null, storage?: Storage): void {
+  const store = storage ?? globalThis.localStorage;
+  try {
+    if (occ == null) store?.removeItem(UI_LOCK_UNLOCKED_KEY);
+    else store?.setItem(UI_LOCK_UNLOCKED_KEY, occ);
   } catch {
     /* storage 不可用 — 忽略 */
   }

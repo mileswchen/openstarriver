@@ -34,6 +34,7 @@
     "title": "Scheduled UI Lock",
     "desc": "Locks the interface during the configured window; unlock with a random passcode. Background sessions are unaffected.",
     "enable": "Enable scheduled lock",
+    "confirm": "Done",
     "start": "Start time",
     "end": "End time",
     "invalidRange": "Start and end must be valid and different times",

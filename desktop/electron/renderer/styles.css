@@ -510,6 +510,10 @@ button { font-family: inherit; }
 /* ── Message list (middle window) ── */
 .message-list {
   flex: 1; overflow-y: auto; padding: 20px 24px;
+  /* 恒定预留右侧滚动条槽(8px)：让列表内内容（含 turn-files 卡片、用户气泡）
+     的右缘稳定 = padding 缘 - 8px，与下方 composer/usage/todo 的 +8px 补偿
+     严格对齐——不随内容是否溢出而抖动（用户反馈 2026-10-16）。 */
+  scrollbar-gutter: stable;
   display: flex; flex-direction: column;
 }
 /* WI-154: with the Turn rail shown the column is symmetric — the right inset
@@ -1122,10 +1126,15 @@ details.step-group[data-live='true'] > summary.step-group-summary {
 }
 .msg-meta-copy:hover { color: var(--text); background: var(--accent-soft); }
 /* Turn-level file change summary: total + per-file add/del, click a file to
-   expand its diff (DiffView) inline. */
+   expand its diff (DiffView) inline. 左缘与上方文字段落对齐，宽度按内容
+   （最长文件名行）自适应，右侧不强制贴满（用户反馈 2026-10-16）；超长文件名
+   时 max-width:100% 兜底 + 路径省略号。 */
 .turn-files {
+  /* footer 是 align-items:flex-start 的 flex 列：flex-start = 左对齐 + 收缩
+     到内容宽（fit-content），不用 stretch。 */
+  align-self: flex-start; width: fit-content; max-width: 100%; min-width: 0;
   display: flex; flex-direction: column; gap: 2px; margin-top: 7px;
-  max-width: 760px; overflow: hidden;
+  overflow: hidden;
   border: 1px solid var(--border); border-radius: var(--radius-md);
   background: var(--panel-bg);
 }
@@ -1141,13 +1150,13 @@ details.step-group[data-live='true'] > summary.step-group-summary {
 .turn-file-item { display: flex; align-items: center; }
 .turn-file-item:hover { background: var(--accent-soft); }
 .turn-file-row {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px;
   padding: 4px 0 4px 11px; font-size: 12px;
   background: none; border: none; cursor: pointer; font-family: inherit;
   color: inherit; text-align: left;
 }
 .turn-file-path {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: var(--mono); color: var(--accent);
 }
 .turn-file-stats { display: flex; gap: 6px; flex-shrink: 0; font-family: var(--mono); }
@@ -1280,10 +1289,12 @@ details.step-group[data-live='true'] > summary.step-group-summary {
 /* WI-153: the composer's horizontal padding matches the message list's 24px
    content inset, so its edges align with the work-fold hairline and message
    column; .rail-inset adds the Turn rail's 48px when the Coding view shows it. */
-.composer-wrap { padding: 4px 24px 16px; flex-shrink: 0; position: relative; }
+.composer-wrap { padding: 4px 32px 16px 24px; flex-shrink: 0; position: relative; }
 /* WI-154: with the rail shown the column is symmetric — the rail(48)+pad(24)
-   inset on the left is mirrored on the right so text whitespace is equal. */
-.composer-wrap.rail-inset { padding-left: 72px; padding-right: 72px; }
+   inset on the left is mirrored on the right so text whitespace is equal.
+   右侧比镜像值多 +8px：补偿 .message-list 的 scrollbar-gutter（恒定 8px 槽），
+   使输入框右缘与列表内内容右缘严格对齐。 */
+.composer-wrap.rail-inset { padding-left: 72px; padding-right: 80px; }
 .composer-wrap.drop-active .input-bar,
 .composer-wrap.drop-active .input-bar:focus-within {
   border-color: var(--accent);
@@ -1872,10 +1883,10 @@ button[data-tip]:hover::after,
 
 /* ── Todo widget: global collapsible list above the composer ── */
 .todo-widget {
-  flex-shrink: 0; margin: 0 24px 8px; border: 1px solid var(--border);
+  flex-shrink: 0; margin: 0 32px 8px 24px; border: 1px solid var(--border);
   border-radius: 8px; background: var(--panel-bg, var(--bg-soft)); overflow: hidden;
 }
-.todo-widget.rail-inset { margin-left: 72px; margin-right: 72px; }
+.todo-widget.rail-inset { margin-left: 72px; margin-right: 80px; }
 .todo-widget-head {
   display: flex; align-items: center; gap: 10px; width: 100%;
   padding: 7px 12px; background: none; border: none; cursor: pointer;
@@ -2191,12 +2202,13 @@ button[data-tip]:hover::after,
   color: var(--text-muted);
   /* Right-align with the input-bar's right border: mirrors .composer-wrap's
      24px inset (+ Turn-rail 72px), NOT the cards' 16px — the counter sits
-     outside .composer-wrap so it must repeat those insets itself. */
-  padding: 0 24px 4px;
+     outside .composer-wrap so it must repeat those insets itself.
+     右侧 +8px 对应 .message-list 的 scrollbar-gutter 补偿。 */
+  padding: 0 32px 4px 24px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
-.rail-inset > .composer-usage { padding-right: 72px; }
+.rail-inset > .composer-usage { padding-right: 80px; }
 .resend-btn {
   border: none;
   background: transparent;
@@ -2388,45 +2400,59 @@ button[data-tip]:hover::after,
 
 /* ─── 界面定时锁（Scheduled UI Lock）───
    锁屏层只是覆盖层：zIndex 4000 盖过 Settings(1000) 等一切浮层，
-   下方应用树保持挂载（后台会话继续运行）。视觉基准来自
-   demo/ui-lock-demo.html。 */
+   下方应用树保持挂载（后台会话继续运行）。
+   视觉基准：macOS HIG — 系统蓝（--ws-active #3478f6，与侧栏工作区高亮
+   同源）、SF Pro / PingFang（继承 --font）、发丝分隔线、玻璃质感卡片。
+   控件一律 font: inherit —— 原生 button/input 默认不继承字体，是与
+   App 字体观感不一致的根源。 */
 .ui-lock-overlay {
   position: fixed; inset: 0; z-index: 4000;
-  background: var(--overlay-strong, rgba(0, 0, 0, 0.55));
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: var(--overlay-strong, rgba(0, 0, 0, 0.45));
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
   display: flex; align-items: center; justify-content: center;
 }
 .ui-lock-card {
-  background: var(--surface); border-radius: 12px; width: 380px; max-width: calc(100vw - 48px);
-  padding: 26px 28px 20px; text-align: center;
+  background: var(--surface); border-radius: 16px; width: 400px; max-width: calc(100vw - 48px);
+  padding: 30px 30px 22px; text-align: center;
   box-shadow: var(--shadow-md, 0 16px 48px rgba(0, 0, 0, 0.35));
+  font-family: var(--font);
 }
-.ui-lock-card h1 { font-size: 17px; margin: 8px 0 4px; color: var(--text); }
+.ui-lock-badge {
+  width: 56px; height: 56px; margin: 0 auto 12px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--ws-active, #3478f6); color: #ffffff;
+}
+.ui-lock-badge svg { width: 26px; height: 26px; }
+.ui-lock-card h1 { font: inherit; font-size: 17px; font-weight: 600; margin: 0 0 6px; color: var(--text); }
+.ui-lock-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin: 0 0 16px; }
+.ui-lock-code-label { font-size: 12px; color: var(--text-muted); text-align: left; margin-bottom: 6px; }
 .ui-lock-code-row { display: flex; gap: 8px; margin-bottom: 16px; }
 .ui-lock-code {
-  flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 19px;
+  flex: 1; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 19px;
   letter-spacing: 3px; color: var(--text);
   background: var(--bg-soft); border: 1px dashed var(--border); border-radius: 8px;
   padding: 9px 10px; user-select: all; overflow: hidden; white-space: nowrap; text-align: center;
 }
 .ui-lock-copy {
   padding: 0 14px; border: 1px solid var(--border); border-radius: 8px;
-  background: var(--surface); cursor: pointer; font-size: 12.5px; color: var(--text);
+  background: var(--surface); cursor: pointer; font: inherit; font-size: 12.5px; color: var(--text);
 }
 .ui-lock-copy:hover { background: var(--bg-soft); }
 .ui-lock-input {
-  width: 100%; padding: 10px 12px; font-size: 15px; color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 2px;
+  width: 100%; padding: 10px 12px; color: var(--text);
+  font: inherit; font-size: 15px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); letter-spacing: 2px;
   border: 1px solid var(--border-strong, var(--border)); border-radius: 8px; outline: none;
   background: var(--surface);
 }
-.ui-lock-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft, rgba(47, 52, 66, 0.15)); }
+.ui-lock-input:focus { border-color: var(--ws-active, #3478f6); box-shadow: 0 0 0 3px rgba(52, 120, 246, 0.25); }
 .ui-lock-unlock {
   width: 100%; margin-top: 12px; padding: 10px 0; border: none; border-radius: 8px;
-  background: var(--accent); color: var(--on-accent, #fff); font-size: 14px; cursor: pointer;
+  background: var(--ws-active, #3478f6); color: #ffffff;
+  font: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
 }
-.ui-lock-unlock:hover { filter: brightness(1.08); }
+.ui-lock-unlock:hover { background: var(--ws-active-hover, #2a6ce0); }
 .ui-lock-error { color: var(--danger); font-size: 12.5px; margin-top: 10px; min-height: 16px; }
 .ui-lock-shake { animation: ui-lock-shake 0.35s; }
 @keyframes ui-lock-shake {
@@ -2439,6 +2465,61 @@ button[data-tip]:hover::after,
 @media (prefers-reduced-motion: reduce) {
   .ui-lock-shake { animation: none; }
 }
+
+/* 定时锁设置对话框（UiLockDialog）— macOS sheet 视觉：标题栏 + 发丝分隔 */
+.ui-lock-dialog {
+  background: var(--surface); border-radius: 12px; width: 440px; max-width: calc(100vw - 48px);
+  padding: 0 20px 18px; box-shadow: var(--shadow-md, 0 16px 48px rgba(0, 0, 0, 0.35));
+  font-family: var(--font);
+}
+.ui-lock-dialog-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 0 12px; margin-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.ui-lock-dialog-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.ui-lock-close {
+  background: none; border: none; font: inherit; font-size: 13px; cursor: pointer;
+  color: var(--text-muted); padding: 3px 7px; border-radius: 6px; line-height: 1;
+}
+.ui-lock-close:hover { color: var(--text); background: var(--bg-soft); }
+
+/* 设置分区（UiLockScheduleSection）：草稿-确认模式 */
+.ui-lock-section { font-family: var(--font); }
+.ui-lock-note { font-size: 12.5px; color: var(--text-muted); line-height: 1.55; margin: 8px 0 12px; }
+.ui-lock-enable-row {
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
+  margin-bottom: 12px; font-size: 13.5px; color: var(--text);
+}
+/* macOS 开关（appearance:none 自绘，保留原生 checkbox 语义与无障碍标签）*/
+.ui-lock-switch {
+  appearance: none; -webkit-appearance: none; margin: 0; flex-shrink: 0;
+  width: 38px; height: 23px; border-radius: 999px; cursor: pointer;
+  background: var(--border-strong, #d2d6e1); position: relative; transition: background 0.18s;
+  outline: none;
+}
+.ui-lock-switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 19px; height: 19px;
+  border-radius: 50%; background: #ffffff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: left 0.18s;
+}
+.ui-lock-switch:checked { background: var(--ws-active, #3478f6); }
+.ui-lock-switch:checked::after { left: 17px; }
+.ui-lock-fields { display: flex; gap: 14px; }
+.ui-lock-field { flex: 1; font-size: 12px; color: var(--text-muted); }
+.ui-lock-time {
+  width: 100%; margin-top: 5px; padding: 6px 10px;
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  font: inherit; font-size: 13px; background: var(--surface); color: var(--text); outline: none;
+}
+.ui-lock-time:focus { border-color: var(--ws-active, #3478f6); box-shadow: 0 0 0 3px rgba(52, 120, 246, 0.22); }
+.ui-lock-section .ui-lock-error { margin: 4px 0 0; min-height: 15px; font-size: 12px; }
+.ui-lock-dialog-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+.ui-lock-confirm {
+  padding: 5px 18px; border: none; border-radius: 6px; cursor: pointer;
+  background: var(--ws-active, #3478f6); color: #ffffff;
+  font: inherit; font-size: 13px; font-weight: 500;
+}
+.ui-lock-confirm:hover { background: var(--ws-active-hover, #2a6ce0); }
 
 /* ─── 侧栏当前工作区：macOS Finder 风格蓝色胶囊高亮 ───
    截图基准：蓝色圆角胶囊 + 白色文字/图标。is-active 只挂在当前工作区
@@ -2455,3 +2536,15 @@ button[data-tip]:hover::after,
 .sb-ws-group.is-active .sb-ws-folder,
 .sb-ws-group.is-active .sb-ws-icon-btn,
 .sb-ws-group.is-active .coding-group-delete { color: #ffffff; }
+
+/* ─── 侧栏当前会话：浅蓝色高亮（所在态）───
+   层级与工作区区分：工作区=蓝色胶囊白字（选中态，见上），
+   当前会话=浅蓝底深字。is-active 已由 app.tsx 挂在会话行；
+   规则置于文件末尾以覆盖 .coding-session-row.is-active 的浅灰底。 */
+.sb-ws-session.is-active { background: rgba(52, 120, 246, 0.12); }
+.sb-ws-session.is-active:hover { background: rgba(52, 120, 246, 0.18); }
+.sb-ws-session.is-active .sb-ws-session-name { color: var(--text); font-weight: 500; }
+
+/* ─── 侧栏 footer 图标按钮组：锁形（定时锁）+ 手机（远程配对）紧邻贴右 ─── */
+.sb-footer-icons { display: flex; align-items: stretch; }
+.sb-footer-icon { width: 36px; padding: 12px 0; justify-content: center; border-radius: 0; }
