@@ -636,6 +636,50 @@ pub(crate) fn project_archive_trace(
     (rows, compactions)
 }
 
+/// Chat-view archive projection (`session.archiveMessages`): the folded
+/// projection plus a `compaction`-role row per checkpoint — the same shape
+/// the live stream emits (UiEvent::Compaction → role "compaction"), so the
+/// UI renders archive markers identically to live ones.
+pub(crate) fn project_archive_chat_messages(
+    entries: Vec<SurfaceEntry>,
+    tool_names: &HashMap<String, String>,
+) -> Vec<types::ChatMessage> {
+    let mut marks: Vec<(u64, u64, String)> = Vec::new();
+    for entry in &entries {
+        if entry.event_type != "compaction/summary" {
+            continue;
+        }
+        let summary = entry
+            .data
+            .get("summary")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string();
+        marks.push((entry.seq, entry.time, summary));
+    }
+    let mut rows = project_chat_messages(entries, tool_names);
+    for (seq, time, summary) in marks {
+        let pos = rows
+            .iter()
+            .position(|r| matches!(r.seq, Some(rs) if rs > seq))
+            .unwrap_or(rows.len());
+        rows.insert(
+            pos,
+            types::ChatMessage {
+                role: "compaction".to_string(),
+                content: summary,
+                seq: Some(seq),
+                ts: Some(time),
+                usage: None,
+                duration_ms: None,
+                done_ts: None,
+                file_changes: None,
+            },
+        );
+    }
+    rows
+}
+
 fn role_str(role: &MessageRole) -> &'static str {
     match role {
         MessageRole::System => "system",
@@ -1761,6 +1805,31 @@ impl HostRuntime {
                     Ok((entries, tool_names)) => project_chat_messages(entries, &tool_names),
                     Err(error) => {
                         tracing::warn!(session = %session_id, %error, "session history unavailable");
+                        vec![]
+                    }
+                }
+            })
+        })
+        .join()
+        .unwrap_or_default()
+    }
+
+    /// Full-history chat archive (session.archiveMessages): the raw ledger
+    /// transcript INCLUDING compaction-shadowed turns, with `compaction`
+    /// marker rows at their checkpoint positions.
+    pub fn get_session_archive_messages(&self, session_id: String) -> Vec<types::ChatMessage> {
+        let inner = self.inner.clone();
+        let handle = self.runtime_handle.clone();
+        std::thread::spawn(move || {
+            handle.block_on(async {
+                let l = inner.lock().await;
+                let Some(ref runtime) = *l else { return vec![] };
+                match load_archive_parts(runtime, &session_id).await {
+                    Ok((entries, _compactions, tool_names)) => {
+                        project_archive_chat_messages(entries, &tool_names)
+                    }
+                    Err(error) => {
+                        tracing::warn!(session = %session_id, %error, "session archive unavailable");
                         vec![]
                     }
                 }

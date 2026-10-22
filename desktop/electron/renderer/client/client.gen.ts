@@ -13,6 +13,7 @@ export interface ProtocolMethodMeta {
 export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
   "session.list": { params: {"type":"object","properties":{"workspaceId":{"type":"string"}},"required":[],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["session:read"] },
   "session.messages": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"limit":{"type":"integer"},"before":{"type":"integer"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
+  "session.archiveMessages": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.fork": { params: {"type":"object","properties":{"sourceId":{"type":"string"},"beforeMsgId":{"type":"integer"},"task":{"type":"string"}},"required":["sourceId","beforeMsgId","task"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.delete": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.rename": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"title":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
@@ -48,6 +49,7 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
   "sessions.running": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"array","items":{"type":"string"}}, streaming: false, permissions: ["session:read"] },
   "session.timeline": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["session:read"] },
   "session.trace": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
+  "session.archiveTrace": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.compact": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"keepRecent":{"type":"integer"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.usage": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.export": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"cwd":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
@@ -138,6 +140,7 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
 export interface ProtocolClientMethods {
   sessionList(params: { workspaceId?: string }): Promise<unknown[]>;
   sessionMessages(params: { sessionId: string; limit?: number; before?: number }): Promise<unknown>;
+  sessionArchiveMessages(params: { sessionId: string }): Promise<unknown>;
   sessionFork(params: { sourceId: string; beforeMsgId: number; task: string }): Promise<unknown>;
   sessionDelete(params: { sessionId: string }): Promise<unknown>;
   sessionRename(params: { sessionId: string; title?: string }): Promise<unknown>;
@@ -173,6 +176,7 @@ export interface ProtocolClientMethods {
   sessionsRunning(params: {  }): Promise<string[]>;
   sessionTimeline(params: { sessionId: string }): Promise<unknown[]>;
   sessionTrace(params: { sessionId: string }): Promise<unknown>;
+  sessionArchiveTrace(params: { sessionId: string }): Promise<unknown>;
   sessionCompact(params: { sessionId: string; keepRecent?: number }): Promise<unknown>;
   sessionUsage(params: { sessionId: string }): Promise<unknown>;
   sessionExport(params: { sessionId: string; cwd?: string }): Promise<unknown>;

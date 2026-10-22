@@ -33,6 +33,7 @@ pub fn build() -> MethodRegistry<HostRuntime> {
         // ── Sessions ──
         session_list(),
         session_messages(),
+        session_archive_messages(),
         session_fork(),
         HostRuntime::__api_session_delete(),
         HostRuntime::__api_session_rename(),
@@ -237,6 +238,23 @@ fn session_messages() -> MethodSpec<HostRuntime> {
                     ))
                 }
             }
+        },
+    )
+}
+
+fn session_archive_messages() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "session.archiveMessages",
+        object(&[("sessionId", string_schema())], &["sessionId"]),
+        any_schema(),
+        &[PERM_SESSION_READ],
+        false,
+        |call: HostCall<'_>| {
+            let session_id = required_string(&call.params, "sessionId")?;
+            let messages = call.host.get_session_archive_messages(session_id);
+            Ok(Value::Array(
+                messages.iter().map(chat_message_json).collect(),
+            ))
         },
     )
 }
@@ -1047,7 +1065,7 @@ fn session_trace() -> MethodSpec<HostRuntime> {
 
 fn session_archive() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
-        "session.archive",
+        "session.archiveTrace",
         object(&[("sessionId", string_schema())], &["sessionId"]),
         any_schema(),
         &[PERM_SESSION_READ],

@@ -49,6 +49,26 @@
       "streaming": false
     },
     {
+      "name": "session.archiveMessages",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
       "name": "session.fork",
       "params": {
         "type": "object",
@@ -882,7 +902,7 @@
       "streaming": false
     },
     {
-      "name": "session.archive",
+      "name": "session.archiveTrace",
       "params": {
         "type": "object",
         "properties": {

@@ -1270,6 +1270,36 @@ fn get_session_archive_returns_compaction_shadowed_history() {
     let mut sorted = seqs.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     assert_eq!(seqs, sorted, "archive rows stay in ledger order");
+
+    // Chat archive (session.archiveMessages): the folded transcript loses
+    // the pre-compaction turns; the archive chat restores them and carries a
+    // 'compaction' marker row shaped exactly like the live stream's.
+    let folded = t.host.get_session_messages("log-archive".into());
+    let folded_texts: Vec<&str> = folded.iter().map(|m| m.content.as_str()).collect();
+    assert!(
+        !folded_texts.iter().any(|c| c.contains("u1 before")),
+        "folded chat transcript must not contain pre-compaction turns: {folded_texts:?}"
+    );
+    let chat = t.host.get_session_archive_messages("log-archive".into());
+    let chat_texts: Vec<&str> = chat.iter().map(|m| m.content.as_str()).collect();
+    assert!(
+        chat_texts.iter().any(|c| c.contains("u1 before compaction")),
+        "archive chat restores pre-compaction turns: {chat_texts:?}"
+    );
+    assert!(
+        chat_texts.iter().any(|c| c.contains("u2 after compaction")),
+        "archive chat keeps post-compaction turns: {chat_texts:?}"
+    );
+    let marker = chat
+        .iter()
+        .find(|m| m.role == "compaction")
+        .expect("archive chat carries a compaction marker row");
+    assert!(
+        marker.content.contains("earlier turns summarized"),
+        "marker content is the checkpoint summary: {}",
+        marker.content
+    );
+    assert_eq!(marker.seq, Some(2), "marker sits at the checkpoint's seq");
 }
 
 #[test]

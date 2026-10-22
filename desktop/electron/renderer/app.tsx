@@ -3855,8 +3855,9 @@ interface StarriverBridge {
   suggestFiles?(workspaceId: string, prefix?: string): Promise<string[]>;
   listSessions(workspaceId?: string): Promise<SessionInfo[]>;
   getSessionMessages(id: string): Promise<ChatMessage[]>;
+  /** Full-history chat archive (session.archiveMessages): raw-ledger transcript incl. compaction-shadowed turns. */
+  getSessionArchiveMessages(id: string): Promise<ChatMessage[]>;
   getSessionTimeline(id: string): Promise<SessionMessage[]>;
-  /** Trajectory ledger (session.trace): chronological event stream rendered by TrajectoryView. */
   getSessionTrace(id: string): Promise<{ entries: TraceEntry[] }>;
   /** Full-history archive (session.archive): raw ledger projection incl. compaction-shadowed spans. */
   getSessionArchive(id: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
@@ -3932,6 +3933,7 @@ interface StarriverBridge {
   /** WI-179: jobs registry — active scheduled runs carry `sessionId`. */
   listJobs?(): Promise<JobInfo[]>;
   getSessionTrace(sessionId: string): Promise<SessionTrace>;
+  getSessionArchiveMessages?(sessionId: string): Promise<ChatMessage[]>;
   getSessionArchive?(sessionId: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
 
   // Backend health — renderer asks "is the Rust backend alive?" on mount and
@@ -7265,6 +7267,12 @@ const composerDrafts: Record<string, string> = {};
 export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const { t, lang, setLang } = useI18n();
   const [messages, setMessages] = useState<Message[]>([]);
+  // Chat-view history source (session.archiveMessages): 'context' shows the
+  // folded live-context transcript; 'archive' re-projects the raw ledger so
+  // compaction-shadowed turns come back, with role="compaction" marker rows
+  // that reuse the live-stream CompactionRow rendering.
+  const [chatSource, setChatSource] = useState<'context' | 'archive'>('context');
+  const [archiveMessages, setArchiveMessages] = useState<Message[] | null>(null);
   // Stale-todo watermark for the Todo widget: TaskStarted on a fresh turn
   // hides the previous turn's fully-completed todo list until this turn
   // writes a fresh todo_write (in-progress lists stay visible across turns).
@@ -7670,6 +7678,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         fileChanges: m.fileChanges ?? undefined,
       }));
       setMessages(loaded);
+      setChatSource('context');
+      setArchiveMessages(null);
       messagesRef.current = loaded;
       setTodoHideUpTo(0);
       setActiveSessionId(sessionId);
@@ -7769,10 +7779,38 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Displayed chat transcript: the live-context projection by default, or the
+  // raw-ledger archive once the user toggles the source (chatSource).
+  const EMPTY_MESSAGES: Message[] = [];
+  const displayMessages = chatSource === 'archive' ? (archiveMessages ?? EMPTY_MESSAGES) : messages;
+  const archiveCount = archiveMessages?.filter((m) => m.role === 'compaction').length ?? 0;
+
   const showError = useCallback((msg: string) => {
     setErrorMsg(msg);
     setTimeout(() => setErrorMsg(null), 4000);
   }, []);
+
+  // Chat archive (session.archiveMessages): fetched lazily on first toggle
+  // per session; the folded-context transcript stays the default source.
+  useEffect(() => {
+    if (chatSource !== 'archive' || !activeSessionId || archiveMessages) return;
+    let stale = false;
+    window.starriver.getSessionArchiveMessages?.(activeSessionId)
+      .then((msgs: any[]) => {
+        if (stale) return;
+        setArchiveMessages(msgs.map((m: any) => ({
+          id: crypto.randomUUID(), role: m.role as Message['role'], content: m.content,
+          seq: m.seq ?? undefined,
+          ts: m.ts ?? undefined,
+          usage: m.usage ?? undefined,
+          durationMs: m.durationMs ?? undefined,
+          doneTs: m.doneTs ?? undefined,
+          fileChanges: m.fileChanges ?? undefined,
+        })));
+      })
+      .catch(() => { if (!stale) setArchiveMessages([]); });
+    return () => { stale = true; };
+  }, [chatSource, activeSessionId, archiveMessages]);
 
   // On mount, load the deployment default as the initial staged mode for new
  // sessions (binding: the mode locks per session at creation; the global
@@ -9555,10 +9593,10 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // quirk (missing Done / out-of-order Start) must never leave an early row
     // shimmering after later steps already ran.
     let lastThinkId: string | null = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'thinking') { lastThinkId = messages[i].id; break; }
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      if (displayMessages[i].role === 'thinking') { lastThinkId = displayMessages[i].id; break; }
     }
-    for (const m of messages) {
+    for (const m of displayMessages) {
       if (m.role === 'user') {
         flushStep();
         // History rows: display_pieces splits one user message into a text
@@ -9655,7 +9693,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     }
     flushStep();
     return items;
-  }, [messages]);
+  }, [displayMessages]);
 
   // Turn folding (iOS parity): every user message starts a turn (same semantics as
   // the Trajectory's TURN x); earlier turns collapse to a one-line summary by default, and the last
@@ -10032,15 +10070,15 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // (live and replayed history share the same `## TODO` text shape), honoring
   // the todoHideUpTo stale-todo watermark above.
   const latestTodo = useMemo(() => {
-    for (let i = messages.length - 1; i >= todoHideUpTo; i--) {
-      const m = messages[i];
+    for (let i = displayMessages.length - 1; i >= todoHideUpTo; i--) {
+      const m = displayMessages[i];
       if (m.role === 'tool' && m.result && /todo/i.test(m.content)) {
         const parsed = parseTodoState(m.result);
         if (parsed) return parsed;
       }
     }
     return null;
-  }, [messages, todoHideUpTo]);
+  }, [displayMessages, todoHideUpTo]);
   const [todoOpen, setTodoOpen] = useState(false);
   const todoDone = latestTodo?.items.filter(i => i.done).length ?? 0;
   const todoTotal = latestTodo?.items.length ?? 0;
@@ -10103,6 +10141,19 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         </details>
       )}
       {(view === 'chat' || !inSession) && (<>
+      {inSession && view === 'chat' && (
+        <div className="traj-list-toolbar" style={{ padding: '2px 16px 0' }}>
+          <div className="traj-mode-switch" role="group" aria-label={t('coding.trajArchive')}>
+            <button type="button" className={chatSource === 'context' ? 'active' : ''} aria-pressed={chatSource === 'context'} onClick={() => setChatSource('context')}>{t('coding.trajSourceCurrent')}</button>
+            <button type="button" className={chatSource === 'archive' ? 'active' : ''} aria-pressed={chatSource === 'archive'} onClick={() => setChatSource('archive')}>
+              {t('coding.trajSourceArchive')}{archiveCount > 0 ? ` ·${archiveCount}` : ''}
+            </button>
+          </div>
+          {chatSource === 'archive' && !archiveMessages && (
+            <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>{t('coding.trajLoading')}</span>
+          )}
+        </div>
+      )}
       <div className="turn-body">
       {showTurnRail && (
         <div
