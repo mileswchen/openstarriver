@@ -1186,6 +1186,11 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
   const [entries, setEntries] = useState<TraceEntry[] | null>(null);
   const [mode, setMode] = useState<'list' | 'ledger'>(() =>
     localStorage.getItem('starriver.trajMode') === 'ledger' ? 'ledger' : 'list');
+  // Complete-history archive (session.archive): the folded projection hides
+  // compaction-shadowed spans; the archive re-projects the raw ledger with
+  // labeled compaction checkpoints. Fetched lazily on first toggle.
+  const [source, setSource] = useState<'context' | 'archive'>('context');
+  const [archive, setArchive] = useState<{ entries: TraceEntry[]; compactions: number } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const switchMode = (m: 'list' | 'ledger') => {
     setMode(m);
@@ -1207,15 +1212,26 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
     setCollapsedTurns(new Set());
     setCollapsedCalls(new Set());
     setSelected(null);
+    setSource('context');
+    setArchive(null);
     return () => { stale = true; };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (source !== 'archive' || !sessionId || archive) return;
+    let stale = false;
+    window.starriver.getSessionArchive?.(sessionId)
+      .then((r) => { if (!stale) setArchive({ entries: r?.entries ?? [], compactions: r?.compactions ?? 0 }); })
+      .catch(() => { if (!stale) setArchive({ entries: [], compactions: 0 }); });
+    return () => { stale = true; };
+  }, [source, sessionId, archive]);
 
   type TrajRow = TraceEntry & { key: string; kind: TraceEntry['kind']; merged?: boolean };
   const turns = useMemo(() => {
     const turns: { key: string; rows: TrajRow[]; hasUser: boolean }[] = [];
     let n = 0;
     let cur: { key: string; rows: TrajRow[] } | null = null;
-    const list = entries ?? [];
+    const list = (source === 'archive' ? archive?.entries : entries) ?? [];
     const carry = (e: TraceEntry, idx: number): TrajRow => ({ ...e, key: `e${idx}` });
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
@@ -1248,7 +1264,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
       }
     }
     return turns;
-  }, [entries]);
+  }, [entries, source, archive]);
 
  // ── Ledger-mode instrumentation state (toolbar parity) ──
   const [collapsedTurns, setCollapsedTurns] = useState<Set<string>>(new Set());
@@ -1286,7 +1302,8 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
   const kindLabel = (k: TrajRow['kind']) =>
     k === 'user' ? t('coding.trajUser') : k === 'assistant' ? t('coding.trajAssistant')
     : k === 'thinking' ? t('coding.trajThinking') : k === 'system' ? t('coding.trajSystem')
-    : k === 'context' ? t('coding.trajContext') : t('coding.trajTool');
+    : k === 'context' ? t('coding.trajContext') : k === 'compaction' ? t('coding.trajCompaction')
+    : t('coding.trajTool');
   const kindIcon = (k: TrajRow['kind'], name?: string, hint?: string) => {
     if (k === 'system') return ICON_SYSTEM;
     if (k === 'context') return ICON_CONTEXT;
@@ -1305,6 +1322,16 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
     <div className="traj-mode-switch" role="group" aria-label={t('coding.trajMode')}>
       <button type="button" className={mode === 'list' ? 'active' : ''} aria-pressed={mode === 'list'} onClick={() => switchMode('list')}>{t('coding.trajModeList')}</button>
       <button type="button" className={mode === 'ledger' ? 'active' : ''} aria-pressed={mode === 'ledger'} onClick={() => switchMode('ledger')}>{t('coding.trajModeLedger')}</button>
+    </div>
+  );
+  // History source: the folded live-context projection vs the complete
+  // ledger archive (compaction-shadowed spans + labeled checkpoints).
+  const sourceSwitch = (
+    <div className="traj-mode-switch" role="group" aria-label={t('coding.trajArchive')}>
+      <button type="button" className={source === 'context' ? 'active' : ''} aria-pressed={source === 'context'} onClick={() => setSource('context')}>{t('coding.trajSourceCurrent')}</button>
+      <button type="button" className={source === 'archive' ? 'active' : ''} aria-pressed={source === 'archive'} onClick={() => setSource('archive')}>
+        {t('coding.trajSourceArchive')}{archive ? ` ·${archive.compactions}` : ''}
+      </button>
     </div>
   );
 
@@ -1408,7 +1435,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
               <input className="traj-ledger-search" type="search" value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t('coding.trajSearch')} aria-label={t('coding.trajSearch')} />
-              {modeSwitch}
+              {modeSwitch}{sourceSwitch}
             </div>
           </div>
           {q && (
@@ -1543,7 +1570,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="traj-view">
-      <div className="traj-list-toolbar">{modeSwitch}</div>
+      <div className="traj-list-toolbar">{modeSwitch}{sourceSwitch}</div>
       {(() => {
         const todo = latestTodoFromTexts(entries.map((e) => e.toolOutput ?? (e.kind === 'tool_result' ? e.text : null)));
         return todo ? <TodoCard todo={todo} /> : null;
@@ -3573,7 +3600,7 @@ interface AgentModelBinding {
 
 /** One session.trace event (mirrors host types::SessionTraceEntry). */
 interface TraceEntry {
-  kind: 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'system' | 'context';
+  kind: 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'system' | 'context' | 'compaction';
   text: string;
   toolName?: string | null;
   toolInput?: string | null;
@@ -3831,6 +3858,8 @@ interface StarriverBridge {
   getSessionTimeline(id: string): Promise<SessionMessage[]>;
   /** Trajectory ledger (session.trace): chronological event stream rendered by TrajectoryView. */
   getSessionTrace(id: string): Promise<{ entries: TraceEntry[] }>;
+  /** Full-history archive (session.archive): raw ledger projection incl. compaction-shadowed spans. */
+  getSessionArchive(id: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
   forkSession(sourceId: string, beforeMsgId: number, task: string): Promise<SessionInfo>;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string | null): Promise<void>;
@@ -3903,6 +3932,7 @@ interface StarriverBridge {
   /** WI-179: jobs registry — active scheduled runs carry `sessionId`. */
   listJobs?(): Promise<JobInfo[]>;
   getSessionTrace(sessionId: string): Promise<SessionTrace>;
+  getSessionArchive?(sessionId: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
 
   // Backend health — renderer asks "is the Rust backend alive?" on mount and
   // shows a full-screen error instead of a silent zombie UI when it isn't.

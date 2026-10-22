@@ -882,6 +882,26 @@
       "streaming": false
     },
     {
+      "name": "session.archive",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
       "name": "session.compact",
       "params": {
         "type": "object",

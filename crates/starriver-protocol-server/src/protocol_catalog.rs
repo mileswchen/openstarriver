@@ -68,6 +68,7 @@ pub fn build() -> MethodRegistry<HostRuntime> {
         sessions_running(),
         session_timeline(),
         session_trace(),
+        session_archive(),
         session_compact(),
         session_usage_method(),
         session_export(),
@@ -1040,6 +1041,20 @@ fn session_trace() -> MethodSpec<HostRuntime> {
                 obj.insert("epoch".into(), json!(call.host.trace_epoch(&session_id)));
             }
             Ok(trace)
+        },
+    )
+}
+
+fn session_archive() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "session.archive",
+        object(&[("sessionId", string_schema())], &["sessionId"]),
+        any_schema(),
+        &[PERM_SESSION_READ],
+        false,
+        |call: HostCall<'_>| {
+            let session_id = required_string(&call.params, "sessionId")?;
+            Ok(session_archive_json(&call.host.get_session_archive(session_id)))
         },
     )
 }
@@ -2587,6 +2602,24 @@ fn session_trace_json(trace: &types::SessionTrace) -> Value {
                 "timeMs": entry.time_ms,
             })
         }).collect::<Vec<_>>(),
+    })
+}
+
+fn session_archive_json(archive: &types::SessionArchive) -> Value {
+    json!({
+        "entries": archive.entries.iter().map(|entry| {
+            json!({
+                "kind": entry.kind,
+                "text": entry.text,
+                "toolName": entry.tool_name,
+                "toolInput": entry.tool_input,
+                "toolOutput": entry.tool_output,
+                "toolOk": entry.tool_ok,
+                "seq": entry.seq,
+                "timeMs": entry.time_ms,
+            })
+        }).collect::<Vec<_>>(),
+        "compactions": archive.compactions,
     })
 }
 
