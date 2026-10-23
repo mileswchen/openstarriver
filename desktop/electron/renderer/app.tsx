@@ -7904,6 +7904,14 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     if (!activeSessionId) {
       setMessages([]);
       messagesRef.current = [];
+      // The chat source projection is per-session too: leaving a session
+      // whose Conversation view was switched to 完整归档 (archive) must drop
+      // the loaded archive ledger. Otherwise displayMessages keeps feeding
+      // the old transcript into turnGroups on the New Task screen and the
+      // stale turn content (work-fold row + prose) renders under/over the
+      // New Task composer (2026-10-23 broken New Task layout).
+      setChatSource('context');
+      setArchiveMessages(null);
       setStaleBusy(false);
       setQueue([]);
       return;
@@ -7933,6 +7941,11 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     lastConvSeqRef.current = newConvSeq;
     setMessages([]);
     messagesRef.current = [];
+    // Same per-session hygiene as the sync effect's empty branch: the "+ 新任务"
+    // click can land while the previous session's Conversation view was on the
+    // archive source — never carry that projection onto the New Task screen.
+    setChatSource('context');
+    setArchiveMessages(null);
     setTodoHideUpTo(0);
     setQueue([]);
     setSessionUsage({ in: 0, out: 0 });
@@ -10202,7 +10215,13 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
             <p>{stagedChat ? t('coding.emptyChat') : t('coding.empty')}</p>
           </div>
         )}
-        {turnGroups.map((tg, gi) => {
+        {/* New Task screen renders NO conversation content: turnGroups is fed
+            by displayMessages, which can briefly/stale-ly hold the previous
+            session's archive projection. With `.new-task { overflow-y: visible
+            }` that stale transcript would spill out of the list and paint
+            under/over the top-stacked composer. The empty state above is the
+            whole screen. */}
+        {!isNewTask && turnGroups.map((tg, gi) => {
           const isLast = gi === turnGroups.length - 1;
           const renderTurnItem = (item: CodingDisplay) => {
             if (item.type === 'step') {
@@ -10828,6 +10847,11 @@ interface WorkspaceCtx {
   setNewWorkspacePath: (v: string) => void;
   confirmDeleteWorkspace: WorkspaceInfo | null;
   setConfirmDeleteWorkspace: (w: WorkspaceInfo | null) => void;
+  /** Tasks-row delete (chats / scheduled runs): pending session id for the
+   *  confirm modal; null when no deletion is pending. */
+  confirmDeleteSession: string | null;
+  setConfirmDeleteSession: (id: string | null) => void;
+  handleConfirmSessionDelete: () => Promise<void>;
   loadSessions: () => Promise<void>;
   /** WI-179: session ids with a live turn (scheduled active runs ∪ interactive
    *  running slots), poll-refreshed every 3s while the page is visible. The
@@ -10911,6 +10935,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [renamingWorkspace, setRenamingWorkspace] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState<WorkspaceInfo | null>(null);
+  // Tasks-row delete: which session the confirm modal is open for.
+  const [confirmDeleteSession, setConfirmDeleteSession] = useState<string | null>(null);
   const [renamingSession, setRenamingSession] = useState<string | null>(null);
   const [renameSessionValue, setRenameSessionValue] = useState('');
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
@@ -11149,6 +11175,23 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const toggleArchivedGroup = useCallback((key: string) =>
     setArchivedOpenKeys(prev => ({ ...prev, [key]: !prev[key] })), []);
 
+  // Tasks-row delete (chats / scheduled runs): session.delete removes the log
+  // and the host metadata for good. Deleting the OPEN session closes the
+  // stream via CodingView's sync effect, exactly like archiveSession does.
+  const handleConfirmSessionDelete = useCallback(async () => {
+    const sessionId = confirmDeleteSession;
+    setConfirmDeleteSession(null);
+    if (!sessionId) return;
+    try {
+      await window.starriver.deleteSession(sessionId);
+      if (activeSessionId === sessionId) setActiveSessionId('');
+      await loadSessions();
+    } catch (err) {
+      console.error('[Workspace] delete session failed:', err);
+      showError(t('thread.deleteFailed'));
+    }
+  }, [confirmDeleteSession, activeSessionId, setActiveSessionId, loadSessions, showError, t]);
+
   useEffect(() => {
     loadWorkspaces(); loadSessions();
   }, [loadWorkspaces, loadSessions]);
@@ -11176,6 +11219,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     renamingSession, setRenamingSession, renameSessionValue, setRenameSessionValue,
     showNewWorkspace, setShowNewWorkspace, newWorkspacePath, setNewWorkspacePath,
     confirmDeleteWorkspace, setConfirmDeleteWorkspace,
+    confirmDeleteSession, setConfirmDeleteSession, handleConfirmSessionDelete,
     loadSessions, toggleWorkspace, activateWorkspace, requestNewConversation, archiveSession,
     runningSessionIds, refreshRunningSessions,
     handleUnarchive, handleRenameSession, handleRenameSubmit, handleCreateWorkspace,
@@ -11376,64 +11420,11 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
             );
           })}
 
-
-          {/* Sessions whose workspace was deleted stay on disk and remain
-              recoverable regardless of archived state: restore re-homes into
-              the active workspace when one exists, else unarchives only (the
-              row stays visible in this group either way). */}
-          {(() => {
-            const orphanWorkspaces = new Set(
-              [...ws.sessions, ...ws.archivedSessions]
-                .filter(s => s.workspaceId && !ws.workspaces.some(w => w.id === s.workspaceId))
-                .map(s => s.workspaceId as string),
-            );
-            const archivedOrphans = ws.archivedSessions.filter(s => s.workspaceId && orphanWorkspaces.has(s.workspaceId) && !ws.sessions.some(x => x.id === s.id));
-            const orphans: { id: string; title: string; archived: boolean }[] = [
-              ...ws.sessions
-                .filter(s => s.workspaceId && !ws.workspaces.some(w => w.id === s.workspaceId))
-                .map(s => ({ id: s.id, title: s.title || 'Coding task', archived: false })),
-              ...archivedOrphans.map(s => ({ id: s.id, title: s.title || 'Coding task', archived: true })),
-            ];
-            if (orphans.length === 0) return null;
-            const candidate = ws.activeWorkspaceId ?? ws.workspaces[0]?.id;
-            // The target must still exist — attaching to a stale id dies on
-            // the FK and used to vanish without feedback.
-            const validTarget = candidate && ws.workspaces.some(w => w.id === candidate) ? candidate : undefined;
-            const restore = (sessionId: string) => {
-              const call = validTarget
-                ? window.starriver.assignSessionWorkspace(sessionId, validTarget)
-                : Promise.resolve(window.starriver.unarchiveSession?.(sessionId));
-              void Promise.resolve(call)
-                .then(() => ws.loadSessions())
-                .catch((e) => ws.showError(String(e?.message ?? e)));
-            };
-            return (
-              <div>
-                <div className="sb-ws-group sb-ws-ungrouped" style={{ cursor: 'pointer' }} onClick={() => toggleFolder('ungrouped')}
-                  data-tip={t('workspace.ungroupedHint')}>
-                  <div className="sb-ws-row">
-                    <span className={'sb-ws-chevron' + (!foldedFolders.ungrouped ? ' open' : '')} aria-hidden="true" dangerouslySetInnerHTML={{ __html: ICON_CHEVRON_FOLD }} />
-                    <span className="sb-ws-folder" dangerouslySetInnerHTML={{ __html: foldedFolders.ungrouped ? ICON_FOLDER_CLOSED : ICON_FOLDER_OPEN }} />
-                    <span className="sb-ws-ungrouped-label">{t('workspace.ungrouped')}</span>
-                  </div>
-                </div>
-                {!foldedFolders.ungrouped && orphans.map(s => (
-                  <div key={s.id} className="coding-session-row sb-ws-archived-row sb-ws-ungrouped-row" data-tip={s.title}>
-                    <span className="sb-ws-session-name">
-                      {s.archived ? '📦 ' : ''}{s.title}
-                    </span>
-                    <button
-                      className="sb-ws-icon-btn"
-                      onClick={() => restore(s.id)}
-                      data-tip={validTarget ? t('workspace.ungroupedRestore') : t('workspace.ungroupedRestoreNoTarget')}
-                      aria-label={t('workspace.ungroupedRestore')}>
-                      <span dangerouslySetInnerHTML={{ __html: ICON_UNARCHIVE }} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
+          {/* Sessions whose workspace record is gone (the host keeps their
+              stale workspaceId marker on delete) render nowhere: no Ungrouped
+              bucket. Re-registering the same directory reuses the id (id ==
+              canonical path) and regroups every survivor automatically; the
+              session search stays available meanwhile. */}
 
           {/* Tasks: chats and scheduled runs that live outside any workspace,
               as two folders under one Tasks header (same level as Workspace).
@@ -11472,6 +11463,16 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
                         <span className="sb-run-dot" data-tip={t('scheduled.runningTip')} aria-label={t('scheduled.runningTip')} />
                       )}
                       <span className="sb-ws-session-name">{sessionLabel(s)}</span>
+                      {/* Hover delete: session.delete removes the log for good,
+                          so it goes through the shared confirm modal. */}
+                      <button
+                        type="button"
+                        className="sb-ws-icon-btn"
+                        aria-label={t('coding.delete')}
+                        title={t('coding.delete')}
+                        onClick={(e) => { e.stopPropagation(); ws.setConfirmDeleteSession(s.id); }}>
+                        <span dangerouslySetInnerHTML={{ __html: ICON_TRASH }} />
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -11524,6 +11525,15 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
           sessionCount={ws.sessions.filter(s => s.workspaceId === ws.confirmDeleteWorkspace!.id).length}
           onConfirm={ws.handleConfirmDelete}
           onCancel={() => ws.setConfirmDeleteWorkspace(null)}
+        />
+      )}
+
+      {/* Tasks-row delete (chats / scheduled runs): same /delete confirmation
+          the open session uses — the row's log is removed for good. */}
+      {ws.confirmDeleteSession && (
+        <SessionDeleteModal
+          onConfirm={() => ws.handleConfirmSessionDelete()}
+          onCancel={() => ws.setConfirmDeleteSession(null)}
         />
       )}
     </div>

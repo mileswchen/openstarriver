@@ -124,12 +124,11 @@ describe('CodingView workspace error paths', () => {
     await waitFor(() => expect(window.starriver.setActiveWorkspace).toHaveBeenCalledWith(null, 'Starriver Code'));
     // Conversation state resets with the deleted group.
     await waitFor(() => expect(screen.queryByText('earlier message')).toBeNull());
-    // The deleted workspace's session stays on disk and remains recoverable:
-    // it renders under Ungrouped with a restore-into-active-workspace action
- // (a deliberate deviation — the reference drops it from every group).
-    await waitFor(() => expect(screen.getByText('Ungrouped')).toBeTruthy());
-    await waitFor(() => expect(screen.getByText('grouped task')).toBeTruthy());
-    expect(await screen.findByLabelText('Restore to current workspace')).toBeTruthy();
+    // The deleted workspace's session stays on disk but renders nowhere —
+    // no Ungrouped bucket. Re-registering the directory (id == canonical
+    // path == the stale workspaceId marker) regroups it.
+    await waitFor(() => expect(screen.queryByText('grouped task')).toBeNull());
+    expect(screen.queryByText('Ungrouped')).toBeNull();
   });
 });
 
