@@ -918,8 +918,18 @@ impl PluginKernel {
                 crate::tools::bash::DEFAULT_BASH_TIMEOUT_MAX_SECS,
             ),
         };
+        // BUG-157: settings-provided tool environment (agent.tool_env),
+        // expanded against the daemon process env once at registration —
+        // e.g. `{ "PATH": "$HOME/.cargo/bin:$PATH" }` makes a headless
+        // daemon's bash tool see the user toolchain without launch-time
+        // env plumbing.
+        let bash_tool_env = settings
+            .agent
+            .tool_env
+            .as_ref()
+            .map(crate::tools::bash::expand_tool_env);
         for mut definition in [
-            crate::tools::bash::bash_definition_with_limits(bash_limits),
+            crate::tools::bash::bash_definition_with_env(bash_limits, bash_tool_env),
             crate::tools::read::read_definition(),
             crate::tools::write::write_definition(),
             crate::tools::edit::edit_definition(),

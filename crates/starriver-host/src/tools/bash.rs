@@ -81,6 +81,11 @@ fn resolve_timeout_secs(requested: Option<u64>, limits: &BashTimeoutLimits) -> u
 
 struct Bash {
     limits: BashTimeoutLimits,
+    /// BUG-157: settings-provided tool environment (`agent.tool_env`), already
+    /// `$VAR`-expanded by [`expand_tool_env`] at registration time. `None`
+    /// keeps the historical behavior byte-for-byte (child inherits the daemon
+    /// environment untouched).
+    tool_env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl ToolExecutor for Bash {
@@ -90,6 +95,7 @@ impl ToolExecutor for Bash {
         ctx: ToolRunContext,
     ) -> cordis_rslite::BoxFuture<Result<Value, ToolError>> {
         let limits = self.limits;
+        let tool_env = self.tool_env.clone();
         Box::pin(async move {
             let json = json_args(&arguments)?;
             let command = json
@@ -178,6 +184,17 @@ impl ToolExecutor for Bash {
             // in every mode: a hung command is not a sandbox-only problem.
             #[cfg(unix)]
             cmd.process_group(0);
+            // BUG-157: inject the settings-provided tool environment
+            // (`agent.tool_env`, expanded at registration) before any
+            // in-process confinement hook — the hook only pre-opens paths
+            // and does not touch the environment, so the order is inert.
+            // This changes only the child's environment, never the argv
+            // sandbox verdicts above.
+            if let Some(env) = &tool_env {
+                for (key, value) in env {
+                    cmd.env(key, value);
+                }
+            }
             if let Some(hook) = spawn_hook {
                 // In-process confinement (Landlock): applies inside the child
                 // right before exec; failure = spawn fails, never run unconfined.
@@ -306,9 +323,87 @@ pub fn bash_definition() -> ToolDefinition {
 /// BUG-101: settings-tunable variant — `plugin_kernel` injects
 /// `agent.bash_timeout_secs` / `agent.bash_timeout_max_secs` here.
 pub fn bash_definition_with_limits(limits: BashTimeoutLimits) -> ToolDefinition {
+    bash_definition_with_env(limits, None)
+}
+
+/// BUG-157: settings-tunable tool environment — `plugin_kernel` injects the
+/// already-expanded `agent.tool_env` map here (`None` = inherit the daemon
+/// environment, the historical behavior).
+pub fn bash_definition_with_env(
+    limits: BashTimeoutLimits,
+    tool_env: Option<std::collections::BTreeMap<String, String>>,
+) -> ToolDefinition {
     let mut definition = bash_definition_base();
-    definition.executor = Arc::new(Bash { limits });
+    definition.executor = Arc::new(Bash { limits, tool_env });
     definition
+}
+
+/// BUG-157: one-level `$VAR` / `${VAR}` expansion against the daemon process
+/// environment, applied to `agent.tool_env` values once at registration time.
+/// Undefined variables expand to the empty string (warned); there is no
+/// recursive expansion and no shell quoting — values are used literally.
+/// Keys that are empty or contain `=` / NUL are dropped with a warning
+/// (they would make `Command::env` misbehave or panic downstream).
+pub fn expand_tool_env(
+    map: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for (key, value) in map {
+        if key.is_empty() || key.contains('=') || key.contains('\0') {
+            tracing::warn!("agent.tool_env: dropping invalid key {key:?}");
+            continue;
+        }
+        out.insert(key.clone(), expand_env_vars(value));
+    }
+    out
+}
+
+fn expand_env_vars(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut result = String::with_capacity(value.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && i + 1 < bytes.len() {
+            let (name, consumed) = if bytes[i + 1] == b'{' {
+                match value[i + 2..].find('}') {
+                    Some(end) => (value[i + 2..i + 2 + end].to_string(), end + 3),
+                    None => {
+                        // Unterminated `${` — literal `$`.
+                        result.push('$');
+                        i += 1;
+                        continue;
+                    }
+                }
+            } else {
+                let rest = &value[i + 1..];
+                let end = rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .unwrap_or(rest.len());
+                (rest[..end].to_string(), end + 1)
+            };
+            if name.is_empty() {
+                // Bare `$` — literal.
+                result.push('$');
+                i += 1;
+                continue;
+            }
+            match std::env::var(&name) {
+                Ok(v) => result.push_str(&v),
+                Err(_) => {
+                    tracing::warn!(
+                        "agent.tool_env: $NAME reference to unset variable {name} expands to empty"
+                    );
+                }
+            }
+            i += consumed;
+        } else {
+            // Copy one full UTF-8 scalar so multi-byte content survives.
+            let ch_len = value[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            result.push_str(&value[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+    result
 }
 
 fn bash_definition_base() -> ToolDefinition {
@@ -328,7 +423,7 @@ fn bash_definition_base() -> ToolDefinition {
             "properties": { "output": { "type": "string" } }
         })),
         render: Arc::new(text_content),
-        executor: Arc::new(Bash { limits: BashTimeoutLimits::default() }),
+        executor: Arc::new(Bash { limits: BashTimeoutLimits::default(), tool_env: None }),
         is_concurrency_safe: None,
         timeout: None,
         finalize_content: None,
@@ -341,6 +436,96 @@ fn bash_definition_base() -> ToolDefinition {
 mod tests {
     use super::*;
     use starriver_kernel::tools::ToolExecution;
+
+    fn marker_execution(command: &str) -> ToolRunContext {
+        let execution = ToolExecution {
+            call_id: starriver_kernel::llm::CallId("c1".into()),
+            root_call_id: starriver_kernel::llm::CallId("c1".into()),
+            name: "bash".into(),
+            arguments: Value::new(serde_json::json!({ "command": command })),
+            agent_id: None,
+            cwd: None,
+            sandbox_mode: None,
+            parent: None,
+            token: starriver_kernel::tools::mint_tool_execution_token(),
+            cancellation: None,
+        };
+        ToolRunContext::new(execution)
+    }
+
+    async fn run(definition: &ToolDefinition, command: &str) -> String {
+        let result = definition
+            .executor
+            .execute(
+                Value::new(serde_json::json!({ "command": command })),
+                marker_execution(command),
+            )
+            .await
+            .unwrap();
+        let json = result.downcast::<serde_json::Value>().unwrap();
+        json["output"].as_str().unwrap().to_string()
+    }
+
+    /// BUG-157: `agent.tool_env` values reach the child process with one-level
+    /// `$VAR` expansion applied at registration time.
+    #[tokio::test]
+    async fn tool_env_injects_expanded_values() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let env = expand_tool_env(&std::collections::BTreeMap::from([
+            ("H2T_MARKER".to_string(), "yes".to_string()),
+            ("H2T_EXP".to_string(), "$HOME/.cargo/bin:$PATH".to_string()),
+            ("H2T_BRACE".to_string(), "${HOME}/x".to_string()),
+        ]));
+        // One-level expansion resolves BOTH $HOME and $PATH against the
+        // daemon process env at registration time.
+        assert_eq!(
+            env.get("H2T_EXP").unwrap(),
+            &format!(
+                "{home}/.cargo/bin:{}",
+                std::env::var("PATH").unwrap_or_default()
+            )
+        );
+        assert_eq!(env.get("H2T_BRACE").unwrap(), &format!("{home}/x"));
+
+        let definition =
+            bash_definition_with_env(BashTimeoutLimits::default(), Some(env));
+        let out = run(&definition, "echo $H2T_MARKER").await;
+        assert!(out.contains("yes"), "marker missing: {out}");
+
+        // The expanded value survived into the child: HOME expansion literal
+        // in the map, PATH baked in at registration.
+        let out = run(
+            &definition,
+            r#"case "$H2T_EXP" in "$HOME/.cargo/bin:"*) echo expanded;; *) echo "got:$H2T_EXP";; esac"#,
+        )
+        .await;
+        assert!(out.contains("expanded"), "expansion missing in child: {out}");
+    }
+
+    /// BUG-157: unset variables expand to empty; invalid keys are dropped.
+    #[test]
+    fn expand_tool_env_handles_edge_cases() {
+        let env = expand_tool_env(&std::collections::BTreeMap::from([
+            ("GOOD".to_string(), "a${H2T_UNSET_XYZ}b".to_string()),
+            ("BARE".to_string(), "cost: 5$ and 10¢".to_string()),
+            (String::new(), "v".to_string()),
+            ("BAD=KEY".to_string(), "v".to_string()),
+            ("WITH\0NUL".to_string(), "v".to_string()),
+        ]));
+        assert_eq!(env.get("GOOD").unwrap(), "ab");
+        assert_eq!(env.get("BARE").unwrap(), "cost: 5$ and 10¢");
+        assert!(env.get("").is_none() && env.get("BAD=KEY").is_none());
+        assert!(env.iter().all(|(k, _)| !k.contains('\0')));
+    }
+
+    /// BUG-157 regression lock: without tool_env the child sees no extra
+    /// variables (historical byte-for-byte behavior).
+    #[tokio::test]
+    async fn no_tool_env_keeps_historical_behavior() {
+        let definition = bash_definition_with_limits(BashTimeoutLimits::default());
+        let out = run(&definition, "echo ${H2T_MARKER:-unset}").await;
+        assert!(out.contains("unset"), "expected bare env: {out}");
+    }
 
     #[tokio::test]
     async fn bash_runs_simple_command_unconfined() {

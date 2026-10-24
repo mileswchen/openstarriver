@@ -50,6 +50,10 @@ pub struct AgentSection {
     pub compaction_threshold_ratio: Option<f64>,
     /// Per-step parallel tool-call budget (backlog #7 hot settings).
     pub max_parallel_tool_calls: Option<usize>,
+    /// BUG-157: extra environment for tool subprocesses (bash). Values
+    /// support one-level `$VAR` / `${VAR}` expansion against the daemon
+    /// process environment, applied once at tool registration.
+    pub tool_env: Option<std::collections::BTreeMap<String, String>>,
     /// BUG-138 repeat breaker: total non-reload tool calls allowed per turn
     /// (turnToolCallBudget). Unset keeps the engine default (666).
     pub turn_tool_call_budget: Option<u32>,
@@ -655,6 +659,32 @@ mod tests {
         assert_eq!(merged["prompt"]["source_path"], "/src");
     }
 
+    /// BUG-101: the bash timeout knobs parse from the agent section and
+    /// survive a patch round-trip.
+    #[test]
+    fn agent_tool_env_parses_and_overrides() {
+        // BUG-157: agent.tool_env parses from the agent section and follows
+        // the existing override semantics on merge.
+        let parsed = serde_json::from_value::<super::AgentSection>(serde_json::json!({
+            "tool_env": { "PATH": "$HOME/.cargo/bin:$PATH", "CARGO_TARGET_DIR": "/tmp/h2target" }
+        }))
+        .expect("tool_env parses");
+        let env = parsed.tool_env.expect("some");
+        assert_eq!(env.get("PATH").unwrap(), "$HOME/.cargo/bin:$PATH");
+        assert_eq!(env.get("CARGO_TARGET_DIR").unwrap(), "/tmp/h2target");
+
+        // Unset → None (historical behavior).
+        let empty = serde_json::from_value::<super::AgentSection>(serde_json::json!({}))
+            .expect("empty agent section parses");
+        assert!(empty.tool_env.is_none());
+
+        let merged = super::merge_json_patch(
+            serde_json::json!({ "agent": { "tool_env": { "A": "1", "B": "2" } } }),
+            &serde_json::json!({ "agent": { "tool_env": { "B": "3" } } }),
+        );
+        assert_eq!(merged["agent"]["tool_env"]["A"], "1", "unrelated keys survive");
+        assert_eq!(merged["agent"]["tool_env"]["B"], "3", "patched key overrides");
+    }
     /// BUG-101: the bash timeout knobs parse from the agent section and
     /// survive a patch round-trip.
     #[test]
