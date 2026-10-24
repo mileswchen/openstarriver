@@ -930,6 +930,12 @@ impl PluginKernel {
             .map(crate::tools::bash::expand_tool_env);
         for mut definition in [
             crate::tools::bash::bash_definition_with_env(bash_limits, bash_tool_env),
+            // BUG-155: tool-level skill loading — prose trigger lines
+            // measured 0 loads in ~40 harness2 rollouts. The executors
+            // read the same cell the always-on resident reads; before the
+            // host attaches they fail with SKILLS_UNAVAILABLE.
+            crate::tools::skill::skill_list_definition(Arc::clone(&skills_cell)),
+            crate::tools::skill::skill_load_definition(Arc::clone(&skills_cell)),
             crate::tools::read::read_definition(),
             crate::tools::write::write_definition(),
             crate::tools::edit::edit_definition(),

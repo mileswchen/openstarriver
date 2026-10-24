@@ -14,6 +14,7 @@ pub mod patch;
 pub mod plan;
 pub mod question;
 pub mod read;
+pub mod skill;
 pub mod reload_image;
 pub mod session_reference;
 pub mod spill;
@@ -48,6 +49,7 @@ pub fn tool_guide_sections() -> Vec<(&'static str, i32, &'static str)> {
         terminal::guide(),
         web_search::guide(),
         web_fetch::guide(),
+        skill::guide(),
     ]
 }
 
