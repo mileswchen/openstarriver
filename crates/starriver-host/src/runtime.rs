@@ -60,6 +60,8 @@ pub struct HostRuntime {
     /// sessions; a repeated execute returns SESSION_BUSY, serializing
     /// concurrent commands from multiple clients.
     pub(crate) running_sessions: Arc<StdMutex<std::collections::HashSet<String>>>,
+    /// BUG-156: turn-end signals backing `session.waitTurn`.
+    pub(crate) turn_signals: Arc<TurnSignals>,
     /// Agent-scoped reasoning effort overrides ("off"|"low"|"high"|"max").
     /// Session-scoped (not persisted): absent entry = follow the provider's
     /// configured effort. Routes are registered per provider, so two agents
@@ -84,6 +86,9 @@ pub struct HostRuntime {
 struct SessionRunGuard {
     running: Arc<StdMutex<std::collections::HashSet<String>>>,
     session_id: Option<String>,
+    /// BUG-156: turn-end signal source — Drop bumps the counter and wakes
+    /// every `wait_turn` poller (cancel and early-exit paths included).
+    signals: Arc<TurnSignals>,
 }
 
 impl Drop for SessionRunGuard {
@@ -94,7 +99,44 @@ impl Drop for SessionRunGuard {
                 .unwrap_or_else(|e| e.into_inner())
                 .remove(session_id);
         }
+        // BUG-156: the slot just freed — wake wait_turn pollers. Dropping
+        // without a session_id (execute rejected before registration) is
+        // inert: nothing was observable as running.
+        self.signals.notify_turn_ended();
     }
+}
+
+/// BUG-156: turn-completion signals for `session.waitTurn`. A plain condvar
+/// + turn-end counter on purpose: protocol handlers run on the blocking
+/// pool (http_server dispatches via spawn_blocking), so the wait is a
+/// blocking std wait, not a future. Every turn end bumps the counter and
+/// notifies all; each waiter re-checks its own session against the running
+/// set, so a broadcast never misattributes completion.
+#[derive(Default)]
+pub(crate) struct TurnSignals {
+    /// Bumped once per turn end (any session).
+    state: StdMutex<u64>,
+    cv: std::sync::Condvar,
+}
+
+impl TurnSignals {
+    fn notify_turn_ended(&self) {
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        self.cv.notify_all();
+    }
+}
+
+/// BUG-156: outcome of [`HostRuntime::wait_turn`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitTurnOutcome {
+    /// The session had a running turn and it ended while we waited.
+    Completed,
+    /// The turn was still running when the deadline passed.
+    Timeout,
+    /// The session holds no input slot — the execute never started (or the
+    /// session is unknown). Mirrors the `sessions.running` absence the
+    /// headless drivers previously had to poll for.
+    NotRunning,
 }
 
 impl SessionRunGuard {
@@ -469,6 +511,7 @@ impl HostRuntime {
             trace_epochs,
             runtime_handle,
             running_sessions: Arc::new(StdMutex::new(std::collections::HashSet::new())),
+            turn_signals: Arc::new(TurnSignals::default()),
             subagent_tool_handle: Arc::new(StdMutex::new(None)),
         };
         // LLP §4.4: declare every configured provider in the kernel directory
@@ -773,6 +816,53 @@ impl HostRuntime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .contains(session_id)
+    }
+
+    /// BUG-156: block until the session's current turn ends, the deadline
+    /// passes, or the session turns out not to be running at all. The
+    /// completion check keys ONLY on the running set + turn-end counter —
+    /// never on the message list — so the race that plagued polling clients
+    /// (final message landing one poll before the turn leaves the running
+    /// set) cannot occur here: the set removal and the wake happen inside
+    /// the guard's Drop, atomically for every observer.
+    ///
+    /// Blocking on purpose: protocol handlers run on the blocking pool.
+    pub fn wait_turn(&self, session_id: &str, timeout: std::time::Duration) -> WaitTurnOutcome {
+        if !self.is_session_running(session_id) {
+            return WaitTurnOutcome::NotRunning;
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        let mut guard = self
+            .turn_signals
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        loop {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return WaitTurnOutcome::Timeout;
+            }
+            // Sleep until the turn-end counter moves past the snapshot taken
+            // under the lock (a notify cannot be missed between the running
+            // check above and the wait: the Drop that flips the set also
+            // bumps this counter under the same wake protocol).
+            let snapshot = *guard;
+            // Re-check after snapshotting: the guard's Drop removes the sid
+            // from the set BEFORE bumping the counter, so a snapshot taken
+            // after a completed Drop must not enter the (unwakeable) sleep.
+            if !self.is_session_running(session_id) {
+                return WaitTurnOutcome::Completed;
+            }
+            let (guard2, _wait_result) = self
+                .turn_signals
+                .cv
+                .wait_timeout_while(guard, deadline - now, |current| *current == snapshot)
+                .unwrap_or_else(|e| e.into_inner());
+            guard = guard2;
+            if !self.is_session_running(session_id) {
+                return WaitTurnOutcome::Completed;
+            }
+        }
     }
 
     /// Profile `tools:` rendered to runtime tool names (`script:`/`mcp_` prefixed).
@@ -1390,6 +1480,7 @@ impl HostRuntime {
             SessionRunGuard {
                 running,
                 session_id: session_id.clone(),
+                signals: Arc::clone(&self.turn_signals),
             }
         };
         // Which agent runs: named by the caller, defaulting to the built-in
@@ -2204,6 +2295,84 @@ mod tests {
                  discovery must not block startup",
                 elapsed.as_secs()
             );
+        });
+    }
+
+    /// BUG-156: a session that never started (execute lost before
+    /// registration, or unknown id) reports NotRunning immediately instead
+    /// of looking identical to "still running" — the case headless drivers
+    /// previously detected by polling `sessions.running` with retries.
+    #[test]
+    fn wait_turn_reports_not_running_for_unknown_session() {
+        crate::testutil::with_temp_home(|home| {
+            std::fs::create_dir_all(home.join(".starriver")).unwrap();
+            let rt = HostRuntime::new(None).expect("runtime constructs");
+            let started = std::time::Instant::now();
+            let outcome = rt.wait_turn("no-such-session", std::time::Duration::from_secs(30));
+            assert_eq!(outcome, WaitTurnOutcome::NotRunning);
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(1),
+                "NotRunning must return without waiting out the timeout"
+            );
+        });
+    }
+
+    /// BUG-156: the turn-end wake fires when the run guard drops — the same
+    /// path a real execute takes on completion, cancellation, and early
+    /// exit. A waiter that registered before the drop must observe
+    /// Completed; one that snapshots after it must not sleep unwakeably.
+    #[test]
+    fn wait_turn_wakes_when_the_run_guard_drops() {
+        crate::testutil::with_temp_home(|home| {
+            std::fs::create_dir_all(home.join(".starriver")).unwrap();
+            let rt = std::sync::Arc::new(HostRuntime::new(None).expect("runtime constructs"));
+            rt.running_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert("s-wait".to_string());
+            let waiter = {
+                let rt = std::sync::Arc::clone(&rt);
+                std::thread::spawn(move || {
+                    rt.wait_turn("s-wait", std::time::Duration::from_secs(10))
+                })
+            };
+            // Let the waiter reach its wait (the post-snapshot re-check
+            // below makes even a late registration correct).
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            // Simulate the execute path's guard lifecycle: the drop removes
+            // the sid from the running set and bumps the wake counter.
+            let guard = SessionRunGuard {
+                running: Arc::clone(&rt.running_sessions),
+                session_id: Some("s-wait".to_string()),
+                signals: Arc::clone(&rt.turn_signals),
+            };
+            drop(guard);
+            let outcome = waiter.join().expect("waiter thread");
+            assert_eq!(outcome, WaitTurnOutcome::Completed);
+        });
+    }
+
+    /// BUG-156: a live turn past the deadline reports Timeout, not
+    /// Completed — a false completion would hand the client a stale
+    /// transcript.
+    #[test]
+    fn wait_turn_times_out_while_the_turn_is_live() {
+        crate::testutil::with_temp_home(|home| {
+            std::fs::create_dir_all(home.join(".starriver")).unwrap();
+            let rt = HostRuntime::new(None).expect("runtime constructs");
+            rt.running_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert("s-live".to_string());
+            let started = std::time::Instant::now();
+            let outcome = rt.wait_turn("s-live", std::time::Duration::from_millis(150));
+            assert_eq!(outcome, WaitTurnOutcome::Timeout);
+            assert!(started.elapsed() >= std::time::Duration::from_millis(150));
+            // Cleanup so the temp home drop is not surprised by a live slot.
+            rt.running_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove("s-live");
         });
     }
 

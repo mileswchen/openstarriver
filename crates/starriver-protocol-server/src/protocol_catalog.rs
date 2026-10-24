@@ -66,6 +66,7 @@ pub fn build() -> MethodRegistry<HostRuntime> {
         HostRuntime::__api_session_confirmPlan(),
         session_search(),
         sessions_running(),
+        session_wait_turn(),
         session_timeline(),
         session_trace(),
         session_compact(),
@@ -862,6 +863,69 @@ fn sessions_running() -> MethodSpec<HostRuntime> {
                     .map(Value::String)
                     .collect(),
             ))
+        },
+    )
+}
+
+/// BUG-156: server-side turn-completion wait. Blocking by design — the HTTP
+/// dispatcher already runs handlers on the blocking pool. `reason` reports
+/// `completed` (turn ended; `finalAssistant` carries the last assistant
+/// message), `timeout` (still running at the deadline), or
+/// `session_not_running` (the execute never started / session unknown —
+/// previously indistinguishable from "still running" for polling clients).
+fn session_wait_turn() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "session.waitTurn",
+        object(
+            &[
+                ("sessionId", string_schema()),
+                ("timeoutMs", integer_schema()),
+            ],
+            &["sessionId"],
+        ),
+        object(
+            &[
+                ("ended", starriver_protocol::schema::boolean_schema()),
+                ("reason", string_schema()),
+            ],
+            &["ended", "reason"],
+        ),
+        &[PERM_SESSION_READ],
+        false,
+        |call: HostCall<'_>| {
+            let session_id = required_string(&call.params, "sessionId")?;
+            // Default 300s; hard cap 1h — the longest turn we have ever
+            // observed plus headroom (harness2 bench data).
+            let timeout_ms = optional_u32(&call.params, "timeoutMs")
+                .map(u64::from)
+                .unwrap_or(300_000)
+                .min(3_600_000);
+            let outcome =
+                call.host
+                    .wait_turn(&session_id, std::time::Duration::from_millis(timeout_ms));
+            let (ended, reason) = match outcome {
+                starriver_host::runtime::WaitTurnOutcome::Completed => (true, "completed"),
+                starriver_host::runtime::WaitTurnOutcome::Timeout => (false, "timeout"),
+                starriver_host::runtime::WaitTurnOutcome::NotRunning => {
+                    (false, "session_not_running")
+                }
+            };
+            let final_assistant = if ended {
+                call.host
+                    .get_session_messages(session_id.clone())
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "assistant")
+                    .map(chat_message_json)
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            Ok(json!({
+                "ended": ended,
+                "reason": reason,
+                "finalAssistant": final_assistant,
+            }))
         },
     )
 }
@@ -2995,6 +3059,7 @@ mod tests {
             "session.attachWorkspace",
             "session.listArchived",
             "session.execute",
+            "session.waitTurn",
             "session.cancel",
             "session.compact",
             "session.usage",

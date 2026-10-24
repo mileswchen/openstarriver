@@ -839,6 +839,44 @@
       "streaming": false
     },
     {
+      "name": "session.waitTurn",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ended": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ended",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
       "name": "session.timeline",
       "params": {
         "type": "object",
