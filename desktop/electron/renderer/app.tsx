@@ -3366,7 +3366,8 @@ function mdUrlTransform(url: string): string {
   return defaultUrlTransform(url);
 }
 
-function MarkdownContent({ source }: { source: string }) {
+/** WI-212 exported for the link-routing regression test. */
+export function MarkdownContent({ source }: { source: string }) {
   return (
     <div className="md-content">
       <ReactMarkdown
@@ -3382,9 +3383,19 @@ function MarkdownContent({ source }: { source: string }) {
             const lang = /language-([\w+-]+)/.exec(cls || '')?.[1];
             return <pre data-lang={lang || 'code'}>{children}</pre>;
           },
-          // External links open in a new tab.
-          a({ node: _node, ...rest }) {
-            return <a {...rest} target="_blank" rel="noopener noreferrer" />;
+          // WI-212: http(s) links open in the system default browser via the
+          // shell:openExternal IPC — a click must never navigate or spawn a
+          // window inside the app. Non-http(s) hrefs (relative paths) keep
+          // the browser-default behavior; main's will-navigate guard still
+          // blocks them from hijacking the window.
+          a({ node: _node, href, ...rest }) {
+            const onClick = typeof href === 'string' && /^https?:\/\//i.test(href)
+              ? (e: React.MouseEvent) => {
+                  e.preventDefault();
+                  void window.starriver.openExternal?.(href);
+                }
+              : undefined;
+            return <a {...rest} href={href} target="_blank" rel="noopener noreferrer" onClick={onClick} />;
           },
           // Attachment refs (WI-102 generated images echoed by the assistant;
           // same refs user uploads carry) resolve through the lazy
@@ -3908,6 +3919,8 @@ interface StarriverBridge {
 
   // Open the workspace directory externally (main-process spawn)
   openTerminal?(cwd: string, command?: string): Promise<{ ok: boolean }>;
+  /** WI-212: open an http(s) link in the system default browser. */
+  openExternal?(url: string): Promise<{ ok: boolean }>;
   openIDE?(cwd: string, command?: string): Promise<{ ok: boolean }>;
   /** Models page "open config file": open ~/.starriver/settings.yaml in the system editor. */
   openModelsConfig?(): Promise<{ ok: boolean; error?: string }>;
