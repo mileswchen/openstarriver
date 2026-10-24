@@ -1037,6 +1037,7 @@ mod tests {
         assert_eq!(title_of().as_deref(), Some("手动命名"));
     }
 
+    #[test]
     fn delete_workspace_keeps_stale_session_marker() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("p");

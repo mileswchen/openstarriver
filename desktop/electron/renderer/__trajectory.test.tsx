@@ -384,4 +384,86 @@ describe('CodingView — 会话/轨迹 视图切换', () => {
     expect(screen.queryByRole('tab', { name: 'Trajectory' })).toBeNull();
     expect(window.starriver.getSessionTrace).not.toHaveBeenCalled();
   });
+
+  it('完整归档: 归档源恢复折叠段并显示压缩行;默认当前上下文不拉 archive', async () => {
+    window.starriver.listWorkspaces = vi.fn().mockResolvedValue([
+      { id: 'w1', path: '/tmp/demo', title: 'demo', createdAt: '', sessionIds: ['s1'] },
+    ]);
+    window.starriver.listSessions = vi.fn().mockResolvedValue([
+      { id: 's1', title: 'blue button', workspaceId: 'w1', createdAt: '', messageCount: 3 },
+    ]);
+    const ARCHIVE = {
+      entries: [
+        { kind: 'user', text: 'earlier task before compaction', seq: 2, timeMs: 900 },
+        { kind: 'assistant', text: 'done earlier', seq: 3, timeMs: 950 },
+        { kind: 'compaction', text: '[context compaction]\n\nearlier turns summarized\n\n(entries 0–3 folded out of the live context; they remain in the ledger and are shown around this row.)', seq: 4, timeMs: 1_000 },
+        ...TRACE.entries,
+      ],
+      compactions: 1,
+    };
+    window.starriver.getSessionArchive = vi.fn().mockResolvedValue(ARCHIVE);
+    const { CodingView, WorkspaceProvider, WorkspaceSection } = await import('./app');
+    render(<I18nProvider><WorkspaceProvider><WorkspaceSection onOpenCoding={() => {}} /><CodingView debugEnabled={false} /></WorkspaceProvider></I18nProvider>);
+    fireEvent.click(await screen.findByText('blue button'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' }));
+    await waitFor(() => expect(window.starriver.getSessionTrace).toHaveBeenCalled());
+
+    // Default source is the live-context projection: no archive fetch, no
+    // folded rows.
+    expect(window.starriver.getSessionArchive).not.toHaveBeenCalled();
+    expect(screen.queryByText('earlier task before compaction')).toBeNull();
+
+    // Toggle to the full archive: the shadowed span comes back with its
+    // labeled compaction checkpoint, and the toggle shows the count.
+    fireEvent.click(screen.getByRole('button', { name: 'Full archive' }));
+    await waitFor(() => expect(window.starriver.getSessionArchive).toHaveBeenCalledWith('s1'));
+    await waitFor(() => expect(screen.getAllByText('earlier task before compaction').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('done earlier').length).toBeGreaterThan(0);
+    expect(screen.getByText('Compaction')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Full archive ·1' })).toBeTruthy());
+
+    // Back to the live context: archive-only rows hide again.
+    fireEvent.click(screen.getByRole('button', { name: 'Live context' }));
+    expect(screen.queryByText('earlier task before compaction')).toBeNull();
+  });
+
+  it('会话归档: chat 视图切换归档源恢复折叠前的轮次,压缩行复用 CompactionRow', async () => {
+    window.starriver.listWorkspaces = vi.fn().mockResolvedValue([
+      { id: 'w1', path: '/tmp/demo', title: 'demo', createdAt: '', sessionIds: ['s1'] },
+    ]);
+    window.starriver.listSessions = vi.fn().mockResolvedValue([
+      { id: 's1', title: 'blue button', workspaceId: 'w1', createdAt: '', messageCount: 3 },
+    ]);
+    // Live context: only the post-compaction transcript.
+    window.starriver.getSessionMessages = vi.fn().mockResolvedValue([
+      { role: 'user', content: 'new task after compaction', seq: 10 },
+      { role: 'assistant', content: 'done', seq: 11 },
+    ]);
+    // Archive: the pre-compaction turns come back with a compaction marker.
+    window.starriver.getSessionArchiveMessages = vi.fn().mockResolvedValue([
+      { role: 'user', content: 'earlier task before compaction', seq: 2 },
+      { role: 'assistant', content: 'done earlier', seq: 3 },
+      { role: 'compaction', content: '## Primary Request and Intent\n\needlier turns summarized', seq: 4 },
+      { role: 'user', content: 'new task after compaction', seq: 10 },
+      { role: 'assistant', content: 'done', seq: 11 },
+    ]);
+    const { CodingView, WorkspaceProvider, WorkspaceSection } = await import('./app');
+    render(<I18nProvider><WorkspaceProvider><WorkspaceSection onOpenCoding={() => {}} /><CodingView debugEnabled={false} /></WorkspaceProvider></I18nProvider>);
+    fireEvent.click(await screen.findByText('blue button'));
+    // Chat view is the default — no archive fetch until toggled.
+    await waitFor(() => expect(window.starriver.getSessionMessages).toHaveBeenCalled());
+    expect(window.starriver.getSessionArchiveMessages).not.toHaveBeenCalled();
+    expect(screen.queryByText('earlier task before compaction')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Full archive' }));
+    await waitFor(() => expect(window.starriver.getSessionArchiveMessages).toHaveBeenCalledWith('s1'));
+    await waitFor(() => expect(screen.getAllByText('earlier task before compaction').length).toBeGreaterThan(0));
+    expect(screen.getByTestId('compaction-row')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Full archive ·1/ })).toBeTruthy());
+
+    // Back to the live context: pre-compaction rows hide again.
+    fireEvent.click(screen.getByRole('button', { name: 'Live context' }));
+    expect(screen.queryByText('earlier task before compaction')).toBeNull();
+    expect(screen.queryByTestId('compaction-row')).toBeNull();
+  });
 });

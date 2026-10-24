@@ -49,6 +49,26 @@
       "streaming": false
     },
     {
+      "name": "session.archiveMessages",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
       "name": "session.fork",
       "params": {
         "type": "object",
@@ -863,6 +883,26 @@
     },
     {
       "name": "session.trace",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.archiveTrace",
       "params": {
         "type": "object",
         "properties": {

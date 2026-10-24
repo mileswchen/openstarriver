@@ -122,37 +122,45 @@ pub const REVIEW_SECTION: &str = "mode:review";
 pub const IDENTITY_PROMPT: &str = "You are an AI agent powered by Starriver.";
 
 /// Text of the `-100` identity resident for one agent: suppressed when its
-/// prompt settings opt out (empty sections drop out of the assembly).
+/// prompt settings opt out (empty sections drop out of the assembly); an
+/// `identity.md` override file replaces the built-in default otherwise.
 pub fn identity_section_text(
     settings: Option<&starriver_kernel::system_prompt::PromptSettings>,
 ) -> String {
     match settings {
         Some(settings) if !settings.include_identity => String::new(),
-        _ => IDENTITY_PROMPT.to_string(),
+        _ => crate::prompt_override::section_override("identity")
+            .unwrap_or_else(|| IDENTITY_PROMPT.to_string()),
     }
 }
 
 /// Text of the `-99` harness:source resident (includeHarnessSource
-/// parity, wording per prompt-parity B.1); unset → no section.
+/// parity, wording per prompt-parity B.1); unset → no section. A `source.md`
+/// override file replaces the rendered default while the section is enabled.
 pub fn source_section_text(
     settings: Option<&starriver_kernel::system_prompt::PromptSettings>,
 ) -> String {
     match settings.and_then(|settings| settings.source_path.as_deref()) {
-        Some(path) => {
+        Some(path) => crate::prompt_override::section_override("source").unwrap_or_else(|| {
             format!("Source checkout: {path} — do not infer the working directory from this path.")
-        }
+        }),
         None => String::new(),
     }
 }
 
 /// Text of the `deployment:baseline` resident: the platform-level persona
-/// from settings; unset → no section.
+/// from settings; unset → no section. A `baseline.md` override file replaces
+/// the configured text while the section is configured.
 pub fn persona_global_section_text(
     settings: Option<&starriver_kernel::system_prompt::PromptSettings>,
 ) -> String {
-    settings
+    let configured = settings
         .and_then(|settings| settings.persona_global.clone())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if configured.is_empty() {
+        return configured;
+    }
+    crate::prompt_override::section_override("baseline").unwrap_or(configured)
 }
 
 /// The `coding` preset composed from CURRENT settings (backlog #7 settings
@@ -240,13 +248,14 @@ pub fn coding_preset(settings: &crate::settings::Settings) -> AgentOptions {
 pub fn language_section_text(
     settings: Option<&starriver_kernel::system_prompt::PromptSettings>,
 ) -> String {
-    match settings.and_then(|settings| settings.response_language.as_deref()) {
+    let default = match settings.and_then(|settings| settings.response_language.as_deref()) {
         Some(lang) if !lang.trim().is_empty() => format!(
             "Write all user-facing replies and plan documents in {lang}. \
              Quote code, identifiers and error output verbatim."
         ),
         _ => "Write user-facing replies in the language of the user's messages.".into(),
-    }
+    };
+    crate::prompt_override::section_override("language").unwrap_or(default)
 }
 
 /// Text of the `communication` resident (order 20): the working-agreement
@@ -331,7 +340,9 @@ pub fn register_settings_residents(
         )
         .ok();
     // `communication` resident (order 20): platform working-agreement rules,
-    // unconditional (not part of the persona settings).
+    // unconditional (not part of the persona settings). Dynamic so a
+    // `communication.md` override file lands on the next assembly without a
+    // restart.
     let communication = system_prompts
         .section(
             ctx,
@@ -339,7 +350,10 @@ pub fn register_settings_residents(
                 name: "communication".into(),
                 order: 20,
                 complete: false,
-                text: SectionText::Static(COMMUNICATION_SECTION.into()),
+                text: SectionText::Dynamic(Arc::new(|_| {
+                    crate::prompt_override::section_override("communication")
+                        .unwrap_or_else(|| COMMUNICATION_SECTION.to_string())
+                })),
             },
         )
         .ok();

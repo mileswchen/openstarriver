@@ -904,6 +904,44 @@ impl HostRuntime {
         .join()
         .unwrap_or(types::SessionTrace { entries: vec![] })
     }
+
+    /// Complete ledger projection including compaction-shadowed spans
+    /// (session.archive). Read-only over the same durable ledger; never
+    /// applies the kernel surface fold.
+    pub fn get_session_archive(&self, session_id: String) -> types::SessionArchive {
+        let inner = self.inner.clone();
+        let handle = self.runtime_handle.clone();
+        std::thread::spawn(move || {
+            handle.block_on(async {
+                let l = inner.lock().await;
+                let Some(ref runtime) = *l else {
+                    return types::SessionArchive {
+                        entries: vec![],
+                        compactions: 0,
+                    };
+                };
+                match crate::sessions::load_archive_parts(runtime, &session_id).await {
+                    Ok((entries, _compactions, tool_names)) => {
+                        let (rows, compactions) =
+                            crate::sessions::project_archive_trace(entries, &tool_names);
+                        types::SessionArchive {
+                            entries: rows,
+                            compactions,
+                        }
+                    }
+                    Err(_) => types::SessionArchive {
+                        entries: vec![],
+                        compactions: 0,
+                    },
+                }
+            })
+        })
+        .join()
+        .unwrap_or(types::SessionArchive {
+            entries: vec![],
+            compactions: 0,
+        })
+    }
 }
 
 /// BUG-142: the bare variant id of a stored model key. Scheduled tasks store
