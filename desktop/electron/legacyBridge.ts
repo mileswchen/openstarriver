@@ -326,6 +326,8 @@ export const LEGACY_METHODS: Record<string, LegacySpec> = {
   },
   listAllTaskRuns: { method: 'jobs.taskRuns' },
   getSessionTrace: { method: 'session.trace', params: ([sessionId]) => ({ sessionId }) },
+  getSessionArchive: { method: 'session.archiveTrace', params: ([sessionId]) => ({ sessionId }) },
+  getSessionArchiveMessages: { method: 'session.archiveMessages', params: ([sessionId]) => ({ sessionId }) },
   marketList: { method: 'market.list' },
   listConfigurableProviders: { method: 'configurableProviders.list' },
   listJobs: { method: 'jobs.list' },

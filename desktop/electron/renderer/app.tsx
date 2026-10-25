@@ -1186,6 +1186,11 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
   const [entries, setEntries] = useState<TraceEntry[] | null>(null);
   const [mode, setMode] = useState<'list' | 'ledger'>(() =>
     localStorage.getItem('starriver.trajMode') === 'ledger' ? 'ledger' : 'list');
+  // Complete-history archive (session.archive): the folded projection hides
+  // compaction-shadowed spans; the archive re-projects the raw ledger with
+  // labeled compaction checkpoints. Fetched lazily on first toggle.
+  const [source, setSource] = useState<'context' | 'archive'>('context');
+  const [archive, setArchive] = useState<{ entries: TraceEntry[]; compactions: number } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const switchMode = (m: 'list' | 'ledger') => {
     setMode(m);
@@ -1207,15 +1212,26 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
     setCollapsedTurns(new Set());
     setCollapsedCalls(new Set());
     setSelected(null);
+    setSource('context');
+    setArchive(null);
     return () => { stale = true; };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (source !== 'archive' || !sessionId || archive) return;
+    let stale = false;
+    window.starriver.getSessionArchive?.(sessionId)
+      .then((r) => { if (!stale) setArchive({ entries: r?.entries ?? [], compactions: r?.compactions ?? 0 }); })
+      .catch(() => { if (!stale) setArchive({ entries: [], compactions: 0 }); });
+    return () => { stale = true; };
+  }, [source, sessionId, archive]);
 
   type TrajRow = TraceEntry & { key: string; kind: TraceEntry['kind']; merged?: boolean };
   const turns = useMemo(() => {
     const turns: { key: string; rows: TrajRow[]; hasUser: boolean }[] = [];
     let n = 0;
     let cur: { key: string; rows: TrajRow[] } | null = null;
-    const list = entries ?? [];
+    const list = (source === 'archive' ? archive?.entries : entries) ?? [];
     const carry = (e: TraceEntry, idx: number): TrajRow => ({ ...e, key: `e${idx}` });
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
@@ -1248,7 +1264,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
       }
     }
     return turns;
-  }, [entries]);
+  }, [entries, source, archive]);
 
  // ── Ledger-mode instrumentation state (toolbar parity) ──
   const [collapsedTurns, setCollapsedTurns] = useState<Set<string>>(new Set());
@@ -1286,7 +1302,8 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
   const kindLabel = (k: TrajRow['kind']) =>
     k === 'user' ? t('coding.trajUser') : k === 'assistant' ? t('coding.trajAssistant')
     : k === 'thinking' ? t('coding.trajThinking') : k === 'system' ? t('coding.trajSystem')
-    : k === 'context' ? t('coding.trajContext') : t('coding.trajTool');
+    : k === 'context' ? t('coding.trajContext') : k === 'compaction' ? t('coding.trajCompaction')
+    : t('coding.trajTool');
   const kindIcon = (k: TrajRow['kind'], name?: string, hint?: string) => {
     if (k === 'system') return ICON_SYSTEM;
     if (k === 'context') return ICON_CONTEXT;
@@ -1305,6 +1322,16 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
     <div className="traj-mode-switch" role="group" aria-label={t('coding.trajMode')}>
       <button type="button" className={mode === 'list' ? 'active' : ''} aria-pressed={mode === 'list'} onClick={() => switchMode('list')}>{t('coding.trajModeList')}</button>
       <button type="button" className={mode === 'ledger' ? 'active' : ''} aria-pressed={mode === 'ledger'} onClick={() => switchMode('ledger')}>{t('coding.trajModeLedger')}</button>
+    </div>
+  );
+  // History source: the folded live-context projection vs the complete
+  // ledger archive (compaction-shadowed spans + labeled checkpoints).
+  const sourceSwitch = (
+    <div className="traj-mode-switch" role="group" aria-label={t('coding.trajArchive')}>
+      <button type="button" className={source === 'context' ? 'active' : ''} aria-pressed={source === 'context'} onClick={() => setSource('context')}>{t('coding.trajSourceCurrent')}</button>
+      <button type="button" className={source === 'archive' ? 'active' : ''} aria-pressed={source === 'archive'} onClick={() => setSource('archive')}>
+        {t('coding.trajSourceArchive')}{archive ? ` ·${archive.compactions}` : ''}
+      </button>
     </div>
   );
 
@@ -1408,7 +1435,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
               <input className="traj-ledger-search" type="search" value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t('coding.trajSearch')} aria-label={t('coding.trajSearch')} />
-              {modeSwitch}
+              {modeSwitch}{sourceSwitch}
             </div>
           </div>
           {q && (
@@ -1543,7 +1570,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="traj-view">
-      <div className="traj-list-toolbar">{modeSwitch}</div>
+      <div className="traj-list-toolbar">{modeSwitch}{sourceSwitch}</div>
       {(() => {
         const todo = latestTodoFromTexts(entries.map((e) => e.toolOutput ?? (e.kind === 'tool_result' ? e.text : null)));
         return todo ? <TodoCard todo={todo} /> : null;
@@ -3339,7 +3366,8 @@ function mdUrlTransform(url: string): string {
   return defaultUrlTransform(url);
 }
 
-function MarkdownContent({ source }: { source: string }) {
+/** WI-212 exported for the link-routing regression test. */
+export function MarkdownContent({ source }: { source: string }) {
   return (
     <div className="md-content">
       <ReactMarkdown
@@ -3355,9 +3383,19 @@ function MarkdownContent({ source }: { source: string }) {
             const lang = /language-([\w+-]+)/.exec(cls || '')?.[1];
             return <pre data-lang={lang || 'code'}>{children}</pre>;
           },
-          // External links open in a new tab.
-          a({ node: _node, ...rest }) {
-            return <a {...rest} target="_blank" rel="noopener noreferrer" />;
+          // WI-212: http(s) links open in the system default browser via the
+          // shell:openExternal IPC — a click must never navigate or spawn a
+          // window inside the app. Non-http(s) hrefs (relative paths) keep
+          // the browser-default behavior; main's will-navigate guard still
+          // blocks them from hijacking the window.
+          a({ node: _node, href, ...rest }) {
+            const onClick = typeof href === 'string' && /^https?:\/\//i.test(href)
+              ? (e: React.MouseEvent) => {
+                  e.preventDefault();
+                  void window.starriver.openExternal?.(href);
+                }
+              : undefined;
+            return <a {...rest} href={href} target="_blank" rel="noopener noreferrer" onClick={onClick} />;
           },
           // Attachment refs (WI-102 generated images echoed by the assistant;
           // same refs user uploads carry) resolve through the lazy
@@ -3573,7 +3611,7 @@ interface AgentModelBinding {
 
 /** One session.trace event (mirrors host types::SessionTraceEntry). */
 interface TraceEntry {
-  kind: 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'system' | 'context';
+  kind: 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'system' | 'context' | 'compaction';
   text: string;
   toolName?: string | null;
   toolInput?: string | null;
@@ -3828,9 +3866,12 @@ interface StarriverBridge {
   suggestFiles?(workspaceId: string, prefix?: string): Promise<string[]>;
   listSessions(workspaceId?: string): Promise<SessionInfo[]>;
   getSessionMessages(id: string): Promise<ChatMessage[]>;
+  /** Full-history chat archive (session.archiveMessages): raw-ledger transcript incl. compaction-shadowed turns. */
+  getSessionArchiveMessages(id: string): Promise<ChatMessage[]>;
   getSessionTimeline(id: string): Promise<SessionMessage[]>;
-  /** Trajectory ledger (session.trace): chronological event stream rendered by TrajectoryView. */
   getSessionTrace(id: string): Promise<{ entries: TraceEntry[] }>;
+  /** Full-history archive (session.archive): raw ledger projection incl. compaction-shadowed spans. */
+  getSessionArchive(id: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
   forkSession(sourceId: string, beforeMsgId: number, task: string): Promise<SessionInfo>;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string | null): Promise<void>;
@@ -3878,6 +3919,8 @@ interface StarriverBridge {
 
   // Open the workspace directory externally (main-process spawn)
   openTerminal?(cwd: string, command?: string): Promise<{ ok: boolean }>;
+  /** WI-212: open an http(s) link in the system default browser. */
+  openExternal?(url: string): Promise<{ ok: boolean }>;
   openIDE?(cwd: string, command?: string): Promise<{ ok: boolean }>;
   /** Models page "open config file": open ~/.starriver/settings.yaml in the system editor. */
   openModelsConfig?(): Promise<{ ok: boolean; error?: string }>;
@@ -3903,6 +3946,8 @@ interface StarriverBridge {
   /** WI-179: jobs registry — active scheduled runs carry `sessionId`. */
   listJobs?(): Promise<JobInfo[]>;
   getSessionTrace(sessionId: string): Promise<SessionTrace>;
+  getSessionArchiveMessages?(sessionId: string): Promise<ChatMessage[]>;
+  getSessionArchive?(sessionId: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
 
   // Backend health — renderer asks "is the Rust backend alive?" on mount and
   // shows a full-screen error instead of a silent zombie UI when it isn't.
@@ -7235,6 +7280,12 @@ const composerDrafts: Record<string, string> = {};
 export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const { t, lang, setLang } = useI18n();
   const [messages, setMessages] = useState<Message[]>([]);
+  // Chat-view history source (session.archiveMessages): 'context' shows the
+  // folded live-context transcript; 'archive' re-projects the raw ledger so
+  // compaction-shadowed turns come back, with role="compaction" marker rows
+  // that reuse the live-stream CompactionRow rendering.
+  const [chatSource, setChatSource] = useState<'context' | 'archive'>('context');
+  const [archiveMessages, setArchiveMessages] = useState<Message[] | null>(null);
   // Stale-todo watermark for the Todo widget: TaskStarted on a fresh turn
   // hides the previous turn's fully-completed todo list until this turn
   // writes a fresh todo_write (in-progress lists stay visible across turns).
@@ -7640,6 +7691,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         fileChanges: m.fileChanges ?? undefined,
       }));
       setMessages(loaded);
+      setChatSource('context');
+      setArchiveMessages(null);
       messagesRef.current = loaded;
       setTodoHideUpTo(0);
       setActiveSessionId(sessionId);
@@ -7739,10 +7792,38 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Displayed chat transcript: the live-context projection by default, or the
+  // raw-ledger archive once the user toggles the source (chatSource).
+  const EMPTY_MESSAGES: Message[] = [];
+  const displayMessages = chatSource === 'archive' ? (archiveMessages ?? EMPTY_MESSAGES) : messages;
+  const archiveCount = archiveMessages?.filter((m) => m.role === 'compaction').length ?? 0;
+
   const showError = useCallback((msg: string) => {
     setErrorMsg(msg);
     setTimeout(() => setErrorMsg(null), 4000);
   }, []);
+
+  // Chat archive (session.archiveMessages): fetched lazily on first toggle
+  // per session; the folded-context transcript stays the default source.
+  useEffect(() => {
+    if (chatSource !== 'archive' || !activeSessionId || archiveMessages) return;
+    let stale = false;
+    window.starriver.getSessionArchiveMessages?.(activeSessionId)
+      .then((msgs: any[]) => {
+        if (stale) return;
+        setArchiveMessages(msgs.map((m: any) => ({
+          id: crypto.randomUUID(), role: m.role as Message['role'], content: m.content,
+          seq: m.seq ?? undefined,
+          ts: m.ts ?? undefined,
+          usage: m.usage ?? undefined,
+          durationMs: m.durationMs ?? undefined,
+          doneTs: m.doneTs ?? undefined,
+          fileChanges: m.fileChanges ?? undefined,
+        })));
+      })
+      .catch(() => { if (!stale) setArchiveMessages([]); });
+    return () => { stale = true; };
+  }, [chatSource, activeSessionId, archiveMessages]);
 
   // On mount, load the deployment default as the initial staged mode for new
  // sessions (binding: the mode locks per session at creation; the global
@@ -7836,6 +7917,14 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     if (!activeSessionId) {
       setMessages([]);
       messagesRef.current = [];
+      // The chat source projection is per-session too: leaving a session
+      // whose Conversation view was switched to 完整归档 (archive) must drop
+      // the loaded archive ledger. Otherwise displayMessages keeps feeding
+      // the old transcript into turnGroups on the New Task screen and the
+      // stale turn content (work-fold row + prose) renders under/over the
+      // New Task composer (2026-10-23 broken New Task layout).
+      setChatSource('context');
+      setArchiveMessages(null);
       setStaleBusy(false);
       setQueue([]);
       return;
@@ -7865,6 +7954,11 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     lastConvSeqRef.current = newConvSeq;
     setMessages([]);
     messagesRef.current = [];
+    // Same per-session hygiene as the sync effect's empty branch: the "+ 新任务"
+    // click can land while the previous session's Conversation view was on the
+    // archive source — never carry that projection onto the New Task screen.
+    setChatSource('context');
+    setArchiveMessages(null);
     setTodoHideUpTo(0);
     setQueue([]);
     setSessionUsage({ in: 0, out: 0 });
@@ -9525,10 +9619,10 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // quirk (missing Done / out-of-order Start) must never leave an early row
     // shimmering after later steps already ran.
     let lastThinkId: string | null = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'thinking') { lastThinkId = messages[i].id; break; }
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      if (displayMessages[i].role === 'thinking') { lastThinkId = displayMessages[i].id; break; }
     }
-    for (const m of messages) {
+    for (const m of displayMessages) {
       if (m.role === 'user') {
         flushStep();
         // History rows: display_pieces splits one user message into a text
@@ -9625,7 +9719,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     }
     flushStep();
     return items;
-  }, [messages]);
+  }, [displayMessages]);
 
   // Turn folding (iOS parity): every user message starts a turn (same semantics as
   // the Trajectory's TURN x); earlier turns collapse to a one-line summary by default, and the last
@@ -10002,15 +10096,15 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // (live and replayed history share the same `## TODO` text shape), honoring
   // the todoHideUpTo stale-todo watermark above.
   const latestTodo = useMemo(() => {
-    for (let i = messages.length - 1; i >= todoHideUpTo; i--) {
-      const m = messages[i];
+    for (let i = displayMessages.length - 1; i >= todoHideUpTo; i--) {
+      const m = displayMessages[i];
       if (m.role === 'tool' && m.result && /todo/i.test(m.content)) {
         const parsed = parseTodoState(m.result);
         if (parsed) return parsed;
       }
     }
     return null;
-  }, [messages, todoHideUpTo]);
+  }, [displayMessages, todoHideUpTo]);
   const [todoOpen, setTodoOpen] = useState(false);
   const todoDone = latestTodo?.items.filter(i => i.done).length ?? 0;
   const todoTotal = latestTodo?.items.length ?? 0;
@@ -10073,6 +10167,19 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         </details>
       )}
       {(view === 'chat' || !inSession) && (<>
+      {inSession && view === 'chat' && (
+        <div className="traj-list-toolbar" style={{ padding: '2px 16px 0' }}>
+          <div className="traj-mode-switch" role="group" aria-label={t('coding.trajArchive')}>
+            <button type="button" className={chatSource === 'context' ? 'active' : ''} aria-pressed={chatSource === 'context'} onClick={() => setChatSource('context')}>{t('coding.trajSourceCurrent')}</button>
+            <button type="button" className={chatSource === 'archive' ? 'active' : ''} aria-pressed={chatSource === 'archive'} onClick={() => setChatSource('archive')}>
+              {t('coding.trajSourceArchive')}{archiveCount > 0 ? ` ·${archiveCount}` : ''}
+            </button>
+          </div>
+          {chatSource === 'archive' && !archiveMessages && (
+            <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>{t('coding.trajLoading')}</span>
+          )}
+        </div>
+      )}
       <div className="turn-body">
       {showTurnRail && (
         <div
@@ -10121,7 +10228,13 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
             <p>{stagedChat ? t('coding.emptyChat') : t('coding.empty')}</p>
           </div>
         )}
-        {turnGroups.map((tg, gi) => {
+        {/* New Task screen renders NO conversation content: turnGroups is fed
+            by displayMessages, which can briefly/stale-ly hold the previous
+            session's archive projection. With `.new-task { overflow-y: visible
+            }` that stale transcript would spill out of the list and paint
+            under/over the top-stacked composer. The empty state above is the
+            whole screen. */}
+        {!isNewTask && turnGroups.map((tg, gi) => {
           const isLast = gi === turnGroups.length - 1;
           const renderTurnItem = (item: CodingDisplay) => {
             if (item.type === 'step') {
@@ -10747,6 +10860,11 @@ interface WorkspaceCtx {
   setNewWorkspacePath: (v: string) => void;
   confirmDeleteWorkspace: WorkspaceInfo | null;
   setConfirmDeleteWorkspace: (w: WorkspaceInfo | null) => void;
+  /** Tasks-row delete (chats / scheduled runs): pending session id for the
+   *  confirm modal; null when no deletion is pending. */
+  confirmDeleteSession: string | null;
+  setConfirmDeleteSession: (id: string | null) => void;
+  handleConfirmSessionDelete: () => Promise<void>;
   loadSessions: () => Promise<void>;
   /** WI-179: session ids with a live turn (scheduled active runs ∪ interactive
    *  running slots), poll-refreshed every 3s while the page is visible. The
@@ -10830,6 +10948,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [renamingWorkspace, setRenamingWorkspace] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState<WorkspaceInfo | null>(null);
+  // Tasks-row delete: which session the confirm modal is open for.
+  const [confirmDeleteSession, setConfirmDeleteSession] = useState<string | null>(null);
   const [renamingSession, setRenamingSession] = useState<string | null>(null);
   const [renameSessionValue, setRenameSessionValue] = useState('');
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
@@ -11068,6 +11188,23 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const toggleArchivedGroup = useCallback((key: string) =>
     setArchivedOpenKeys(prev => ({ ...prev, [key]: !prev[key] })), []);
 
+  // Tasks-row delete (chats / scheduled runs): session.delete removes the log
+  // and the host metadata for good. Deleting the OPEN session closes the
+  // stream via CodingView's sync effect, exactly like archiveSession does.
+  const handleConfirmSessionDelete = useCallback(async () => {
+    const sessionId = confirmDeleteSession;
+    setConfirmDeleteSession(null);
+    if (!sessionId) return;
+    try {
+      await window.starriver.deleteSession(sessionId);
+      if (activeSessionId === sessionId) setActiveSessionId('');
+      await loadSessions();
+    } catch (err) {
+      console.error('[Workspace] delete session failed:', err);
+      showError(t('thread.deleteFailed'));
+    }
+  }, [confirmDeleteSession, activeSessionId, setActiveSessionId, loadSessions, showError, t]);
+
   useEffect(() => {
     loadWorkspaces(); loadSessions();
   }, [loadWorkspaces, loadSessions]);
@@ -11095,6 +11232,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     renamingSession, setRenamingSession, renameSessionValue, setRenameSessionValue,
     showNewWorkspace, setShowNewWorkspace, newWorkspacePath, setNewWorkspacePath,
     confirmDeleteWorkspace, setConfirmDeleteWorkspace,
+    confirmDeleteSession, setConfirmDeleteSession, handleConfirmSessionDelete,
     loadSessions, toggleWorkspace, activateWorkspace, requestNewConversation, archiveSession,
     runningSessionIds, refreshRunningSessions,
     handleUnarchive, handleRenameSession, handleRenameSubmit, handleCreateWorkspace,
@@ -11295,64 +11433,11 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
             );
           })}
 
-
-          {/* Sessions whose workspace was deleted stay on disk and remain
-              recoverable regardless of archived state: restore re-homes into
-              the active workspace when one exists, else unarchives only (the
-              row stays visible in this group either way). */}
-          {(() => {
-            const orphanWorkspaces = new Set(
-              [...ws.sessions, ...ws.archivedSessions]
-                .filter(s => s.workspaceId && !ws.workspaces.some(w => w.id === s.workspaceId))
-                .map(s => s.workspaceId as string),
-            );
-            const archivedOrphans = ws.archivedSessions.filter(s => s.workspaceId && orphanWorkspaces.has(s.workspaceId) && !ws.sessions.some(x => x.id === s.id));
-            const orphans: { id: string; title: string; archived: boolean }[] = [
-              ...ws.sessions
-                .filter(s => s.workspaceId && !ws.workspaces.some(w => w.id === s.workspaceId))
-                .map(s => ({ id: s.id, title: s.title || 'Coding task', archived: false })),
-              ...archivedOrphans.map(s => ({ id: s.id, title: s.title || 'Coding task', archived: true })),
-            ];
-            if (orphans.length === 0) return null;
-            const candidate = ws.activeWorkspaceId ?? ws.workspaces[0]?.id;
-            // The target must still exist — attaching to a stale id dies on
-            // the FK and used to vanish without feedback.
-            const validTarget = candidate && ws.workspaces.some(w => w.id === candidate) ? candidate : undefined;
-            const restore = (sessionId: string) => {
-              const call = validTarget
-                ? window.starriver.assignSessionWorkspace(sessionId, validTarget)
-                : Promise.resolve(window.starriver.unarchiveSession?.(sessionId));
-              void Promise.resolve(call)
-                .then(() => ws.loadSessions())
-                .catch((e) => ws.showError(String(e?.message ?? e)));
-            };
-            return (
-              <div>
-                <div className="sb-ws-group sb-ws-ungrouped" style={{ cursor: 'pointer' }} onClick={() => toggleFolder('ungrouped')}
-                  data-tip={t('workspace.ungroupedHint')}>
-                  <div className="sb-ws-row">
-                    <span className={'sb-ws-chevron' + (!foldedFolders.ungrouped ? ' open' : '')} aria-hidden="true" dangerouslySetInnerHTML={{ __html: ICON_CHEVRON_FOLD }} />
-                    <span className="sb-ws-folder" dangerouslySetInnerHTML={{ __html: foldedFolders.ungrouped ? ICON_FOLDER_CLOSED : ICON_FOLDER_OPEN }} />
-                    <span className="sb-ws-ungrouped-label">{t('workspace.ungrouped')}</span>
-                  </div>
-                </div>
-                {!foldedFolders.ungrouped && orphans.map(s => (
-                  <div key={s.id} className="coding-session-row sb-ws-archived-row sb-ws-ungrouped-row" data-tip={s.title}>
-                    <span className="sb-ws-session-name">
-                      {s.archived ? '📦 ' : ''}{s.title}
-                    </span>
-                    <button
-                      className="sb-ws-icon-btn"
-                      onClick={() => restore(s.id)}
-                      data-tip={validTarget ? t('workspace.ungroupedRestore') : t('workspace.ungroupedRestoreNoTarget')}
-                      aria-label={t('workspace.ungroupedRestore')}>
-                      <span dangerouslySetInnerHTML={{ __html: ICON_UNARCHIVE }} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
+          {/* Sessions whose workspace record is gone (the host keeps their
+              stale workspaceId marker on delete) render nowhere: no Ungrouped
+              bucket. Re-registering the same directory reuses the id (id ==
+              canonical path) and regroups every survivor automatically; the
+              session search stays available meanwhile. */}
 
           {/* Tasks: chats and scheduled runs that live outside any workspace,
               as two folders under one Tasks header (same level as Workspace).
@@ -11391,6 +11476,16 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
                         <span className="sb-run-dot" data-tip={t('scheduled.runningTip')} aria-label={t('scheduled.runningTip')} />
                       )}
                       <span className="sb-ws-session-name">{sessionLabel(s)}</span>
+                      {/* Hover delete: session.delete removes the log for good,
+                          so it goes through the shared confirm modal. */}
+                      <button
+                        type="button"
+                        className="sb-ws-icon-btn"
+                        aria-label={t('coding.delete')}
+                        title={t('coding.delete')}
+                        onClick={(e) => { e.stopPropagation(); ws.setConfirmDeleteSession(s.id); }}>
+                        <span dangerouslySetInnerHTML={{ __html: ICON_TRASH }} />
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -11443,6 +11538,15 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
           sessionCount={ws.sessions.filter(s => s.workspaceId === ws.confirmDeleteWorkspace!.id).length}
           onConfirm={ws.handleConfirmDelete}
           onCancel={() => ws.setConfirmDeleteWorkspace(null)}
+        />
+      )}
+
+      {/* Tasks-row delete (chats / scheduled runs): same /delete confirmation
+          the open session uses — the row's log is removed for good. */}
+      {ws.confirmDeleteSession && (
+        <SessionDeleteModal
+          onConfirm={() => ws.handleConfirmSessionDelete()}
+          onCancel={() => ws.setConfirmDeleteSession(null)}
         />
       )}
     </div>

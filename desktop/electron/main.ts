@@ -134,6 +134,14 @@ function createWindow(): void {
       items.push({ role: 'copy', label: '复制' });
     }
     if (params.linkURL) {
+      // WI-212: http(s) links also open in the system default browser —
+      // same whitelist as the click path and the IPC handler.
+      if (/^https?:\/\//i.test(params.linkURL)) {
+        items.push({
+          label: '在浏览器打开',
+          click: () => { void shell.openExternal(params.linkURL).catch(() => {}); },
+        });
+      }
       items.push({
         label: '复制链接',
         click: () => { clipboard.writeText(params.linkURL); },
@@ -145,6 +153,21 @@ function createWindow(): void {
     if (items.length > 0) {
       Menu.buildFromTemplate(items).popup();
     }
+  });
+
+  // WI-212: the renderer must never open Electron child windows — any
+  // window.open (target=_blank that bypassed the React <a> layer) is denied
+  // here, with http(s) re-routed to the system default browser.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
+  // The window loads only the local renderer: navigation is always prevented,
+  // and an http(s) navigation attempt (relative href, dragged link, …) is
+  // re-routed to the system browser instead of hijacking the app.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url).catch(() => {});
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -231,6 +254,24 @@ app.whenReady().then(async () => {
       };
       next();
     });
+
+  // WI-212: open a link in the system default browser. The http(s) whitelist
+  // lives here (and again in preload + the renderer <a> layer): agent output
+  // is untrusted content, so file:/javascript:/custom schemes must never
+  // reach shell.openExternal from any path.
+  ipcMain.handle('shell:openExternal', async (_e, raw: unknown): Promise<{ ok: boolean }> => {
+    const url = typeof raw === 'string' ? raw.trim() : '';
+    if (!/^https?:\/\//i.test(url)) return { ok: false };
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { return { ok: false }; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { ok: false };
+    try {
+      await shell.openExternal(parsed.toString());
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  });
 
   ipcMain.handle('shell:openTerminal', async (_e, args: { cwd: string; command?: string }) => {
     const cwd = String(args?.cwd ?? '');

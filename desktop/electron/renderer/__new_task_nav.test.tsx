@@ -74,3 +74,45 @@ describe('SidebarNavItems — re-click active New Task tab', () => {
     expect(document.querySelector('[aria-label="agent-preset"]')).toBeTruthy();
   });
 });
+
+// Regression 2026-10-23: leaving a session whose Conversation view was on the
+// "Full archive" source kept displayMessages pointed at the archive ledger
+// (app.tsx only reset chatSource/archiveMessages inside loadSessionMessages).
+// The New Task screen then rendered the previous session's transcript — the
+// work-fold row («Worked 2m 0s») plus stale prose spilling out of the
+// overflow-visible list, on top of / under the top-stacked composer, which
+// looked like a scrambled layout. The reset paths must drop the projection
+// and the New Task screen must render no turn content at all.
+describe('New Task reset — archive source projection leak', () => {
+  it('drops the archive projection and renders no turn content on New Task', async () => {
+    window.starriver.getSessionArchiveMessages = vi.fn().mockResolvedValue([
+      { role: 'user', content: 'archive prompt' },
+      { role: 'assistant', content: '🔧 bash ls\narchived summary', durationMs: 120000 },
+    ]);
+    const { CodingView, WorkspaceProvider, WorkspaceSection, SidebarNavItems } = await import('./app');
+    render(
+      <I18nProvider>
+        <WorkspaceProvider>
+          <SidebarNavItems tab="coding" onNavigate={() => {}} />
+          <WorkspaceSection onOpenCoding={() => {}} />
+          <CodingView debugEnabled={false} />
+        </WorkspaceProvider>
+      </I18nProvider>
+    );
+
+    fireEvent.click(await screen.findByText('blue button'));
+    await screen.findByRole('tab', { name: 'Conversation' });
+
+    // Switch the Conversation source to the archive ledger.
+    fireEvent.click(screen.getByRole('button', { name: 'Full archive' }));
+    await screen.findByText('archived summary');
+    expect(document.querySelector('.work-fold-row')?.textContent).toContain('Worked');
+
+    // Back to New Task: no trace of the archive transcript may remain.
+    fireEvent.click(document.querySelector('.nav-item.active') as HTMLElement);
+    await waitFor(() => expect(screen.queryByText('archived summary')).toBeNull());
+    expect(document.querySelector('.work-fold-row')).toBeNull();
+    expect(document.querySelector('.message-list.new-task')).toBeTruthy();
+    expect(screen.queryByRole('tab', { name: 'Conversation' })).toBeNull();
+  });
+});

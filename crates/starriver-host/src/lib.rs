@@ -30,6 +30,7 @@ pub mod plugin;
 pub mod plugin_kernel;
 pub mod preset;
 pub mod prompts;
+pub mod prompt_override;
 pub mod protocol_json;
 pub mod providers;
 pub mod question_bridge;

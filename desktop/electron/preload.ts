@@ -127,6 +127,10 @@ contextBridge.exposeInMainWorld('starriver', {
 
   // ── System integration (stays in Electron main, outside the protocol) ──
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
+  // WI-212: open http(s) links in the system default browser. Main validates
+  // the scheme whitelist again — the renderer is untrusted surface.
+  openExternal: (url: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('shell:openExternal', url),
   saveTempFile: (name: string, base64Data: string): Promise<string> =>
     ipcRenderer.invoke('runtime:saveTempFile', name, base64Data),
   fetchProviderModels: (baseUrl: string, apiKey?: string, engine?: 'ollama' | 'lmstudio') =>
