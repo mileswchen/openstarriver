@@ -518,3 +518,12 @@ pub struct SessionTraceEntry {
 pub struct SessionTrace {
     pub entries: Vec<SessionTraceEntry>,
 }
+
+/// Complete event-ledger projection for a session (session.archive): every
+/// persisted entry INCLUDING the spans shadowed by context compaction, plus
+/// labeled compaction-checkpoint rows. `compactions` counts the checkpoints.
+#[derive(Debug, Clone)]
+pub struct SessionArchive {
+    pub entries: Vec<SessionTraceEntry>,
+    pub compactions: u32,
+}

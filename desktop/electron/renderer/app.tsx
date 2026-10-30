@@ -1251,6 +1251,11 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
   const [entries, setEntries] = useState<TraceEntry[] | null>(null);
   const [mode, setMode] = useState<'list' | 'ledger'>(() =>
     localStorage.getItem('starriver.trajMode') === 'ledger' ? 'ledger' : 'list');
+  // Complete-history archive (session.archive): the folded projection hides
+  // compaction-shadowed spans; the archive re-projects the raw ledger with
+  // labeled compaction checkpoints. Fetched lazily on first toggle.
+  const [source, setSource] = useState<'context' | 'archive'>('context');
+  const [archive, setArchive] = useState<{ entries: TraceEntry[]; compactions: number } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const switchMode = (m: 'list' | 'ledger') => {
     setMode(m);
@@ -1272,15 +1277,26 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
     setCollapsedTurns(new Set());
     setCollapsedCalls(new Set());
     setSelected(null);
+    setSource('context');
+    setArchive(null);
     return () => { stale = true; };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (source !== 'archive' || !sessionId || archive) return;
+    let stale = false;
+    window.starriver.getSessionArchive?.(sessionId)
+      .then((r) => { if (!stale) setArchive({ entries: r?.entries ?? [], compactions: r?.compactions ?? 0 }); })
+      .catch(() => { if (!stale) setArchive({ entries: [], compactions: 0 }); });
+    return () => { stale = true; };
+  }, [source, sessionId, archive]);
 
   type TrajRow = TraceEntry & { key: string; kind: TraceEntry['kind']; merged?: boolean };
   const turns = useMemo(() => {
     const turns: { key: string; rows: TrajRow[]; hasUser: boolean }[] = [];
     let n = 0;
     let cur: { key: string; rows: TrajRow[] } | null = null;
-    const list = entries ?? [];
+    const list = (source === 'archive' ? archive?.entries : entries) ?? [];
     const carry = (e: TraceEntry, idx: number): TrajRow => ({ ...e, key: `e${idx}` });
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
@@ -1313,7 +1329,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
       }
     }
     return turns;
-  }, [entries]);
+  }, [entries, source, archive]);
 
  // ── Ledger-mode instrumentation state (toolbar parity) ──
   const [collapsedTurns, setCollapsedTurns] = useState<Set<string>>(new Set());
@@ -1351,7 +1367,8 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
   const kindLabel = (k: TrajRow['kind']) =>
     k === 'user' ? t('coding.trajUser') : k === 'assistant' ? t('coding.trajAssistant')
     : k === 'thinking' ? t('coding.trajThinking') : k === 'system' ? t('coding.trajSystem')
-    : k === 'context' ? t('coding.trajContext') : t('coding.trajTool');
+    : k === 'context' ? t('coding.trajContext') : k === 'compaction' ? t('coding.trajCompaction')
+    : t('coding.trajTool');
   const kindIcon = (k: TrajRow['kind'], name?: string, hint?: string) => {
     if (k === 'system') return ICON_SYSTEM;
     if (k === 'context') return ICON_CONTEXT;
@@ -1370,6 +1387,16 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
     <div className="traj-mode-switch" role="group" aria-label={t('coding.trajMode')}>
       <button type="button" className={mode === 'list' ? 'active' : ''} aria-pressed={mode === 'list'} onClick={() => switchMode('list')}>{t('coding.trajModeList')}</button>
       <button type="button" className={mode === 'ledger' ? 'active' : ''} aria-pressed={mode === 'ledger'} onClick={() => switchMode('ledger')}>{t('coding.trajModeLedger')}</button>
+    </div>
+  );
+  // History source: the folded live-context projection vs the complete
+  // ledger archive (compaction-shadowed spans + labeled checkpoints).
+  const sourceSwitch = (
+    <div className="traj-mode-switch" role="group" aria-label={t('coding.trajArchive')}>
+      <button type="button" className={source === 'context' ? 'active' : ''} aria-pressed={source === 'context'} onClick={() => setSource('context')}>{t('coding.trajSourceCurrent')}</button>
+      <button type="button" className={source === 'archive' ? 'active' : ''} aria-pressed={source === 'archive'} onClick={() => setSource('archive')}>
+        {t('coding.trajSourceArchive')}{archive ? ` ·${archive.compactions}` : ''}
+      </button>
     </div>
   );
 
@@ -1473,7 +1500,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
               <input className="traj-ledger-search" type="search" value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t('coding.trajSearch')} aria-label={t('coding.trajSearch')} />
-              {modeSwitch}
+              {modeSwitch}{sourceSwitch}
             </div>
           </div>
           {q && (
@@ -1608,7 +1635,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="traj-view">
-      <div className="traj-list-toolbar">{modeSwitch}</div>
+      <div className="traj-list-toolbar">{modeSwitch}{sourceSwitch}</div>
       {(() => {
         const todo = latestTodoFromTexts(entries.map((e) => e.toolOutput ?? (e.kind === 'tool_result' ? e.text : null)));
         return todo ? <TodoCard todo={todo} /> : null;
@@ -3657,7 +3684,7 @@ interface AgentModelBinding {
 
 /** One session.trace event (mirrors host types::SessionTraceEntry). */
 interface TraceEntry {
-  kind: 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'system' | 'context';
+  kind: 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'system' | 'context' | 'compaction';
   text: string;
   toolName?: string | null;
   toolInput?: string | null;
@@ -3914,9 +3941,12 @@ interface StarriverBridge {
   suggestFiles?(workspaceId: string, prefix?: string): Promise<string[]>;
   listSessions(workspaceId?: string): Promise<SessionInfo[]>;
   getSessionMessages(id: string): Promise<ChatMessage[]>;
+  /** Full-history chat archive (session.archiveMessages): raw-ledger transcript incl. compaction-shadowed turns. */
+  getSessionArchiveMessages(id: string): Promise<ChatMessage[]>;
   getSessionTimeline(id: string): Promise<SessionMessage[]>;
-  /** Trajectory ledger (session.trace): chronological event stream rendered by TrajectoryView. */
   getSessionTrace(id: string): Promise<{ entries: TraceEntry[] }>;
+  /** Full-history archive (session.archive): raw ledger projection incl. compaction-shadowed spans. */
+  getSessionArchive(id: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
   forkSession(sourceId: string, beforeMsgId: number, task: string): Promise<SessionInfo>;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string | null): Promise<void>;
@@ -3989,6 +4019,8 @@ interface StarriverBridge {
   /** WI-179: jobs registry — active scheduled runs carry `sessionId`. */
   listJobs?(): Promise<JobInfo[]>;
   getSessionTrace(sessionId: string): Promise<SessionTrace>;
+  getSessionArchiveMessages?(sessionId: string): Promise<ChatMessage[]>;
+  getSessionArchive?(sessionId: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
 
   // Backend health — renderer asks "is the Rust backend alive?" on mount and
   // shows a full-screen error instead of a silent zombie UI when it isn't.
@@ -7330,6 +7362,12 @@ const composerDrafts: Record<string, string> = {};
 export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const { t, lang, setLang } = useI18n();
   const [messages, setMessages] = useState<Message[]>([]);
+  // Chat-view history source (session.archiveMessages): 'context' shows the
+  // folded live-context transcript; 'archive' re-projects the raw ledger so
+  // compaction-shadowed turns come back, with role="compaction" marker rows
+  // that reuse the live-stream CompactionRow rendering.
+  const [chatSource, setChatSource] = useState<'context' | 'archive'>('context');
+  const [archiveMessages, setArchiveMessages] = useState<Message[] | null>(null);
   // Stale-todo watermark for the Todo widget: TaskStarted on a fresh turn
   // hides the previous turn's fully-completed todo list until this turn
   // writes a fresh todo_write (in-progress lists stay visible across turns).
@@ -7747,6 +7785,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         fileChanges: m.fileChanges ?? undefined,
       }));
       setMessages(loaded);
+      setChatSource('context');
+      setArchiveMessages(null);
       messagesRef.current = loaded;
       setTodoHideUpTo(0);
       setActiveSessionId(sessionId);
@@ -7846,10 +7886,38 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Displayed chat transcript: the live-context projection by default, or the
+  // raw-ledger archive once the user toggles the source (chatSource).
+  const EMPTY_MESSAGES: Message[] = [];
+  const displayMessages = chatSource === 'archive' ? (archiveMessages ?? EMPTY_MESSAGES) : messages;
+  const archiveCount = archiveMessages?.filter((m) => m.role === 'compaction').length ?? 0;
+
   const showError = useCallback((msg: string) => {
     setErrorMsg(msg);
     setTimeout(() => setErrorMsg(null), 4000);
   }, []);
+
+  // Chat archive (session.archiveMessages): fetched lazily on first toggle
+  // per session; the folded-context transcript stays the default source.
+  useEffect(() => {
+    if (chatSource !== 'archive' || !activeSessionId || archiveMessages) return;
+    let stale = false;
+    window.starriver.getSessionArchiveMessages?.(activeSessionId)
+      .then((msgs: any[]) => {
+        if (stale) return;
+        setArchiveMessages(msgs.map((m: any) => ({
+          id: crypto.randomUUID(), role: m.role as Message['role'], content: m.content,
+          seq: m.seq ?? undefined,
+          ts: m.ts ?? undefined,
+          usage: m.usage ?? undefined,
+          durationMs: m.durationMs ?? undefined,
+          doneTs: m.doneTs ?? undefined,
+          fileChanges: m.fileChanges ?? undefined,
+        })));
+      })
+      .catch(() => { if (!stale) setArchiveMessages([]); });
+    return () => { stale = true; };
+  }, [chatSource, activeSessionId, archiveMessages]);
 
   // On mount, load the deployment default as the initial staged mode for new
  // sessions (binding: the mode locks per session at creation; the global
@@ -9640,10 +9708,10 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // quirk (missing Done / out-of-order Start) must never leave an early row
     // shimmering after later steps already ran.
     let lastThinkId: string | null = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'thinking') { lastThinkId = messages[i].id; break; }
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      if (displayMessages[i].role === 'thinking') { lastThinkId = displayMessages[i].id; break; }
     }
-    for (const m of messages) {
+    for (const m of displayMessages) {
       if (m.role === 'user') {
         flushStep();
         // History rows: display_pieces splits one user message into a text
@@ -9740,7 +9808,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     }
     flushStep();
     return items;
-  }, [messages]);
+  }, [displayMessages]);
 
   // Turn folding (iOS parity): every user message starts a turn (same semantics as
   // the Trajectory's TURN x); earlier turns collapse to a one-line summary by default, and the last
@@ -10117,15 +10185,15 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // (live and replayed history share the same `## TODO` text shape), honoring
   // the todoHideUpTo stale-todo watermark above.
   const latestTodo = useMemo(() => {
-    for (let i = messages.length - 1; i >= todoHideUpTo; i--) {
-      const m = messages[i];
+    for (let i = displayMessages.length - 1; i >= todoHideUpTo; i--) {
+      const m = displayMessages[i];
       if (m.role === 'tool' && m.result && /todo/i.test(m.content)) {
         const parsed = parseTodoState(m.result);
         if (parsed) return parsed;
       }
     }
     return null;
-  }, [messages, todoHideUpTo]);
+  }, [displayMessages, todoHideUpTo]);
   const [todoOpen, setTodoOpen] = useState(false);
   const todoDone = latestTodo?.items.filter(i => i.done).length ?? 0;
   const todoTotal = latestTodo?.items.length ?? 0;
@@ -10188,6 +10256,19 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         </details>
       )}
       {(view === 'chat' || !inSession) && (<>
+      {inSession && view === 'chat' && (
+        <div className="traj-list-toolbar" style={{ padding: '2px 16px 0' }}>
+          <div className="traj-mode-switch" role="group" aria-label={t('coding.trajArchive')}>
+            <button type="button" className={chatSource === 'context' ? 'active' : ''} aria-pressed={chatSource === 'context'} onClick={() => setChatSource('context')}>{t('coding.trajSourceCurrent')}</button>
+            <button type="button" className={chatSource === 'archive' ? 'active' : ''} aria-pressed={chatSource === 'archive'} onClick={() => setChatSource('archive')}>
+              {t('coding.trajSourceArchive')}{archiveCount > 0 ? ` ·${archiveCount}` : ''}
+            </button>
+          </div>
+          {chatSource === 'archive' && !archiveMessages && (
+            <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>{t('coding.trajLoading')}</span>
+          )}
+        </div>
+      )}
       <div className="turn-body">
       {showTurnRail && (
         <div

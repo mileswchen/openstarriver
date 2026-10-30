@@ -1130,6 +1130,209 @@ fn get_session_trace_projects_the_event_ledger() {
 }
 
 #[test]
+fn get_session_archive_returns_compaction_shadowed_history() {
+    let t = test_host();
+
+    // Real compaction shape (compaction engine): `compaction/summary`
+    // carries the checkpoint data with NO surface op; the checkpoint
+    // user/message right after it carries SurfaceOp::Replace over the
+    // shadowed range — that replace is what erases seqs 0..=1 from the
+    // surface fold. The trace must show only the post-compaction view; the
+    // archive must show EVERYTHING plus a labeled compaction row.
+    t.host
+        .seed_test_log(
+            "log-archive".into(),
+            None,
+            None,
+            vec![
+                sev(
+                    0,
+                    "user/message",
+                    msg_json(
+                        MessageRole::User,
+                        "m0",
+                        vec![ContentBlock::Text("u1 before compaction".into())],
+                    ),
+                    true,
+                ),
+                sev(
+                    1,
+                    "assistant/message",
+                    JsonValue::Object(vec![
+                        ("turn".into(), JsonValue::UInt(1)),
+                        ("step".into(), JsonValue::UInt(1)),
+                        (
+                            "message".into(),
+                            msg_json(
+                                MessageRole::Assistant,
+                                "m1",
+                                vec![ContentBlock::Text("a1 before compaction".into())],
+                            ),
+                        ),
+                    ]),
+                    true,
+                ),
+                SessionEvent {
+                    seq: 2,
+                    time: 1_700_000_000_002,
+                    event_type: "compaction/summary".into(),
+                    data: JsonValue::Object(vec![
+                        ("shadowedStart".into(), JsonValue::UInt(0)),
+                        ("shadowedEnd".into(), JsonValue::UInt(1)),
+                        (
+                            "summary".into(),
+                            JsonValue::String("earlier turns summarized".into()),
+                        ),
+                    ]),
+                    surface_op: None,
+                    source_event_seqs: Vec::new(),
+                },
+                SessionEvent {
+                    seq: 3,
+                    time: 1_700_000_000_003,
+                    event_type: "user/message".into(),
+                    data: msg_json(
+                        MessageRole::User,
+                        "mck",
+                        vec![ContentBlock::Text(
+                            "[context compaction] earlier turns summarized".into(),
+                        )],
+                    ),
+                    surface_op: Some(SurfaceOp::Replace { start: 0, end: 1 }),
+                    source_event_seqs: Vec::new(),
+                },
+                sev(
+                    4,
+                    "user/message",
+                    msg_json(
+                        MessageRole::User,
+                        "m2",
+                        vec![ContentBlock::Text("u2 after compaction".into())],
+                    ),
+                    true,
+                ),
+                sev(
+                    5,
+                    "assistant/message",
+                    JsonValue::Object(vec![
+                        ("turn".into(), JsonValue::UInt(2)),
+                        ("step".into(), JsonValue::UInt(1)),
+                        (
+                            "message".into(),
+                            msg_json(
+                                MessageRole::Assistant,
+                                "m3",
+                                vec![ContentBlock::Text("a2 after compaction".into())],
+                            ),
+                        ),
+                    ]),
+                    true,
+                ),
+            ],
+        )
+        .expect("seed log");
+
+    // Folded projection (2026-10-26 contract, merged from openstarriver):
+    // no rendered row is ever removed — the checkpoint's Replace shadows the
+    // old seqs in the MODEL window, but the transcript resurrects them
+    // (display_seq_order) alongside a labeled CONTEXT row for the
+    // compaction/summary checkpoint and the checkpoint message itself.
+    let trace = t.host.get_session_trace("log-archive".into());
+    let texts: Vec<&str> = trace.entries.iter().map(|e| e.text.as_str()).collect();
+    assert!(
+        texts.iter().any(|t| t.contains("u1 before")),
+        "shadowed user entry stays in the transcript: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("a1 before")),
+        "shadowed assistant entry stays in the transcript: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("u2 after")),
+        "post-compaction entries project: {texts:?}"
+    );
+    let mark = trace
+        .entries
+        .iter()
+        .find(|e| e.kind == "context" && e.text.contains("[context compaction]"))
+        .expect("trace carries a labeled compaction CONTEXT row");
+    assert!(
+        mark.text.contains("earlier turns summarized"),
+        "checkpoint summary surfaced in the trace: {}",
+        mark.text
+    );
+
+    // Archive: everything, in ledger order, with the checkpoint labeled.
+    let archive = t.host.get_session_archive("log-archive".into());
+    assert_eq!(archive.compactions, 1, "one checkpoint counted");
+    let texts: Vec<&str> = archive.entries.iter().map(|e| e.text.as_str()).collect();
+    assert!(
+        texts.iter().any(|t| t.contains("u1 before compaction")),
+        "shadowed user entry restored in the archive: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("a1 before compaction")),
+        "shadowed assistant entry restored in the archive: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("u2 after compaction")),
+        "post-compaction entries still present: {texts:?}"
+    );
+    let mark = archive
+        .entries
+        .iter()
+        .find(|e| e.kind == "compaction")
+        .expect("archive carries a labeled compaction row");
+    assert!(
+        mark.text.contains("earlier turns summarized"),
+        "checkpoint summary surfaced: {}",
+        mark.text
+    );
+    assert!(
+        mark.text.contains("0–1"),
+        "shadowed range labeled: {}",
+        mark.text
+    );
+    let seqs: Vec<f64> = archive.entries.iter().map(|e| e.seq).collect();
+    let mut sorted = seqs.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    assert_eq!(seqs, sorted, "archive rows stay in ledger order");
+
+    // Chat archive (session.archiveMessages): under the 2026-10-26 contract
+    // the live transcript resurrects pre-compaction turns (display_seq_order);
+    // the archive chat still guarantees them and carries the 'compaction'
+    // marker row shaped exactly like the live stream's.
+    let folded = t.host.get_session_messages("log-archive".into());
+    let folded_texts: Vec<&str> = folded.iter().map(|m| m.content.as_str()).collect();
+    assert!(
+        folded_texts.iter().any(|c| c.contains("u1 before")),
+        "live chat transcript resurrects pre-compaction turns: {folded_texts:?}"
+    );
+    let chat = t.host.get_session_archive_messages("log-archive".into());
+    let chat_texts: Vec<&str> = chat.iter().map(|m| m.content.as_str()).collect();
+    assert!(
+        chat_texts
+            .iter()
+            .any(|c| c.contains("u1 before compaction")),
+        "archive chat restores pre-compaction turns: {chat_texts:?}"
+    );
+    assert!(
+        chat_texts.iter().any(|c| c.contains("u2 after compaction")),
+        "archive chat keeps post-compaction turns: {chat_texts:?}"
+    );
+    let marker = chat
+        .iter()
+        .find(|m| m.role == "compaction")
+        .expect("archive chat carries a compaction marker row");
+    assert!(
+        marker.content.contains("earlier turns summarized"),
+        "marker content is the checkpoint summary: {}",
+        marker.content
+    );
+    assert_eq!(marker.seq, Some(2), "marker sits at the checkpoint's seq");
+}
+
+#[test]
 fn get_session_trace_survives_corrupt_events_and_spans_two_turns() {
     let t = test_host();
 
