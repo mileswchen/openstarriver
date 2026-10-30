@@ -718,6 +718,11 @@ fn plan_review_decide() -> MethodSpec<HostRuntime> {
                 ("requestId", string_schema()),
                 ("approved", boolean_schema()),
                 ("feedback", string_schema()),
+                // Permission preset chosen on the review card; applied
+                // atomically with the approval (staged under the Plan
+                // profile, appended directly otherwise). Invalid names fail
+                // the call without resolving the review.
+                ("preset", string_schema()),
             ],
             &["sessionId", "approved"],
         ),
@@ -737,19 +742,36 @@ fn plan_review_decide() -> MethodSpec<HostRuntime> {
                 .get("feedback")
                 .and_then(Value::as_str)
                 .map(String::from);
-            if !call
-                .host
-                .respond_plan_review(session_id.clone(), request_id, approved, feedback)
-            {
-                return Err(ApiError::with_data(
-                    "PLAN_REVIEW_NOT_PENDING",
-                    format!(
-                        "no pending plan review for session `{session_id}` (already answered or none requested)"
-                    ),
+            let preset = call
+                .params
+                .get("preset")
+                .and_then(Value::as_str)
+                .map(String::from);
+            match call.host.respond_plan_review(
+                session_id.clone(),
+                request_id,
+                approved,
+                feedback,
+                preset,
+            ) {
+                Ok(responded) => {
+                    if !responded {
+                        return Err(ApiError::with_data(
+                            "PLAN_REVIEW_NOT_PENDING",
+                            format!(
+                                "no pending plan review for session `{session_id}` (already answered or none requested)"
+                            ),
+                            json!({ "sessionId": session_id }),
+                        ));
+                    }
+                    Ok(json!({ "ok": true }))
+                }
+                Err(message) => Err(ApiError::with_data(
+                    "INVALID_PERMISSION_PRESET",
+                    message,
                     json!({ "sessionId": session_id }),
-                ));
+                )),
             }
-            Ok(json!({ "ok": true }))
         },
     )
 }
@@ -3636,6 +3658,7 @@ mod approval_contract_tests {
                             "requestId": { "type": "string" },
                             "approved": { "type": "boolean" },
                             "feedback": { "type": "string" },
+                            "preset": { "type": "string" }
                         },
                         "required": ["sessionId", "approved"],
                         "additionalProperties": false,

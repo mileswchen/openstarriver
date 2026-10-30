@@ -2843,7 +2843,8 @@ fn plan_review_approval_exits_plan_mode_and_releases_readonly() {
         }
         let request_id = request_id.expect("plan/review-requested in the session log");
         assert!(
-            host.respond_plan_review("plan-t".into(), Some(request_id), true, None),
+            host.respond_plan_review("plan-t".into(), Some(request_id), true, None, None)
+                .expect("valid preset"),
             "approval resolves the pending review"
         );
         wait_terminal(&host, rx);
@@ -2888,6 +2889,165 @@ fn plan_review_approval_exits_plan_mode_and_releases_readonly() {
     });
 }
 
+/// The review card's preset rides the decision: approving with
+/// `danger-full-access` bundles BOTH knobs into the exit landing — the
+/// sandbox releases to danger-full-access (not the conservative
+/// workspace-write) and the approval folds to bypass — so the execution
+/// phase runs without approval prompts, exactly as the card advertised.
+#[test]
+fn plan_review_approval_with_preset_lands_danger_full_bundle() {
+    with_temp_home(|dir| {
+        let host = host_in(dir);
+        host.set_execution_mode("plan".into()).expect("plan mode");
+        host.debug_register_adapter(Arc::new(plan_review_e2e::ExitPlanAdapter {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            args_json: Mutex::new(r##"{"plan":"# Plan\n1. add the seam"}"##.into()),
+        }));
+
+        let mut rx = host
+            .execute(
+                "plan it".into(),
+                Some("plan-p".into()),
+                None,
+                Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
+                None,
+                None,
+            )
+            .expect("execute");
+
+        let mut request_id = None;
+        for _ in 0..200 {
+            let events =
+                host.debug_session_log_event_data("plan-p".into(), "plan/review-requested".into());
+            if let Some(data) = events.first() {
+                request_id = data.as_str_at("id").map(String::from);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let request_id = request_id.expect("plan/review-requested in the session log");
+        assert!(
+            host.respond_plan_review(
+                "plan-p".into(),
+                Some(request_id),
+                true,
+                None,
+                Some("danger-full-access".into()),
+            )
+            .expect("valid preset"),
+            "approval resolves the pending review"
+        );
+        wait_terminal(&host, rx);
+
+        // The landing bundled the preset: sandbox = danger-full-access.
+        let modes = poll_session_events(&host, "plan-p", "sandbox/mode");
+        let last = modes
+            .last()
+            .and_then(|d| d.as_str_at("mode"))
+            .map(String::from)
+            .expect("sandbox/mode events");
+        assert_eq!(
+            last, "danger-full-access",
+            "preset sandbox survives: {modes:?}"
+        );
+
+        // …and approval = bypass, stamped by the landing itself.
+        let policies = poll_session_events(&host, "plan-p", "approval/policy");
+        let last_policy = policies
+            .last()
+            .and_then(|d| d.as_str_at("policy"))
+            .map(String::from)
+            .expect("approval/policy events");
+        assert_eq!(
+            last_policy, "bypass",
+            "preset approval lands with the release: {policies:?}"
+        );
+
+        // The exit still flipped (the decision itself succeeded).
+        let flips = poll_session_events(&host, "plan-p", "plan/mode");
+        let acts: Vec<bool> = flips
+            .iter()
+            .filter_map(|d| d.get("active").and_then(|b| b.as_bool()))
+            .collect();
+        assert_eq!(acts, vec![true, false], "exit lands: {flips:?}");
+    });
+}
+
+/// An invalid preset name fails the decision BEFORE resolving anything: the
+/// review stays pending, no permission events land, and a subsequent call
+/// with a valid preset resolves the SAME review.
+#[test]
+fn plan_review_invalid_preset_fails_without_resolving() {
+    with_temp_home(|dir| {
+        let host = host_in(dir);
+        host.set_execution_mode("plan".into()).expect("plan mode");
+        host.debug_register_adapter(Arc::new(plan_review_e2e::ExitPlanAdapter {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            args_json: Mutex::new(r##"{"plan":"# Plan"}"##.into()),
+        }));
+
+        let mut rx = host
+            .execute(
+                "plan it".into(),
+                Some("plan-bad".into()),
+                None,
+                Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
+                None,
+                None,
+            )
+            .expect("execute");
+
+        let mut request_id = None;
+        for _ in 0..200 {
+            let events = host
+                .debug_session_log_event_data("plan-bad".into(), "plan/review-requested".into());
+            if let Some(data) = events.first() {
+                request_id = data.as_str_at("id").map(String::from);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let request_id = request_id.expect("plan/review-requested in the session log");
+
+        let error = host
+            .respond_plan_review(
+                "plan-bad".into(),
+                Some(request_id.clone()),
+                true,
+                None,
+                Some("rogue-preset".into()),
+            )
+            .expect_err("invalid preset must error");
+        assert!(error.contains("rogue-preset"), "error: {error}");
+
+        // A later call with a valid preset resolves the still-pending review.
+        assert!(
+            host.respond_plan_review(
+                "plan-bad".into(),
+                Some(request_id),
+                true,
+                None,
+                Some("manual".into()),
+            )
+            .expect("valid preset"),
+            "the review was NOT consumed by the failed call"
+        );
+        wait_terminal(&host, rx);
+
+        // No rogue permission events ever landed; the preset=manual approval
+        // releases the pairing to workspace-write (manual's sandbox).
+        let modes = poll_session_events(&host, "plan-bad", "sandbox/mode");
+        let last = modes
+            .last()
+            .and_then(|d| d.as_str_at("mode"))
+            .map(String::from)
+            .expect("sandbox/mode events");
+        assert_eq!(last, "workspace-write");
+    });
+}
+
 /// Rejection keeps the planning state: the failed call carries the user's
 /// feedback to the model, the fold stays active, and the read-only pairing
 /// holds.
@@ -2924,12 +3084,15 @@ fn plan_review_rejection_keeps_plan_mode_and_carries_feedback() {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         let request_id = request_id.expect("plan/review-requested in the session log");
-        assert!(host.respond_plan_review(
-            "plan-r".into(),
-            Some(request_id),
-            false,
-            Some("add a rollback step".into()),
-        ));
+        assert!(host
+            .respond_plan_review(
+                "plan-r".into(),
+                Some(request_id),
+                false,
+                Some("add a rollback step".into()),
+                None,
+            )
+            .expect("valid (no) preset"));
         wait_terminal(&host, rx);
 
         // Only the entry flip exists — the fold stays active.
@@ -2997,12 +3160,9 @@ fn exit_plan_mode_in_standard_mode_requests_review_and_approval_resumes() {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         let request_id = request_id.expect("plan/review-requested reaches the session log");
-        assert!(host.respond_plan_review(
-            "plan-off".into(),
-            Some(request_id),
-            true,
-            None,
-        ));
+        assert!(host
+            .respond_plan_review("plan-off".into(), Some(request_id), true, None, None)
+            .expect("valid (no) preset"));
         wait_terminal(&host, rx);
 
         // The tool result carries the approval; no plan-mode flip to active.
@@ -4993,6 +5153,45 @@ fn plan_mode_stamps_manual_and_honors_confirm_unlock() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "post-confirm turns must keep the user's approval choice (WI-144)"
+            );
+        }
+    });
+}
+
+/// The review card's preset survives turn restarts: after an explicit
+/// danger-full-access choice in the confirmed (execution) phase, the
+/// turn-start stamp must re-stamp the folded sandbox instead of clobbering
+/// it back to workspace-write (Plan's allowed set covers danger-full).
+#[test]
+fn plan_confirmed_turn_stamp_preserves_danger_full_sandbox() {
+    with_temp_home(|_| {
+        let t = test_host();
+        t.host.set_execution_mode("plan".into()).expect("plan");
+        let sid = "plan-danger";
+        execute_and_wait(&t, "plan the work", sid);
+        t.host.confirm_plan(sid.into()).expect("confirm plan");
+        execute_and_wait(&t, "execute the plan", sid);
+        assert_eq!(
+            last_sandbox(&t.host, sid).as_deref(),
+            Some("workspace-write")
+        );
+
+        // Execution-phase explicit choice: accepted (past the planning lock)
+        // and must survive the next turn's stamp.
+        t.host
+            .set_permission_preset(sid.into(), "danger-full-access".into())
+            .expect("execution-phase preset write");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            execute_and_wait(&t, "execute the plan", sid);
+            if last_sandbox(&t.host, sid).as_deref() == Some("danger-full-access")
+                && last_policy(&t.host, sid).as_deref() == Some("bypass")
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "danger-full-access preset must survive turn restarts"
             );
         }
     });

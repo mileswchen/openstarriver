@@ -3256,14 +3256,27 @@ impl HostRuntime {
                         )]),
                     )
                     .await;
+                    // Sandbox release: respect a folded danger-full-access (a
+                    // review-card preset that landed before this legacy
+                    // confirm) — Plan's allowed set covers it; otherwise the
+                    // conservative workspace-write release.
+                    let sandbox = if let Some(agent) =
+                        runtime.agent.registry().get(&SessionId(session_id.clone()))
+                    {
+                        match starriver_kernel::sandbox::effective_sandbox_mode(agent.session()) {
+                            Some(starriver_kernel::sandbox::SandboxMode::DangerFullAccess) => {
+                                "danger-full-access"
+                            }
+                            _ => "workspace-write",
+                        }
+                    } else {
+                        "workspace-write"
+                    };
                     let _ = append_session_event(
                         runtime,
                         &session_id,
                         "sandbox/mode",
-                        JsonValue::Object(vec![(
-                            "mode".into(),
-                            JsonValue::String("workspace-write".into()),
-                        )]),
+                        JsonValue::Object(vec![("mode".into(), JsonValue::String(sandbox.into()))]),
                     )
                     .await;
                 }

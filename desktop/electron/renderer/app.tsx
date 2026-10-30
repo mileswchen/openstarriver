@@ -2431,9 +2431,10 @@ export function MiniSelect(props: React.SelectHTMLAttributes<HTMLSelectElement>)
      the right-hand Plan panel), a feedback line, 继续规划 / 批准计划. Enter
      with text keeps planning with that feedback; empty Enter opens step 2.
    step "mode": the four permission presets — same vocabulary as the composer's
-     permission dropdown — with Manual preselected. 开始实施 hands the preset
-     to onApplyPreset; the host writes it BEFORE the plan decision. Full
-     access routes through step "risk" first.
+     permission dropdown — with the session's folded preset preselected.
+     开始实施 sends the preset as part of the approval decision itself
+     (plan.reviewDecision `preset` param); the host applies it atomically.
+     Full access routes through step "risk" first.
    step "risk": the existing risk-confirmation copy + acknowledge checkbox
      gating 开启并实施 (danger preset cannot be enabled blind). */
 const PLAN_REVIEW_MODES: { value: string; labelKey: string; descKey: string; danger?: boolean }[] = [
@@ -2537,7 +2538,7 @@ export function PlanChecklist({ source }: { source: string }) {
   return <>{out}</>;
 }
 
-export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }: {
+export function PlanReviewCard({ plan, currentPreset, onApprove, onDecide }: {
   plan: string;
   /** The session's folded permission preset — preselected on the mode step so
    *  re-approving a plan never silently downgrades the session (2026-10-14:
@@ -2545,9 +2546,11 @@ export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }:
    *  write downgraded a danger-full-access session to workspace-write, which
    *  then refused out-of-workspace edits mid-task). */
   currentPreset?: string;
-  /** Approve + apply the chosen permission preset; the host writes the
-      preset first and only then sends the approval decision. */
-  onApplyPreset: (preset: string) => void;
+  /** Approve + apply: the preset rides the decision itself (plan.reviewDecision
+      `preset` param) and the host applies it atomically with the approval.
+      The promise rejects on failure; the card stays up with the error so a
+      failed approval can never silently run under the wrong mode. */
+  onApprove: (preset: string) => Promise<void>;
   /** Keep planning, optionally with typed feedback. */
   onDecide: (feedback?: string) => void;
 }) {
@@ -2560,6 +2563,13 @@ export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }:
   );
   const [draft, setDraft] = useState('');
   const [riskChecked, setRiskChecked] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = (preset: string) => {
+    setError(null);
+    Promise.resolve(onApprove(preset)).catch((e) =>
+      setError(String(e?.message ?? e)),
+    );
+  };
 
   if (step === 'review') {
     const text = draft.trim();
@@ -2649,12 +2659,13 @@ export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }:
             <button
               type="button"
               className="plan-review-submit"
-              onClick={() => (mode === 'danger-full-access' ? setStep('risk') : onApplyPreset(mode))}
+              onClick={() => (mode === 'danger-full-access' ? setStep('risk') : submit(mode))}
             >
               {t('coding.planReviewStart')}
             </button>
           </span>
         </div>
+        {error && <div className="plan-review-error" role="alert">{error}</div>}
       </div>
     );
   }
@@ -2687,12 +2698,13 @@ export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }:
             className="plan-review-submit danger"
             disabled={!riskChecked}
             onClick={() => {
-              if (riskChecked) onApplyPreset('danger-full-access');
+              if (riskChecked) submit('danger-full-access');
             }}
           >
             {t('coding.planReviewEnableStart')}
           </button>
         </span>
+        {error && <div className="plan-review-error" role="alert">{error}</div>}
       </div>
     </div>
   );
@@ -3843,8 +3855,10 @@ interface StarriverBridge {
   httpServerInfo?: HttpServerInfoFn;
   execute(task: string, sessionId: string | undefined, cb: (err: string | null, event: any) => void, executionMode?: string, agent?: string, isolation?: boolean, agentPreset?: string, permissionPreset?: string): void;
   approve(sessionId: string, allowed: boolean, remember?: boolean): Promise<void>;
-  /** Plan fold: answer a pending exit_plan_mode review (Plan confirm card). */
-  planReviewDecision(sessionId: string, requestId: string, approved: boolean, feedback?: string): Promise<void>;
+  /** Plan fold: answer a pending exit_plan_mode review (Plan confirm card).
+   *  `preset` rides the decision — the host applies it atomically with the
+   *  approval. */
+  planReviewDecision(sessionId: string, requestId: string, approved: boolean, feedback?: string, preset?: string): Promise<void>;
   /** WI-5: agent-preset roster + deployment default for new sessions. */
   listAgentPresets?(): Promise<{ presets: { id: string; agent: string; name: string; description: string; source: string; broken: string | null; isDefault: boolean }[]; default: string }>;
   listTools(): Promise<any[]>;
@@ -10424,28 +10438,20 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
               <PlanReviewCard
                 plan={planReview.plan}
                 currentPreset={permissionPresetRef.current}
-                onApplyPreset={(preset) => {
-                  // Approve + apply: the preset write lands BEFORE the plan
-                  // decision so execution starts under the chosen mode; a
-                  // failed write is logged but never blocks the approval.
+                onApprove={(preset) => {
+                  // The preset rides the decision itself (plan.reviewDecision
+                  // `preset` param): the host applies it atomically with the
+                  // approval — no write-before-decision race, no silent
+                  // planning-phase rejection. Only after the decision
+                  // resolves is the composer picker synced to the (now
+                  // ledger-backed) mode.
                   const sid = sessionIdRef2.current!;
-                  window.starriver
-                    .setPermissionPreset(sid, preset)
-                    .catch((e) => console.error('[Coding] setPermissionPreset (plan approval) failed:', e))
+                  return window.starriver
+                    .planReviewDecision(sid, planReview.requestId, true, undefined, preset)
                     .then(() => {
-                      // The card's pick is now the engine's truth — sync the
-                      // composer picker so the UI can't advertise a broader
-                      // mode than the ledger holds (2026-10-14: the picker
-                      // kept showing 完全访问 while the card's 标准 write had
-                      // confined the session to workspace-write; the model
-                      // read that from the runtime context and every
-                      // out-of-workspace edit failed with sandbox confine).
                       setPermissionPresetState(preset);
                       permissionPresetRef.current = preset;
                       setPlanPhase('executing');
-                      window.starriver
-                        .planReviewDecision(sid, planReview.requestId, true)
-                        .catch((e) => console.error('[Coding] planReviewDecision failed:', e));
                     });
                 }}
                 onDecide={(feedback) => {
@@ -10562,11 +10568,16 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           // letting the user re-pick the approval mode for later turns (WI-144); during planning it stays locked to Manual.
           permissionLocked={!stagedChat && mode === 'plan' && planPhase === 'planning'}
           onPermissionPresetChange={stagedChat ? undefined : (m) => {
+            // Optimistic label; reverted if the ledger rejects the write so
+            // the picker never advertises a mode the engine doesn't hold.
+            const previous = permissionPresetRef.current;
             setPermissionPresetState(m);
             permissionPresetRef.current = m;
             if (sessionIdRef2.current) {
               return window.starriver.setPermissionPreset(sessionIdRef2.current, m).catch((e) => {
                 console.error('[Coding] setPermissionPreset failed:', e);
+                setPermissionPresetState(previous);
+                permissionPresetRef.current = previous;
                 throw e;
               });
             }

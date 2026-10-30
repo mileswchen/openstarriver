@@ -418,23 +418,109 @@ impl HostRuntime {
     /// approvals). Approval flips the logged plan state at the next accepted
     /// in-turn pre-step; rejection carries the feedback back to the model as
     /// the failed tool call.
+    ///
+    /// `preset` is the permission bundle chosen on the review card, applied
+    /// atomically with the approval: under the Plan profile it is staged and
+    /// lands bundled with the sandbox release (the read-only pairing holds
+    /// until the pre-step lands); under other profiles it is appended
+    /// immediately (same semantics as `session.setPermissionPreset`, minus
+    /// the planning lock — no in-plan review exists there). An invalid preset
+    /// name fails the call BEFORE anything is resolved or written.
     pub fn respond_plan_review(
         &self,
         session_id: String,
         request_id: Option<String>,
         approved: bool,
         feedback: Option<String>,
-    ) -> bool {
+        preset: Option<String>,
+    ) -> Result<bool, String> {
+        // Validate first: an unknown preset must leave the review pending and
+        // the session log untouched.
+        let parsed = match preset.as_deref() {
+            None => None,
+            Some(name) => Some(
+                crate::permission_presets::parse(name)
+                    .map(|p| crate::preset::Preset {
+                        sandbox: p.sandbox,
+                        approval: p.approval,
+                    })
+                    .ok_or_else(|| format!("unknown permission preset `{name}`"))?,
+            ),
+        };
+        if approved {
+            if let Some(preset) = parsed {
+                // Cheap pre-lock peek at the execution profile to decide
+                // stage-vs-append; re-checked under the inner lock below.
+                let plan_locked = {
+                    let inner = self.inner.blocking_lock();
+                    inner.as_ref().is_some_and(|inner| {
+                        inner.agent.execution_mode()
+                            == Some(crate::execution_mode::ExecutionMode::Plan)
+                    })
+                };
+                if plan_locked {
+                    let inner = self.inner.blocking_lock();
+                    if let Some(inner) = inner.as_ref() {
+                        inner
+                            .agent
+                            .plan_controller()
+                            .stage_exit_preset(&session_id, preset);
+                    }
+                } else {
+                    // Standard/unset profile: no read-only pairing to hold —
+                    // write both knobs now, before the decision resolves.
+                    // Same persistence path as session.setPermissionPreset
+                    // (confirm_plan's thread+block_on pattern).
+                    let inner = self.inner.clone();
+                    let handle = self.runtime_handle.clone();
+                    let append_session = session_id.clone();
+                    let _ = std::thread::spawn(move || {
+                        handle.block_on(async {
+                            let l = inner.lock().await;
+                            let Some(runtime) = l.as_ref() else {
+                                return;
+                            };
+                            for (event, field, value) in [
+                                ("sandbox/mode", "mode", preset.sandbox.as_str()),
+                                ("approval/policy", "policy", preset.approval.as_str()),
+                            ] {
+                                let _ = crate::sessions::append_session_event(
+                                    runtime,
+                                    &append_session,
+                                    event,
+                                    starriver_kernel::json::JsonValue::Object(vec![(
+                                        field.into(),
+                                        starriver_kernel::json::JsonValue::String(value.into()),
+                                    )]),
+                                )
+                                .await;
+                            }
+                        });
+                    })
+                    .join();
+                }
+            }
+        } else if parsed.is_some() {
+            // Rejected review: drop anything staged (defensive — nothing
+            // should be staged for a rejection path).
+            let inner = self.inner.blocking_lock();
+            if let Some(inner) = inner.as_ref() {
+                inner
+                    .agent
+                    .plan_controller()
+                    .discard_staged_preset(&session_id);
+            }
+        }
         let inner = self.inner.blocking_lock();
         let Some(inner) = inner.as_ref() else {
-            return false;
+            return Ok(false);
         };
         let bridge = &inner.agent.plan_review_bridge;
         let id = match request_id {
             Some(id) => id,
             None => match bridge.session_latest_request(&session_id) {
                 Some(id) => id,
-                None => return false,
+                None => return Ok(false),
             },
         };
         let decision = if approved {
@@ -442,7 +528,7 @@ impl HostRuntime {
         } else {
             crate::plan_review_bridge::PlanDecision::Rejected { feedback }
         };
-        bridge.respond(&id, decision)
+        Ok(bridge.respond(&id, decision))
     }
 
     /// Final decision of the session's latest approval request when it was

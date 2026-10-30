@@ -1984,6 +1984,7 @@ button[data-tip]:hover::after,
 .plan-review-answer::placeholder { color: var(--text-muted); }
 .plan-review-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .plan-review-hint { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-muted); }
+.plan-review-error { margin-top: 8px; font-size: 13px; color: var(--danger, #d75644); }
 .plan-review-actions { margin-left: auto; display: inline-flex; gap: 8px; }
 .plan-review-ignore {
   height: 30px; padding: 0 16px; border-radius: var(--radius-md); cursor: pointer;

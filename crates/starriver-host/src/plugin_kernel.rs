@@ -1293,6 +1293,12 @@ impl PluginKernel {
         Arc::clone(&self.plan_controller)
     }
 
+    /// The active execution profile, if set (Plan strict-lock checks on the
+    /// respond_plan_review path read this).
+    pub fn execution_mode(&self) -> Option<crate::execution_mode::ExecutionMode> {
+        *self.execution_mode.lock().unwrap()
+    }
+
     /// Upsert one agent-preset composition into the loop's registry so
     /// create- and resume-path resolution both see it (WI-5: the host builds
     /// the options from AGENT.md `preset:` blocks on every run).
@@ -1851,15 +1857,27 @@ impl PluginKernel {
                     );
                 }
                 let confirmed = !crate::plan_mode::effective_plan_mode(&session);
+                // Sandbox: planning is forced read-only; a confirmed (approved
+                // exit) session re-stamps its FOLDED sandbox when that is
+                // within the Plan profile's allowed set — a review-card preset
+                // (e.g. danger-full-access) must survive turn restarts — and
+                // falls back to workspace-write to heal read-only residue.
+                let sandbox_stamp = if confirmed {
+                    match starriver_kernel::sandbox::effective_sandbox_mode(&session) {
+                        Some(
+                            mode @ (starriver_kernel::sandbox::SandboxMode::WorkspaceWrite
+                            | starriver_kernel::sandbox::SandboxMode::DangerFullAccess),
+                        ) => mode.as_str().to_string(),
+                        _ => "workspace-write".to_string(),
+                    }
+                } else {
+                    "read-only".to_string()
+                };
                 let _ = session.append(
                     "sandbox/mode",
                     starriver_kernel::json::JsonValue::Object(vec![(
                         "mode".into(),
-                        starriver_kernel::json::JsonValue::String(if confirmed {
-                            "workspace-write".into()
-                        } else {
-                            "read-only".into()
-                        }),
+                        starriver_kernel::json::JsonValue::String(sandbox_stamp),
                     )]),
                 );
                 // Approval: the planning phase stays hard-locked to Manual.

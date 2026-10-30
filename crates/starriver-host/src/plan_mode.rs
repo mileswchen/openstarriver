@@ -124,10 +124,23 @@ pub enum PlanSelectOutcome {
 /// every agent publication (the host disposes agents between turns, so each
 /// execute gets a fresh context and a fresh registration).
 pub struct PlanModeController {
-    pending: Arc<Mutex<HashMap<String, bool>>>,
+    pending: Arc<Mutex<HashMap<String, PendingSelection>>>,
+    /// Preset staged by an approved plan review (`respond_plan_review`) while
+    /// the exit is still queued: consumed by `select` into the pending entry
+    /// and bundled into the landing's sandbox/approval release. Keyed by
+    /// session id (== agent id).
+    staged_presets: Arc<Mutex<HashMap<String, crate::preset::Preset>>>,
     /// Whether the Plan execution profile is active (the kernel's own lock,
     /// shared): the approved exit bundles the sandbox release only then.
     plan_profile: Arc<Mutex<Option<crate::execution_mode::ExecutionMode>>>,
+}
+
+/// A pending plan-state flip plus the permission preset (if any) that the
+/// approving decision staged for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingSelection {
+    pub active: bool,
+    pub preset: Option<crate::preset::Preset>,
 }
 
 impl PlanModeController {
@@ -136,8 +149,25 @@ impl PlanModeController {
     ) -> Arc<Self> {
         Arc::new(Self {
             pending: Arc::new(Mutex::new(HashMap::new())),
+            staged_presets: Arc::new(Mutex::new(HashMap::new())),
             plan_profile,
         })
+    }
+
+    /// Stage the permission preset chosen on the plan-review card for this
+    /// session's approved exit. Consumed when the exit is queued (`select`);
+    /// if the review never approves, callers drop it via
+    /// [`Self::discard_staged_preset`].
+    pub fn stage_exit_preset(&self, session_id: &str, preset: crate::preset::Preset) {
+        self.staged_presets
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), preset);
+    }
+
+    /// Drop a staged preset without consuming it (rejected/abandoned review).
+    pub fn discard_staged_preset(&self, session_id: &str) {
+        self.staged_presets.lock().unwrap().remove(session_id);
     }
 
     /// The logged state plus any selected state still waiting to be
@@ -149,7 +179,7 @@ impl PlanModeController {
             .lock()
             .unwrap()
             .get(agent.id().0.as_str())
-            .copied();
+            .map(|p| p.active);
         (logged, pending)
     }
 
@@ -160,6 +190,9 @@ impl PlanModeController {
     pub fn select(&self, agent: &Arc<dyn Agent>, active: bool) -> PlanSelectOutcome {
         let session = agent.session();
         let key = agent.id().0.clone();
+        // An approved review stages its preset before the exit is queued;
+        // consume it here so the pending entry carries it to the landing.
+        let staged = self.staged_presets.lock().unwrap().remove(&key);
         // Bind the guard explicitly: an `if let` over a lock temporary would
         // hold it across the block and deadlock the re-lock below.
         let waiting = {
@@ -167,7 +200,12 @@ impl PlanModeController {
             pending.get(&key).copied()
         };
         if let Some(waiting) = waiting {
-            if waiting == active {
+            if waiting.active == active {
+                // Same flip already queued — adopt the staged preset so the
+                // landing still sees the approval's choice.
+                if staged.is_some() {
+                    self.pending.lock().unwrap().get_mut(&key).unwrap().preset = staged;
+                }
                 return PlanSelectOutcome::Noop;
             }
             self.pending.lock().unwrap().remove(&key);
@@ -184,8 +222,12 @@ impl PlanModeController {
         if effective_plan_mode(&session) == active {
             return PlanSelectOutcome::Noop;
         }
+        let entry = PendingSelection {
+            active,
+            preset: staged,
+        };
         if has_open_turn(&session) {
-            self.pending.lock().unwrap().insert(key, active);
+            self.pending.lock().unwrap().insert(key, entry);
             return PlanSelectOutcome::Queued;
         }
         if append_plan_mode(&session, active).is_ok() {
@@ -217,11 +259,11 @@ impl PlanModeController {
                     if matches!(decision, PreStepDecision::Enter { .. }) {
                         let key = session.id.0.clone();
                         let selected = pending.lock().unwrap().remove(&key);
-                        if let Some(active) = selected {
-                            if append_plan_mode(&session, active).is_err() {
+                        if let Some(selected) = selected {
+                            if append_plan_mode(&session, selected.active).is_err() {
                                 // Keep waiting for a later accepted pre-step.
-                                pending.lock().unwrap().insert(key, active);
-                            } else if !active
+                                pending.lock().unwrap().insert(key, selected);
+                            } else if !selected.active
                                 && plan_profile
                                     .lock()
                                     .unwrap()
@@ -230,13 +272,36 @@ impl PlanModeController {
                                 // Approved exit under the Plan profile: release the
                                 // read-only pairing in the same breath, or tool calls
                                 // in the very next step would still run sandboxed.
-                                let _ = session.append(
-                                    "sandbox/mode",
-                                    JsonValue::Object(vec![(
-                                        "mode".into(),
-                                        JsonValue::String("workspace-write".into()),
-                                    )]),
-                                );
+                                // A preset staged by the approving review bundles the
+                                // user's chosen sandbox AND approval; without one the
+                                // conservative workspace-write release applies.
+                                match selected.preset {
+                                    Some(preset) => {
+                                        let _ = session.append(
+                                            "sandbox/mode",
+                                            JsonValue::Object(vec![(
+                                                "mode".into(),
+                                                JsonValue::String(preset.sandbox.as_str().into()),
+                                            )]),
+                                        );
+                                        let _ = session.append(
+                                            "approval/policy",
+                                            JsonValue::Object(vec![(
+                                                "policy".into(),
+                                                JsonValue::String(preset.approval.as_str().into()),
+                                            )]),
+                                        );
+                                    }
+                                    None => {
+                                        let _ = session.append(
+                                            "sandbox/mode",
+                                            JsonValue::Object(vec![(
+                                                "mode".into(),
+                                                JsonValue::String("workspace-write".into()),
+                                            )]),
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -488,5 +553,122 @@ pub(crate) mod tests {
             "Plan-profile exit bundles the sandbox release"
         );
         assert_eq!(controller.get(&agent), (false, None), "pending consumed");
+    }
+
+    /// The review card's preset rides the exit: a staged danger-full-access
+    /// preset lands BOTH knobs (sandbox danger-full-access + approval bypass)
+    /// instead of the conservative workspace-write release.
+    #[test]
+    fn pre_step_listener_lands_staged_preset_bundle() {
+        let agent = live_agent(true);
+        agent
+            .session()
+            .append(
+                "sandbox/mode",
+                JsonValue::Object(vec![("mode".into(), JsonValue::String("read-only".into()))]),
+            )
+            .unwrap();
+        agent
+            .session()
+            .append("turn/start", JsonValue::UInt(1))
+            .unwrap();
+        let controller = controller();
+        controller.stage_exit_preset(
+            agent.id().0.as_str(),
+            crate::preset::Preset {
+                sandbox: starriver_kernel::sandbox::SandboxMode::DangerFullAccess,
+                approval: starriver_agent_loop::approval::ApprovalMode::ByPass,
+            },
+        );
+        assert_eq!(controller.select(&agent, false), PlanSelectOutcome::Queued);
+        controller.register_step_listener(&agent);
+
+        let event = Arc::new(AgentPreStep {
+            turn: 1,
+            step: 2,
+            messages: Vec::new(),
+            signal: tokio_util::sync::CancellationToken::new(),
+        });
+        let decision = futures::executor::block_on(agent.ctx().waterfall(event, || {
+            Box::pin(async {
+                Ok(PreStepDecision::Enter {
+                    messages: Vec::new(),
+                })
+            })
+                as cordis_rslite::BoxFuture<Result<PreStepDecision, cordis_rslite::EventError>>
+        }))
+        .unwrap();
+        assert!(matches!(decision, PreStepDecision::Enter { .. }));
+        let session = agent.session();
+        assert!(!effective_plan_mode(&session), "exit flip landed");
+        assert_eq!(
+            starriver_kernel::sandbox::effective_sandbox_mode(&session),
+            Some(starriver_kernel::sandbox::SandboxMode::DangerFullAccess),
+            "staged preset sandbox lands with the release"
+        );
+        assert_eq!(
+            starriver_agent_loop::approval::effective_approval_mode(&session),
+            Some(starriver_agent_loop::approval::ApprovalMode::ByPass),
+            "staged preset approval lands with the release"
+        );
+        assert_eq!(controller.get(&agent), (false, None), "pending consumed");
+    }
+
+    /// A rejected review must not leak its staged preset into a later exit:
+    /// discard clears the staging, and the next exit lands the conservative
+    /// workspace-write release.
+    #[test]
+    fn discard_staged_preset_clears_the_bundle() {
+        let agent = live_agent(true);
+        agent
+            .session()
+            .append(
+                "sandbox/mode",
+                JsonValue::Object(vec![("mode".into(), JsonValue::String("read-only".into()))]),
+            )
+            .unwrap();
+        agent
+            .session()
+            .append("turn/start", JsonValue::UInt(1))
+            .unwrap();
+        let controller = controller();
+        controller.stage_exit_preset(
+            agent.id().0.as_str(),
+            crate::preset::Preset {
+                sandbox: starriver_kernel::sandbox::SandboxMode::DangerFullAccess,
+                approval: starriver_agent_loop::approval::ApprovalMode::ByPass,
+            },
+        );
+        controller.discard_staged_preset(agent.id().0.as_str());
+        assert_eq!(controller.select(&agent, false), PlanSelectOutcome::Queued);
+        controller.register_step_listener(&agent);
+
+        let event = Arc::new(AgentPreStep {
+            turn: 1,
+            step: 2,
+            messages: Vec::new(),
+            signal: tokio_util::sync::CancellationToken::new(),
+        });
+        let decision = futures::executor::block_on(agent.ctx().waterfall(event, || {
+            Box::pin(async {
+                Ok(PreStepDecision::Enter {
+                    messages: Vec::new(),
+                })
+            })
+                as cordis_rslite::BoxFuture<Result<PreStepDecision, cordis_rslite::EventError>>
+        }))
+        .unwrap();
+        assert!(matches!(decision, PreStepDecision::Enter { .. }));
+        let session = agent.session();
+        assert_eq!(
+            starriver_kernel::sandbox::effective_sandbox_mode(&session),
+            Some(starriver_kernel::sandbox::SandboxMode::WorkspaceWrite),
+            "discarded preset never reaches the log"
+        );
+        assert_eq!(
+            starriver_agent_loop::approval::effective_approval_mode(&session),
+            None,
+            "no approval stamp without a staged preset"
+        );
     }
 }

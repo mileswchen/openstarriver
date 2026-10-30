@@ -46,13 +46,14 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
   "session.confirmPlan": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.search": { params: {"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "sessions.running": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"array","items":{"type":"string"}}, streaming: false, permissions: ["session:read"] },
+  "session.waitTurn": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"timeoutMs":{"type":"integer"}},"required":["sessionId"],"additionalProperties":false}, result: {"type":"object","properties":{"ended":{"type":"boolean"},"reason":{"type":"string"}},"required":["ended","reason"],"additionalProperties":false}, streaming: false, permissions: ["session:read"] },
   "session.timeline": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["session:read"] },
   "session.trace": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.compact": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"keepRecent":{"type":"integer"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.usage": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.export": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"cwd":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "approval.respond": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"allowed":{"type":"boolean"},"remember":{"type":"boolean"}},"required":["sessionId","allowed"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["approval:respond"] },
-  "plan.reviewDecision": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"requestId":{"type":"string"},"approved":{"type":"boolean"},"feedback":{"type":"string"}},"required":["sessionId","approved"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
+  "plan.reviewDecision": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"requestId":{"type":"string"},"approved":{"type":"boolean"},"feedback":{"type":"string"},"preset":{"type":"string"}},"required":["sessionId","approved"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "interaction.respond": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"questionId":{"type":"string"},"answer":{"type":"string"}},"required":["sessionId","questionId","answer"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["approval:respond"] },
   "approval.listRules": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "approval.revokeRule": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"ruleId":{"type":"string"}},"required":["sessionId","ruleId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
@@ -171,13 +172,14 @@ export interface ProtocolClientMethods {
   sessionConfirmPlan(params: { sessionId: string }): Promise<unknown>;
   sessionSearch(params: { query: string; limit?: number }): Promise<unknown>;
   sessionsRunning(params: {  }): Promise<string[]>;
+  sessionWaitTurn(params: { sessionId: string; timeoutMs?: number }): Promise<{ ended: boolean; reason: string }>;
   sessionTimeline(params: { sessionId: string }): Promise<unknown[]>;
   sessionTrace(params: { sessionId: string }): Promise<unknown>;
   sessionCompact(params: { sessionId: string; keepRecent?: number }): Promise<unknown>;
   sessionUsage(params: { sessionId: string }): Promise<unknown>;
   sessionExport(params: { sessionId: string; cwd?: string }): Promise<unknown>;
   approvalRespond(params: { sessionId: string; allowed: boolean; remember?: boolean }): Promise<unknown>;
-  planReviewDecision(params: { sessionId: string; requestId?: string; approved: boolean; feedback?: string }): Promise<unknown>;
+  planReviewDecision(params: { sessionId: string; requestId?: string; approved: boolean; feedback?: string; preset?: string }): Promise<unknown>;
   interactionRespond(params: { sessionId: string; questionId: string; answer: string }): Promise<unknown>;
   approvalListRules(params: { sessionId: string }): Promise<unknown>;
   approvalRevokeRule(params: { sessionId: string; ruleId: string }): Promise<unknown>;

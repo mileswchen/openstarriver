@@ -1028,6 +1028,9 @@
           },
           "feedback": {
             "type": "string"
+          },
+          "preset": {
+            "type": "string"
           }
         },
         "required": [
