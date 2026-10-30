@@ -22,7 +22,7 @@ pub struct PromptSection {
     /// Pin the reply language for every session (e.g. `zh`). Unset → the
     /// `language` resident asks the model to follow the user's messages.
     pub response_language: Option<String>,
- /// `toolOrder` parity: presentation order for `<tool>:guide` sections.
+    /// `toolOrder` parity: presentation order for `<tool>:guide` sections.
     /// Must contain `<unlisted-tools>` exactly once (validated on write).
     pub tool_order: Option<Vec<String>>,
 }
@@ -61,39 +61,43 @@ pub struct AgentSection {
     /// SAME step fails 3+ times the ladder condenses, then downgrades
     /// reasoning, then reroutes here. Unset = no fallback rung.
     pub fallback_route: Option<String>,
- /// WI-10: compaction retain ratio (retainRatio — passed straight to
+    /// WI-10: compaction retain ratio (retainRatio — passed straight to
     /// the retain split; default 0.16). Must be 0.0..=1.0.
     pub compaction_retain_ratio: Option<f64>,
- /// WI-10: tool-output spill threshold in bytes (maxInlineBytes).
+    /// WI-10: tool-output spill threshold in bytes (maxInlineBytes).
     /// Unset keeps the 32 KiB engine default.
     pub spill_threshold_bytes: Option<usize>,
     /// WI-159: image request budget — count cap on hot images per request
- /// (reload-pulls included; maxImagesPerRequest). Unset keeps the
+    /// (reload-pulls included; maxImagesPerRequest). Unset keeps the
     /// engine default (8).
     pub image_max_request_images: Option<usize>,
     /// WI-159: image request budget — byte cap counted in base64 wire
- /// length (maxRequestFilesBytes parity). Unset keeps the engine
+    /// length (maxRequestFilesBytes parity). Unset keeps the engine
     /// default (4 MiB).
     pub image_max_request_bytes: Option<u64>,
     /// WI-1: register the `reload_image` tool (models can pull a historical
     /// image back into context). Unset = enabled.
     pub enable_reload_image: Option<bool>,
     /// WI-9 pruner: trim a tool result when its text exceeds this many
- /// Unicode code points (thresholdChars, default 8192).
+    /// Unicode code points (thresholdChars, default 8192).
     pub prune_threshold_chars: Option<usize>,
- /// WI-9 pruner: leading code points retained (headChars, 4096).
+    /// WI-9 pruner: leading code points retained (headChars, 4096).
     pub prune_head_chars: Option<usize>,
- /// WI-9 pruner: trailing code points retained (tailChars, 1024).
+    /// WI-9 pruner: trailing code points retained (tailChars, 1024).
     pub prune_tail_chars: Option<usize>,
     /// WI-9: extra condense attempts when pressure remains after one
- /// condense (compactionRetries, default 1).
+    /// condense (compactionRetries, default 1).
     pub compaction_retries: Option<u32>,
- /// WI-9: retries after a confirmed context-window overflow (
+    /// WI-9: retries after a confirmed context-window overflow (
     /// maxOverflowRetries, default 1; 0 disables recovery).
     pub max_overflow_retries: Option<u32>,
-    /// WI-152 S4: how long a learned "this route rejects images" memory stays
-    /// in force (hours). Unset → 168 (7 days); `0` keeps it forever.
-    pub vision_error_memory_ttl_hours: Option<u64>,
+    /// 2026-10-26 (WI-201 follow-up): absolute pressure-trigger ceiling in
+    /// tokens — the effective threshold is
+    /// min(compaction_threshold_ratio × context_window, this). Unset → the
+    /// engine default (200k). The builtin window table states true capacity
+    /// now, so this cap (not an under-declared window) bounds context bloat
+    /// on big-window models.
+    pub compaction_context_cap: Option<u64>,
     /// WI-7 @file: per-file expansion budget in bytes (default 32 KiB).
     pub file_ref_max_bytes: Option<usize>,
     /// WI-7 @file: cumulative expansion budget per message (default 96 KiB).
@@ -101,10 +105,6 @@ pub struct AgentSection {
     /// WI-6: register the `session_reference` tool (models can quote another
     /// conversation's surface). Unset = enabled.
     pub enable_session_reference: Option<bool>,
-    /// Pending-approval timeout in seconds (WI-16): a request no client
-    /// answers within this window is denied. Unset → the bridge default
-    /// (300 s); `0` disables the timeout (wait indefinitely).
-    pub approval_timeout_secs: Option<u64>,
     /// BUG-101: default bash tool timeout in seconds. Unset → 120 (2 min).
     pub bash_timeout_secs: Option<u64>,
     /// BUG-101: hard cap the model-requested bash timeout is clamped to.
@@ -124,7 +124,8 @@ impl AgentSection {
             || self.prune_head_chars.is_some()
             || self.prune_tail_chars.is_some()
             || self.compaction_retries.is_some()
-            || self.max_overflow_retries.is_some();
+            || self.max_overflow_retries.is_some()
+            || self.compaction_context_cap.is_some();
         if !has_any {
             return None;
         }
@@ -134,6 +135,7 @@ impl AgentSection {
             prune_tail_chars: self.prune_tail_chars,
             compaction_retries: self.compaction_retries,
             max_overflow_retries: self.max_overflow_retries,
+            compaction_context_cap: self.compaction_context_cap,
         })
     }
 }
@@ -232,10 +234,10 @@ pub struct LlmProviderSettings {
     /// (composer dropdown et al.), replacing the full provider display name.
     /// None/blank = fall back to `name`.
     pub model_label: Option<String>,
-    /// Legacy, ignored (WI-152 v2): image-input capability is resolved
-    /// automatically from the built-in provider table; this stored value has
-    /// no effect. Kept so existing settings files and napi signatures stay
-    /// stable.
+    /// Legacy, ignored: image-input capability is declared per model variant
+    /// (`LlmVariantSettings::supports_vision`), not per provider. This stored
+    /// value has no effect. Kept so existing settings files and napi
+    /// signatures stay stable.
     pub supports_vision: Option<bool>,
 }
 
@@ -263,24 +265,24 @@ impl Default for LlmProviderSettings {
     }
 }
 
-/// WI-201: builtin context windows for KNOWN cloud models, consulted when a
-/// provider entry does not declare `context_window` itself. The 128k platform
-/// default lied about GLM Coding Plan routes: the official spec for
+/// WI-201; revised 2026-10-26. Builtin context windows for KNOWN cloud
+/// models, consulted when a provider entry does not declare `context_window`
+/// itself. The values are CAPACITY TRUTH: the official spec for
 /// glm-5.3/glm-5.3-flash/glm-5.3-flashx is a 1M window with 128K max output
-/// (docs.bigmodel.cn, GLM-5.3-Flash/FlashX), and a live probe accepted
-/// 1,001,125 prompt tokens with 200 OK. The DECLARED values are
-/// deliberately bounded for the agent loop — it re-sends the full context on
-/// every call, and a 1M-derived compaction threshold would let context bloat
-/// to 800k tokens before condensing (the 2026-10-14 incident's 102k poisoned
-/// context amplified its failure cost 8×). 200k keeps the 0.8× trigger at
-/// 160k with a ≥32k output reserve. An explicit entry declaration still wins.
+/// (docs.bigmodel.cn, GLM-5.3-Flash/FlashX; a live probe accepted 1,001,125
+/// prompt tokens with 200 OK). The anti-bloat guard this table used to
+/// encode by declaring 200k (the 2026-10-14 incident's 102k poisoned context
+/// amplified failure cost 8×) moved to `compaction_context_cap` — the
+/// pressure trigger is now min(ratio × window, 200k), so big-window models
+/// still condense early without the table lying about capacity. An explicit
+/// entry declaration still wins.
 pub fn builtin_context_window(provider: &str, model: &str) -> Option<u64> {
     let model = model.to_ascii_lowercase();
     let window: u64 = match provider {
         // helpers.rs preset id ("zhipu") and the admin-created alias ("glm",
         // "GLM Coding Plan - CN") must resolve identically.
         "zhipu" | "glm" => match model.as_str() {
-            "glm-5.3" | "glm-5.3-flash" | "glm-5.3-flashx" => 200_000,
+            "glm-5.3" | "glm-5.3-flash" | "glm-5.3-flashx" => 1_000_000,
             "glm-4-plus" | "glm-4-flash" => 128_000,
             _ => return None,
         },
@@ -320,6 +322,14 @@ impl LlmProviderSettings {
 pub struct LlmVariantSettings {
     pub id: String,
     pub name: String,
+    /// Per-model image-input declaration (dsh pattern): `None`/`Some(true)`
+    /// = undeclared or declared-vision → requests ride images and the
+    /// provider's own error is the arbiter; `Some(false)` = declared
+    /// text-only → the request assembly fails loudly when any image block
+    /// (user message, history, tool output) is present. This is a claim
+    /// about the endpoint, not a check of it.
+    #[serde(default, alias = "supportsVision")]
+    pub supports_vision: Option<bool>,
 }
 
 /// Language-server registry overrides (`lsp.servers` in settings.yaml).
@@ -359,6 +369,25 @@ pub struct AppsSection {
     pub ide_command: Option<String>,
 }
 
+/// Browser automation settings (`browser:` namespace). Defaults match
+/// [`starriver_browser::BrowserServiceConfig`]; every field is optional so a
+/// bare `browser: {}` is valid.
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct BrowserSection {
+    /// Explicit browser executable (default: auto-discover Chrome /
+    /// Chromium / Edge; `browser_start` can override per call).
+    pub browser_path: Option<String>,
+    /// Headless by default; false opens a visible window (local desktop).
+    pub headless: Option<bool>,
+    /// Default viewport as `WIDTHxHEIGHT` (default 1280x800).
+    pub viewport: Option<String>,
+    /// Idle sessions are reaped after this many seconds (default 900).
+    pub idle_timeout_secs: Option<u64>,
+    /// Concurrent browser session cap (default 4).
+    pub max_sessions: Option<usize>,
+}
+
 /// Root settings document.
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
@@ -369,6 +398,7 @@ pub struct Settings {
     pub lsp: LspSettings,
     pub subagents: SubagentSection,
     pub apps: AppsSection,
+    pub browser: BrowserSection,
 }
 
 impl Settings {
@@ -424,7 +454,7 @@ impl Settings {
         Ok(updated)
     }
 
- /// Cross-field validation beyond serde (toolOrder parity: the kernel
+    /// Cross-field validation beyond serde (toolOrder parity: the kernel
     /// assembler rejects a guide order without the `<unlisted-tools>` rest
     /// sentinel exactly once — catch it here so a bad patch is rejected
     /// wholesale instead of silently falling back at every run).
@@ -578,6 +608,7 @@ mod tests {
                 ide_command: Some("code '{dir}'".into()),
                 ..Default::default()
             },
+            browser: BrowserSection::default(),
         };
         let ps = settings.to_prompt_settings();
         assert_eq!(settings.apps.ide_command.as_deref(), Some("code '{dir}'"));
@@ -596,6 +627,7 @@ mod tests {
             prompt: PromptSection::default(),
             agent: AgentSection::default(),
             apps: AppsSection::default(),
+            browser: BrowserSection::default(),
             llm: LlmSection {
                 execution_mode: "standard".into(),
                 image_model: None,
@@ -610,6 +642,7 @@ mod tests {
                     models: vec![LlmVariantSettings {
                         id: "deepseek-chat".into(),
                         name: "Chat".into(),
+                        supports_vision: Some(false),
                     }],
                     default_model: "deepseek-chat".into(),
                     concurrency: None,
@@ -629,6 +662,11 @@ mod tests {
         assert_eq!(reloaded.llm.providers.len(), 1);
         assert_eq!(reloaded.llm.providers[0].api_key, "!file:model/ds");
         assert_eq!(reloaded.llm.providers[0].models[0].id, "deepseek-chat");
+        assert_eq!(
+            reloaded.llm.providers[0].models[0].supports_vision,
+            Some(false),
+            "per-model vision declaration must round-trip through settings"
+        );
         assert_eq!(reloaded.llm.providers[0].model_label.as_deref(), Some("DS"));
     }
 
@@ -640,7 +678,7 @@ mod tests {
     fn merge_json_patch_merges_objects_and_replaces_scalars() {
         // Settings keys use the snake_case file dialect (settings.yaml keys).
         let base = serde_json::json!({
-            "agent": { "max_parallel_tool_calls": 4, "approval_timeout_secs": 300 },
+            "agent": { "max_parallel_tool_calls": 4, "bash_timeout_secs": 120 },
             "prompt": { "include_identity": true }
         });
         let merged = super::merge_json_patch(
@@ -652,7 +690,7 @@ mod tests {
         );
         assert_eq!(merged["agent"]["max_parallel_tool_calls"], 8);
         assert_eq!(
-            merged["agent"]["approval_timeout_secs"], 300,
+            merged["agent"]["bash_timeout_secs"], 120,
             "unrelated keys survive"
         );
         assert_eq!(merged["prompt"]["include_identity"], false);
@@ -682,8 +720,14 @@ mod tests {
             serde_json::json!({ "agent": { "tool_env": { "A": "1", "B": "2" } } }),
             &serde_json::json!({ "agent": { "tool_env": { "B": "3" } } }),
         );
-        assert_eq!(merged["agent"]["tool_env"]["A"], "1", "unrelated keys survive");
-        assert_eq!(merged["agent"]["tool_env"]["B"], "3", "patched key overrides");
+        assert_eq!(
+            merged["agent"]["tool_env"]["A"], "1",
+            "unrelated keys survive"
+        );
+        assert_eq!(
+            merged["agent"]["tool_env"]["B"], "3",
+            "patched key overrides"
+        );
     }
     /// BUG-101: the bash timeout knobs parse from the agent section and
     /// survive a patch round-trip.
@@ -697,7 +741,10 @@ mod tests {
         assert_eq!(parsed.agent.bash_timeout_max_secs, Some(1800));
 
         let settings = Settings::default();
-        assert_eq!(settings.agent.bash_timeout_secs, None, "unset = engine default");
+        assert_eq!(
+            settings.agent.bash_timeout_secs, None,
+            "unset = engine default"
+        );
         let updated = settings
             .update_from_patch(&serde_json::json!({
                 "agent": { "bash_timeout_max_secs": 600 }
@@ -714,9 +761,10 @@ mod tests {
     /// the agent section and survives a patch round-trip (default 666).
     #[test]
     fn turn_tool_call_budget_parses_and_patches() {
-        let parsed: Settings =
-            serde_json::from_value(serde_json::json!({ "agent": { "turn_tool_call_budget": 200 } }))
-                .expect("parse");
+        let parsed: Settings = serde_json::from_value(
+            serde_json::json!({ "agent": { "turn_tool_call_budget": 200 } }),
+        )
+        .expect("parse");
         assert_eq!(parsed.agent.turn_tool_call_budget, Some(200));
 
         let settings = Settings::default();
@@ -753,7 +801,7 @@ mod tests {
         assert_eq!(settings.prompt.include_identity, true, "original untouched");
     }
 
- /// toolOrder parity: the guide order must carry the rest sentinel
+    /// toolOrder parity: the guide order must carry the rest sentinel
     /// exactly once — a bad order is rejected at write time, not silently
     /// dropped at every run.
     #[test]
@@ -834,7 +882,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.yaml");
         std::fs::write(&path, "prompt:\n  include_identity: [unclosed\n").unwrap();
-        let settings = Settings::from_file(&path);        assert!(
+        let settings = Settings::from_file(&path);
+        assert!(
             settings.prompt.include_identity,
             "defaults after parse failure"
         );
@@ -867,19 +916,22 @@ mod tests {
         assert_eq!(gc.reasoning_effort.as_deref(), Some("high"));
     }
 
-    /// WI-201: known GLM Coding Plan models resolve their real window from
-    /// the builtin table when the entry declares none — the 128k default
-    /// lied about that route (official spec 1M; declared 200k as the
-    /// agent-loop compaction bound, see builtin_context_window's doc).
+    /// WI-201; revised 2026-10-26: known GLM Coding Plan models resolve their
+    /// REAL window (1M) from the builtin table when the entry declares none.
+    /// The anti-bloat bound the table used to fake lives in
+    /// `compaction_context_cap` now — see builtin_context_window's doc.
     #[test]
     fn builtin_context_window_declares_glm_routes() {
         // Both preset spellings of the GLM Coding Plan route resolve alike.
         assert_eq!(
             builtin_context_window("zhipu", "glm-5.3-flash"),
-            Some(200_000)
+            Some(1_000_000)
         );
-        assert_eq!(builtin_context_window("glm", "glm-5.3-flashx"), Some(200_000));
-        assert_eq!(builtin_context_window("zhipu", "GLM-5.3"), Some(200_000));
+        assert_eq!(
+            builtin_context_window("glm", "glm-5.3-flashx"),
+            Some(1_000_000)
+        );
+        assert_eq!(builtin_context_window("zhipu", "GLM-5.3"), Some(1_000_000));
         // The 4.x catalog models pin the documented 128K.
         assert_eq!(builtin_context_window("zhipu", "glm-4-plus"), Some(128_000));
         // Unknown model/provider → no builtin claim (platform default wins).
@@ -895,7 +947,7 @@ mod tests {
             default_model: "glm-5.3-flash".into(),
             ..Default::default()
         };
-        assert_eq!(entry.generation_config().context_window, 200_000);
+        assert_eq!(entry.generation_config().context_window, 1_000_000);
 
         // An EXPLICIT declaration still outranks the builtin table.
         entry.context_window = Some(4096);
@@ -921,10 +973,12 @@ mod tests {
                 LlmVariantSettings {
                     id: "deepseek-chat".into(),
                     name: "Chat".into(),
+                    supports_vision: None,
                 },
                 LlmVariantSettings {
                     id: "deepseek-reasoner".into(),
                     name: "Reasoner".into(),
+                    supports_vision: None,
                 },
             ],
             default_model: "deepseek-chat".into(),

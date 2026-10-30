@@ -2,7 +2,8 @@
 // to keep regression coverage for functions moved into helpers/admin/lib.
 use crate::admin::{build_skill_md, set_always_on_in_skill_md};
 use crate::helpers::{
-    apply_slash_dispatch, builtin_provider_presets, flatten_trace, tool_call_label, truncate_title,
+    apply_slash_dispatch, builtin_provider_presets, flatten_trace, tool_call_arg, tool_call_label,
+    truncate_title,
 };
 use crate::runtime::HostRuntime;
 use crate::types::ModelProvider;
@@ -107,6 +108,59 @@ fn tool_call_label_flattens_multiline_args() {
     let label = tool_call_label("bash", "a\r\nb");
     assert!(!label.contains('\n') && !label.contains('\r'));
     assert_eq!(label, "🔧 bash: a\\r\\nb");
+}
+
+#[test]
+fn tool_call_arg_shows_full_json_for_unknown_keys() {
+    // 2026-10-26: tools whose arguments carry no file/path/command key
+    // (terminal_kill, terminal_wait, mcp_* …) used to degrade to a bare tool
+    // name in the chat card — the full arguments JSON must be shown instead.
+    use starriver_kernel::json::JsonValue;
+    let to_serde = |raw: &str| -> serde_json::Value {
+        JsonValue::from_json_str(raw)
+            .unwrap()
+            .to_serde_json()
+            .unwrap()
+    };
+    let args = to_serde(r#"{"id":"40bf7bc8","timeoutMs":5000}"#);
+    assert_eq!(
+        tool_call_arg(Some(&args)),
+        r#"{"id":"40bf7bc8","timeoutMs":5000}"#
+    );
+    // Known display keys keep the short form (a file-sized `content` must not
+    // be inlined into the label).
+    let file = to_serde(r#"{"file":"snake.html","content":"<very long body>"}"#);
+    assert_eq!(tool_call_arg(Some(&file)), "snake.html");
+    let path = to_serde(r#"{"path":"/tmp/x.log"}"#);
+    assert_eq!(tool_call_arg(Some(&path)), "/tmp/x.log");
+    // Empty object / missing arguments → empty arg (bare "🔧 name" label).
+    assert_eq!(tool_call_arg(Some(&to_serde("{}"))), "{}");
+    assert_eq!(tool_call_arg(None), "");
+    // Malformed ingress (arguments as a bare string) shows verbatim.
+    let s = JsonValue::String("raw text".into());
+    assert_eq!(tool_call_arg(Some(&s.to_serde_json().unwrap())), "raw text");
+}
+
+#[test]
+fn tool_call_arg_caps_pathological_json_at_char_boundary() {
+    use starriver_kernel::json::JsonValue;
+    // 1500 CJK chars = 4500 bytes — the JSON fallback must cut at a char
+    // boundary (no panic) and mark the truncation with an ellipsis.
+    let long = "汉".repeat(1500);
+    let raw = format!(r#"{{"project":"starriver","prompt":"{long}"}}"#);
+    let value = JsonValue::from_json_str(&raw)
+        .unwrap()
+        .to_serde_json()
+        .unwrap();
+    let arg = tool_call_arg(Some(&value));
+    assert!(arg.ends_with("…"));
+    assert!(
+        arg.len() <= 2004,
+        "capped near 2000 bytes + ellipsis: {}",
+        arg.len()
+    );
+    // The cut is a valid char boundary: decoding round-trips.
+    let _ = arg.chars().count();
 }
 
 #[test]
@@ -531,10 +585,7 @@ fn presets_are_4_cloud_plus_ollama() {
     );
     // Stable order = the card grid order shown to the user.
     let ids: Vec<&str> = presets.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        ["deepseek", "qwen", "zhipu", "moonshot", "ollama"]
-    );
+    assert_eq!(ids, ["deepseek", "qwen", "zhipu", "moonshot", "ollama"]);
 }
 
 #[test]

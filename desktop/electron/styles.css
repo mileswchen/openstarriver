@@ -2203,41 +2203,70 @@ button[data-tip]:hover::after,
      与 ＋ 按钮同样用 middle 对齐。 */
   vertical-align: middle;
 }
-/* WI-152: running bash commands (one-shot tool processes, not PTYs) listed in
-   the terminals popover above the PTY rows. */
-.terminals-shell-cmd {
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 2px; border-bottom: 1px solid var(--border);
+/* WI-152/157: 后台终端面板 — Table 样式（2026-10-26 重排）：PTY 行与一次性
+   shell 行共用一套网格列（状态点 | 命令 | 会话 | 开始 | 时长 | 状态 | 操作），
+   表头对齐；命令列完整显示（pre-wrap 换行，绝不截断），元信息各占一列不再挤压。 */
+.terminals-grid {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) minmax(0, 150px) max-content max-content max-content 24px;
+  gap: 4px 8px; align-items: center;
 }
-.terminals-shell-dot {
-  flex: none; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--warning, #c77800);
-  animation: shell-dot-pulse 1.2s ease-in-out infinite;
+.terminals-head-row {
+  color: var(--text-muted); font-size: 10.5px; font-weight: 500;
+  letter-spacing: .04em; text-transform: uppercase;
+  padding: 2px 2px 5px; border-bottom: 1px solid var(--border);
 }
-@keyframes shell-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-.terminals-shell-text {
-  font-family: var(--mono); font-size: 11.5px; color: var(--text);
+.terminals-head-row + .terminal-row { border-top: none; }
+.terminal-row {
+  padding: 6px 2px; border-bottom: 1px solid var(--border);
+}
+.terminal-row:last-child { border-bottom: none; }
+.terminal-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+}
+.terminal-dot.live {
+  background: var(--success, #4ade80);
+  animation: terminal-dot-pulse 1.2s ease-in-out infinite;
+}
+.terminal-dot.off { background: var(--text-muted); }
+@keyframes terminal-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.terminal-cmd {
+  min-width: 0;
+  font-family: var(--mono, monospace); font-size: 12px; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+}
+.terminal-purpose {
+  display: inline-block; margin-left: 8px; font-size: 10px;
+  color: var(--text-secondary); background: var(--bg-soft);
+  border-radius: 4px; padding: 1px 6px; vertical-align: baseline;
+}
+.terminal-session {
+  min-width: 0; font-size: 11px; color: var(--text-secondary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* WI-157: start clock + running stopwatch for shell tool calls. */
-.terminals-shell-meta {
-  margin-left: auto; flex: none; padding-left: 12px;
-  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
+.terminal-started, .terminal-elapsed {
+  font-family: var(--mono, monospace); font-size: 11px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
 }
+.terminal-status {
+  font-family: var(--font, inherit); font-size: 10.5px;
+  padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+  color: var(--success, #4ade80); background: rgba(74, 222, 128, .12);
+}
+.terminal-status.idle { color: var(--text-secondary); background: var(--bg-soft); }
+.terminal-status.done { color: var(--text-secondary); background: var(--bg-soft); }
+.terminal-status.exited { color: var(--text-secondary); background: var(--bg-soft); }
+.terminal-status.failed { color: var(--danger, #f87171); background: rgba(248, 113, 113, .12); }
+.terminal-kill {
+  border: none; background: transparent; color: var(--text-muted);
+  cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 4px;
+}
+.terminal-kill:hover { color: var(--danger, #f87171); background: var(--bg-soft); }
 .composer-terminals-btn:hover { background: var(--bg-soft); color: var(--text); }
 .composer-terminals-btn svg { width: 16px; height: 16px; }
 .terminals-head { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-weight: 500; }
 .terminals-count { color: var(--text-muted); }
 .terminals-empty { color: var(--text-muted); padding: 6px 0; }
-.terminal-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
-.terminal-started { font-family: var(--mono, monospace); color: var(--text); white-space: nowrap; }
-.terminal-elapsed { font-family: var(--mono, monospace); color: var(--text-secondary); flex: 1; white-space: nowrap; }
-.terminal-id { font-family: var(--mono, monospace); color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.terminal-status { font-size: 11px; color: var(--success, #4ade80); }
-.terminal-status.exited { color: var(--text-muted); }
-.terminal-kill { border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
-.terminal-kill:hover { color: var(--danger, #f87171); background: var(--bg-soft); }
 
 /* WI-94: goal budget card */
 .goal-budget-card {

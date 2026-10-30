@@ -147,7 +147,7 @@ impl ToolExecutor for Bash {
                             runner = confined_argv.runner;
                             spawn_hook = confined_argv.spawn_hook;
                         }
- // Degraded execution (-style): with no OS
+                        // Degraded execution (-style): with no OS
                         // sandbox the standing approval policy is the only
                         // protection, so the command still runs — loudly.
                         // Read-only keeps failing closed, and any host can
@@ -209,9 +209,9 @@ impl ToolExecutor for Bash {
             // BUG-101: spawn explicitly so the child pid is known — the
             // timeout path kills the child's whole process group (with
             // `process_group(0)` the group id == the child pid).
-            let mut child = cmd.spawn().map_err(|e| {
-                tool_failure("bash", "SPAWN_FAILED", e.to_string())
-            })?;
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| tool_failure("bash", "SPAWN_FAILED", e.to_string()))?;
             let child_pid = child.id();
             // Armed for every non-normal exit from the wait below: the timeout
             // branch disarms after its explicit killpg, and a drop of the
@@ -261,7 +261,7 @@ impl ToolExecutor for Bash {
             if let Some(notice) = &degraded_notice {
                 combined = format!("{notice}\n{combined}");
             }
- // every settled command result ends with an
+            // every settled command result ends with an
             // `[exit code: N]` marker so the model can mechanically check
             // success before moving on (bash:guide points at it).
             let exit_marker = format!("[exit code: {}]", output.status.code().unwrap_or(-1));
@@ -423,7 +423,10 @@ fn bash_definition_base() -> ToolDefinition {
             "properties": { "output": { "type": "string" } }
         })),
         render: Arc::new(text_content),
-        executor: Arc::new(Bash { limits: BashTimeoutLimits::default(), tool_env: None }),
+        executor: Arc::new(Bash {
+            limits: BashTimeoutLimits::default(),
+            tool_env: None,
+        }),
         is_concurrency_safe: None,
         timeout: None,
         finalize_content: None,
@@ -487,8 +490,7 @@ mod tests {
         );
         assert_eq!(env.get("H2T_BRACE").unwrap(), &format!("{home}/x"));
 
-        let definition =
-            bash_definition_with_env(BashTimeoutLimits::default(), Some(env));
+        let definition = bash_definition_with_env(BashTimeoutLimits::default(), Some(env));
         let out = run(&definition, "echo $H2T_MARKER").await;
         assert!(out.contains("yes"), "marker missing: {out}");
 
@@ -499,7 +501,10 @@ mod tests {
             r#"case "$H2T_EXP" in "$HOME/.cargo/bin:"*) echo expanded;; *) echo "got:$H2T_EXP";; esac"#,
         )
         .await;
-        assert!(out.contains("expanded"), "expansion missing in child: {out}");
+        assert!(
+            out.contains("expanded"),
+            "expansion missing in child: {out}"
+        );
     }
 
     /// BUG-157: unset variables expand to empty; invalid keys are dropped.
@@ -581,10 +586,11 @@ mod tests {
         let ctx = ToolRunContext::new(execution);
         // Run the tool on a real task; abort() drops the future at its await
         // point — the same mid-run drop a turn cancel performs.
-        let handle = tokio::spawn(bash_definition().executor.execute(
-            Value::new(serde_json::json!({ "command": command })),
-            ctx,
-        ));
+        let handle = tokio::spawn(
+            bash_definition()
+                .executor
+                .execute(Value::new(serde_json::json!({ "command": command })), ctx),
+        );
         // Wait for the grandchild to be up and its pid recorded. Generous
         // window: under the full suite's parallel load sh startup can take
         // seconds, and this check must not be the flaky part.
@@ -613,7 +619,7 @@ mod tests {
         assert!(gone, "grandchild {grandchild} survived the drop kill");
     }
 
- /// every settled result ends with `[exit code: N]` so the
+    /// every settled result ends with `[exit code: N]` so the
     /// model can mechanically check success (bash:guide points at it).
     #[tokio::test]
     async fn success_output_ends_with_exit_code_marker() {
@@ -749,7 +755,10 @@ mod tests {
 
     #[test]
     fn timeout_clamp_default_cap_and_zero_compat() {
-        let limits = BashTimeoutLimits { default_secs: 120, max_secs: 1800 };
+        let limits = BashTimeoutLimits {
+            default_secs: 120,
+            max_secs: 1800,
+        };
         // Absent → default.
         assert_eq!(resolve_timeout_secs(None, &limits), 120);
         // Round-8 compat: timeout 0 / negative junk → default, never instant.
@@ -789,9 +798,7 @@ mod tests {
         let err = bash_definition()
             .executor
             .execute(
-                Value::new(
-                    serde_json::json!({ "command": command, "timeout": 1 }),
-                ),
+                Value::new(serde_json::json!({ "command": command, "timeout": 1 })),
                 ctx,
             )
             .await

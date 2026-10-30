@@ -28,6 +28,9 @@ project.xcworkspace/
 # session scratch
 .tmp-cargo/
 .tmp-test/
+.cargo-home/
+.tmpbuild/
+.testhome/
 .tmp-logos/
 .tmp-css-hunk.patch
 .tmp-build/

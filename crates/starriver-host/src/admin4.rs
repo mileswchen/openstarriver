@@ -119,9 +119,8 @@ impl HostRuntime {
                 .map(|s| parse_json(&s, "oauth_json"))
                 .transpose()?
                 .map(|s| {
-                    serde_json::from_str(&s).map_err(|e| {
-                        anyhow::anyhow!("invalid oauth_json (shape): {e}")
-                    })
+                    serde_json::from_str(&s)
+                        .map_err(|e| anyhow::anyhow!("invalid oauth_json (shape): {e}"))
                 })
                 .transpose()?,
             existing,
@@ -553,10 +552,7 @@ impl HostRuntime {
         // BUG-142/BUG-143: task-pinned key wins (stripped to the bare
         // variant id); without one, the agent's profile default rides —
         // parity with interactive runs, which pass config.model.
-        let run_model = scheduled_run_model(
-            model_key.as_deref(),
-            agent_config.model.as_deref(),
-        );
+        let run_model = scheduled_run_model(model_key.as_deref(), agent_config.model.as_deref());
         // Scheduled runs don't compute a recall injection; make sure a stale
         // section from an earlier interactive coding run can't leak in.
         if let Some(kernel) = self.inner.blocking_lock().as_ref().map(|i| i.agent.clone()) {
@@ -655,7 +651,7 @@ impl HostRuntime {
                     // bare "Chat" fallback.
                     Some(crate::plugin_kernel::HostSessionMeta {
                         title: Some(task_name.clone()),
-                        image_hot_override: None,
+                        reject_images: false,
                     }),
                     cwd,
                     Vec::new(),
@@ -797,11 +793,10 @@ impl HostRuntime {
                 // http_server's scheduled-task dispatch); a panic in one tick
                 // only skips that tick.
                 let runtime2 = Arc::clone(&runtime);
-                let fired = tokio::task::spawn_blocking(move || {
-                    runtime2.fire_due_scheduled_tasks()
-                })
-                .await
-                .unwrap_or_default();
+                let fired =
+                    tokio::task::spawn_blocking(move || runtime2.fire_due_scheduled_tasks())
+                        .await
+                        .unwrap_or_default();
                 if !fired.is_empty() {
                     tracing::info!(tasks = %fired.join(","), "scheduled tasks fired");
                 }
@@ -911,7 +906,9 @@ impl HostRuntime {
 /// the wire as the model NAME, so the composite must be split first
 /// (activate_model_key has already pinned the provider by exact match).
 fn bare_model_variant(key: &str) -> &str {
-    key.split_once('/').map(|(_, variant)| variant).unwrap_or(key)
+    key.split_once('/')
+        .map(|(_, variant)| variant)
+        .unwrap_or(key)
 }
 
 /// BUG-143: the model a scheduled run executes under — the task's pinned
@@ -934,7 +931,10 @@ mod tests {
         use crate::admin4::bare_model_variant;
         // BUG-142: the composite provider/variant key must not reach the wire.
         assert_eq!(bare_model_variant("zhipu/glm-5.3-flash"), "glm-5.3-flash");
-        assert_eq!(bare_model_variant("deepseek/deepseek-v4-pro"), "deepseek-v4-pro");
+        assert_eq!(
+            bare_model_variant("deepseek/deepseek-v4-pro"),
+            "deepseek-v4-pro"
+        );
         // Bare variant ids pass through unchanged.
         assert_eq!(bare_model_variant("glm-5.3-flash"), "glm-5.3-flash");
     }
@@ -944,8 +944,7 @@ mod tests {
         use crate::admin4::scheduled_run_model;
         // Task-pinned composite key wins, stripped to the bare variant (BUG-142).
         assert_eq!(
-            scheduled_run_model(Some("zhipu/glm-5.3"), Some("zhipu/glm-5.3-flash"))
-                .as_deref(),
+            scheduled_run_model(Some("zhipu/glm-5.3"), Some("zhipu/glm-5.3-flash")).as_deref(),
             Some("glm-5.3")
         );
         // Null-model task (the template default) rides the agent profile
@@ -1194,13 +1193,20 @@ mod tests {
             let handle = host.runtime_handle.clone();
             let sid = handle.block_on(async {
                 loop {
-                    if let Some(run) = host.scheduler.list_active_runs().iter().find(|r| r.task_name == "sidebark") {
+                    if let Some(run) = host
+                        .scheduler
+                        .list_active_runs()
+                        .iter()
+                        .find(|r| r.task_name == "sidebark")
+                    {
                         return Some(run.session_id.clone());
                     }
                     // The mock turn may settle before we poll — fall back to
                     // the recorded history's session id.
                     if let Some(t) = host.scheduler.get("sidebark").await {
-                        if let Some(rec) = t.run_history.iter().rev().find(|r| r.session_id.is_some()) {
+                        if let Some(rec) =
+                            t.run_history.iter().rev().find(|r| r.session_id.is_some())
+                        {
                             return rec.session_id.clone();
                         }
                     }

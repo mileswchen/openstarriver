@@ -261,24 +261,28 @@ describe('FeedbackRow (WI-48 feedback slice)', () => {
   });
 });
 
-describe('WI-152 S2 image gate', () => {
-  const provider = (id: string, visionSupported?: boolean): any => ({
+describe('WI-152 v3 (dsh pattern) image gate', () => {
+  const provider = (id: string, variantVision: boolean | null | undefined, variantId = 'm1'): any => ({
     id, name: id, modelType: 'cloud', providerType: 'openai-compat', baseUrl: 'https://x',
-    apiKey: 'k', models: [{ id: 'm1', name: 'M1' }], defaultModel: 'm1',
-    apiFormat: 'openai-chat', supportsVision: visionSupported === undefined ? null : visionSupported,
-    visionSupported,
+    apiKey: 'k', models: [{ id: variantId, name: 'M1', supportsVision: variantVision === undefined ? null : variantVision }],
+    defaultModel: 'm1', apiFormat: 'openai-chat',
   });
 
-  it('imagesAcceptedForRoute resolves the active provider and defaults permissive', () => {
+  it('imagesAcceptedForRoute resolves the active MODEL and defaults permissive', () => {
     const models = [
-      provider('deepseek', true),
-      provider('moonshot', false),
+      provider('vision-prov', true),
+      provider('text-prov', false),
+      provider('undeclared-prov', undefined),
     ];
-    expect(imagesAcceptedForRoute(models, 'deepseek/m1')).toBe(true);
-    expect(imagesAcceptedForRoute(models, 'moonshot/moonshot-v1-8k')).toBe(false);
-    // Unknown provider (self-hosted endpoint) stays permissive.
+    expect(imagesAcceptedForRoute(models, 'vision-prov/m1')).toBe(true);
+    expect(imagesAcceptedForRoute(models, 'text-prov/m1')).toBe(false);
+    // Undeclared variant → permissive.
+    expect(imagesAcceptedForRoute(models, 'undeclared-prov/m1')).toBe(true);
+    // Unknown provider (self-hosted endpoint) or unknown variant of a known
+    // provider stays permissive — the provider's own error is the arbiter.
     expect(imagesAcceptedForRoute(models, 'my-relay/chat')).toBe(true);
-    expect(imagesAcceptedForRoute([], 'deepseek/m1')).toBe(true);
+    expect(imagesAcceptedForRoute(models, 'text-prov/other-model')).toBe(true);
+    expect(imagesAcceptedForRoute([], 'text-prov/m1')).toBe(true);
   });
 
   it('Composer excludes image types from the picker and renders the gate notice', () => {

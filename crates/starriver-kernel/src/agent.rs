@@ -100,6 +100,15 @@ pub struct CompactionTuning {
  /// Retries after a confirmed context-window overflow (
     /// maxOverflowRetries, default 1; 0 disables recovery).
     pub max_overflow_retries: Option<u32>,
+    /// 2026-10-26 (WI-201 follow-up): absolute ceiling on the pressure
+    /// trigger — the effective threshold becomes
+    /// min(thresholdRatio × contextWindow, this cap). The builtin window
+    /// table now states true model capacity (glm-5.3 family = 1M), so this
+    /// cap carries the anti-bloat guard the table used to encode by
+    /// under-declaring windows (the 2026-10-14 incident's 102k poisoned
+    /// context is why the guard exists). Default 200k; bypassed like the
+    /// ratio — only the Pressure trigger compares against it.
+    pub compaction_context_cap: Option<u64>,
 }
 
 /// WI-1/WI-159: cold/hot projection knobs (`maxImagesPerRequest` /
@@ -113,10 +122,15 @@ pub struct ImageProjectionConfig {
     /// (what actually rides the request ≈ 4/3 of the normalized payload). 0
     /// together with `max_images: 0` is the text-only stamp.
     pub max_request_bytes: u64,
-    /// WI-152 S2: whether `reload_image` pulls may force images hot. Text-only
-    /// runs (hot override `(0, 0)`) disable reload: a pulled image would put
+    /// WI-152 S2: whether `reload_image` pulls may force images hot. Declared
+    /// text-only runs disable reload entirely: a pulled image would put
     /// image data on the wire, and cold placeholders must not advertise it.
     pub allow_reload: bool,
+    /// dsh-pattern per-model declaration: `true` = the activated variant is
+    /// declared text-only. Request assembly rejects ANY image block (user
+    /// message, history, tool output) with an explicit error naming the
+    /// model, instead of putting image data on the wire.
+    pub reject_images: bool,
 }
 
 impl ImageProjectionConfig {
@@ -137,6 +151,7 @@ impl Default for ImageProjectionConfig {
             max_images: 8,
             max_request_bytes: 4 * 1024 * 1024,
             allow_reload: true,
+            reject_images: false,
         }
     }
 }

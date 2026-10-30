@@ -70,12 +70,18 @@ impl TraceSnapSource {
         let session_id = self.session_id.clone();
         let l = inner.lock().await;
         let runtime = l.as_ref()?;
-        let (entries, tool_names) =
-            crate::sessions::load_projection_parts(runtime, &session_id).await.ok()?;
+        let (entries, tool_names) = crate::sessions::load_projection_parts(runtime, &session_id)
+            .await
+            .ok()?;
         let (turn_index, slice) = crate::sessions::open_turn_slice(entries)?;
         let epoch = self.epoch();
-        let event =
-            crate::sessions::build_trace_snapshot(&session_id, epoch, turn_index, slice, &tool_names)?;
+        let event = crate::sessions::build_trace_snapshot(
+            &session_id,
+            epoch,
+            turn_index,
+            slice,
+            &tool_names,
+        )?;
         // 相同内容跳过：对序列化文本做哈希。
         use std::hash::{Hash, Hasher};
         let text = serde_json::to_string(&event).ok()?;
@@ -95,12 +101,11 @@ impl TraceSnapSource {
 pub struct HostSessionMeta {
     /// Display title; the host derives it from the task when absent.
     pub title: Option<String>,
-    /// Override the image-projection budgets for this run: (max_images,
-    /// max_request_bytes). `Some((0, 0))` forces every image cold (text-only
-    /// models: the request-time projection swaps Image blocks for metadata
-    /// placeholders instead of putting image data on the wire). `None` =
-    /// settings default.
-    pub image_hot_override: Option<(usize, u64)>,
+    /// dsh-pattern per-model declaration: `true` when the activated variant
+    /// declares itself text-only (`supports_vision: false` in settings).
+    /// Request assembly then rejects any image block with an explicit error
+    /// naming the model, instead of putting image data on the wire.
+    pub reject_images: bool,
 }
 
 /// Per-server MCP tool registrations on the kernel seam.
@@ -220,7 +225,7 @@ pub fn coding_preset(settings: &crate::settings::Settings) -> AgentOptions {
         // WI-163: same per-run injection for the MCP availability feed.
         mcp_status_feed: None,
         // No hardcoded visible-tools whitelist: EVERY registered tool
- // is presented (registry contract). The list drifted the
+        // is presented (registry contract). The list drifted the
         // moment new tools landed — git/terminal/todo/python_exec
         // were registered but invisible for months. Governance stays
         // where it belongs: sandbox gates + approval on the tools
@@ -283,7 +288,7 @@ pub fn register_settings_residents(
             },
         )
         .ok();
- // `-99` harness:source resident (includeHarnessSource parity):
+    // `-99` harness:source resident (includeHarnessSource parity):
     // declares the checkout path for OSS/checkout run forms; absent
     // settings → empty → no section.
     let source = system_prompts
@@ -315,7 +320,7 @@ pub fn register_settings_residents(
             },
         )
         .ok();
- // `language` resident (order 10, parity): follow the user's
+    // `language` resident (order 10, parity): follow the user's
     // message language; `prompt.response_language` pins it.
     let language = system_prompts
         .section(
@@ -442,16 +447,16 @@ pub struct PluginKernel {
     pub plan_review_bridge: Arc<crate::plan_review_bridge::PlanReviewBridge>,
     /// WI-93: shared PTY registry handle (background terminal panel).
     pub(crate) terminal_service: std::sync::Arc<crate::terminal::TerminalService>,
+    /// Shared browser session registry (kill_all at shutdown; desktop panel
+    /// parity later).
+    pub(crate) browser_service: std::sync::Arc<starriver_browser::BrowserService>,
     /// WI-103: per-agent routes switched through `set_agent_active_model`
     /// while a turn may still be running. The execute path clears an
     /// agent's entry once it seeded the run from the profile (the two then
     /// agree), and the `agent/request` rewrite listener registered per
     /// session applies a pending entry to every subsequent LLM call.
-    desired_routes: Arc<
-        std::sync::Mutex<
-            std::collections::HashMap<String, (String, String, Option<u64>)>,
-        >,
-    >,
+    desired_routes:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, (String, String, Option<u64>)>>>,
 }
 
 impl PluginKernel {
@@ -680,17 +685,12 @@ impl PluginKernel {
         let _factory_handle = registry
             .set_factory(Arc::clone(&loop_service) as Arc<dyn AgentFactory>)
             .unwrap();
-        // WI-16: pending-approval timeout comes from settings (unset → the
-        // bridge default; 0 → wait indefinitely).
-        let approval_timeout = match settings.agent.approval_timeout_secs {
-            None => Some(crate::approval_bridge::DEFAULT_APPROVAL_TIMEOUT),
-            Some(0) => None,
-            Some(secs) => Some(std::time::Duration::from_secs(secs)),
-        };
-        let approval_bridge = Arc::new(crate::approval_bridge::ApprovalBridge::with_timeout(
-            Arc::clone(&registry) as Arc<dyn starriver_kernel::agent::AgentRegistry>,
-            approval_timeout,
-        ));
+        // Approvals wait indefinitely (dsh/codex parity): a request settles
+        // only on an answer or a dropped client channel — never a clock.
+        let approval_bridge = Arc::new(crate::approval_bridge::ApprovalBridge::new(Arc::clone(
+            &registry,
+        )
+            as Arc<dyn starriver_kernel::agent::AgentRegistry>));
         let _bridge_handle = approval_bridge.register(&bus);
         // WI-67 (user-questions slice): agent-initiated questions surface as
         // UiEvents through the same session-event chain as approvals.
@@ -725,9 +725,10 @@ impl PluginKernel {
         let _hooks_pre_trigger = bus.on_waterfall::<ToolsPreExecute, _>(move |event, next| {
             let hooks_pre = Arc::clone(&hooks_pre);
             Box::pin(async move {
-                let params = starriver_kernel::json::JsonValue::from_value(&event.execution.arguments)
-                    .ok()
-                    .and_then(|v| v.to_json_string().ok());
+                let params =
+                    starriver_kernel::json::JsonValue::from_value(&event.execution.arguments)
+                        .ok()
+                        .and_then(|v| v.to_json_string().ok());
                 let working_dir = event
                     .execution
                     .cwd
@@ -835,8 +836,7 @@ impl PluginKernel {
                         format!(r#"{{"ok":true,"value":{value}}}"#)
                     }
                     ToolExecutionResult::Failure { error, .. } => {
-                        let message =
-                            serde_json::json!(error.message.clone()).to_string();
+                        let message = serde_json::json!(error.message.clone()).to_string();
                         format!(r#"{{"ok":false,"error":{message}}}"#)
                     }
                 };
@@ -911,12 +911,14 @@ impl PluginKernel {
         // (agent.bash_timeout_secs default 120, agent.bash_timeout_max_secs
         // hard cap 1800).
         let bash_limits = crate::tools::bash::BashTimeoutLimits {
-            default_secs: settings.agent.bash_timeout_secs.unwrap_or(
-                crate::tools::bash::DEFAULT_BASH_TIMEOUT_SECS,
-            ),
-            max_secs: settings.agent.bash_timeout_max_secs.unwrap_or(
-                crate::tools::bash::DEFAULT_BASH_TIMEOUT_MAX_SECS,
-            ),
+            default_secs: settings
+                .agent
+                .bash_timeout_secs
+                .unwrap_or(crate::tools::bash::DEFAULT_BASH_TIMEOUT_SECS),
+            max_secs: settings
+                .agent
+                .bash_timeout_max_secs
+                .unwrap_or(crate::tools::bash::DEFAULT_BASH_TIMEOUT_MAX_SECS),
         };
         // BUG-157: settings-provided tool environment (agent.tool_env),
         // expanded against the daemon process env once at registration —
@@ -928,6 +930,34 @@ impl PluginKernel {
             .tool_env
             .as_ref()
             .map(crate::tools::bash::expand_tool_env);
+        // browser parity: first-party CDP browser sessions shared across
+        // calls (settings-tunable; an invalid viewport warns and keeps the
+        // default rather than failing boot).
+        let browser_config = {
+            let mut config = starriver_browser::BrowserServiceConfig::default();
+            config.browser_path = settings.browser.browser_path.clone();
+            config.headless = settings.browser.headless.unwrap_or(config.headless);
+            if let Some(spec) = settings.browser.viewport.as_deref() {
+                match starriver_browser::axtree::parse_viewport(Some(spec)) {
+                    Ok(viewport) => config.viewport = viewport,
+                    Err(e) => {
+                        tracing::warn!(viewport = %spec, error = %e, "invalid browser.viewport, keeping default")
+                    }
+                }
+            }
+            config.idle_timeout_secs = settings
+                .browser
+                .idle_timeout_secs
+                .unwrap_or(config.idle_timeout_secs);
+            config.max_sessions = settings.browser.max_sessions.unwrap_or(config.max_sessions);
+            config
+        };
+        let browser_service = Arc::new(starriver_browser::BrowserService::new(browser_config));
+        let browser_service_handle = Arc::clone(&browser_service);
+        let browser_defs = crate::tools::browser::browser_definitions(
+            Arc::clone(&browser_service),
+            crate::attachments::open_attachment_store(),
+        );
         for mut definition in [
             crate::tools::bash::bash_definition_with_env(bash_limits, bash_tool_env),
             // BUG-155: tool-level skill loading — prose trigger lines
@@ -951,8 +981,11 @@ impl PluginKernel {
             crate::tools::plan::plan_write_definition(),
             crate::tools::code_runtime::python_exec_definition(),
             crate::tools::code_runtime::e2b_run_definition(),
-        ] {
- // spill parity: oversized outputs are persisted and replaced
+        ]
+        .into_iter()
+        .chain(browser_defs)
+        {
+            // spill parity: oversized outputs are persisted and replaced
             // by a summary for every tool that has no custom finalizer.
             // WI-10: the threshold is settings-tunable (agent.spill_threshold_bytes).
             if definition.finalize_content.is_none() {
@@ -966,7 +999,7 @@ impl PluginKernel {
             }
             let _ = tools.register(definition);
         }
- // tool-guide parity: every first-party tool family carries a
+        // tool-guide parity: every first-party tool family carries a
         // `<tool>:guide` division-of-labor section in the reserved 100..=199
         // band (search with grep — not shell grep; inspect with read — not
         // cat; find with glob; edit over wholesale write; PTY hygiene;
@@ -1110,7 +1143,7 @@ impl PluginKernel {
                 }))
             }),
         );
- // terminal parity: persistent PTY sessions shared across calls.
+        // terminal parity: persistent PTY sessions shared across calls.
         let terminal_service = Arc::new(crate::terminal::TerminalService::new());
         let terminal_service_handle = Arc::clone(&terminal_service);
         for definition in
@@ -1219,9 +1252,8 @@ impl PluginKernel {
             ctx,
             registry,
             terminal_service: terminal_service_handle,
-            desired_routes: Arc::new(std::sync::Mutex::new(
-                std::collections::HashMap::new(),
-            )),
+            browser_service: browser_service_handle,
+            desired_routes: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             loop_service,
             persistence,
             sessions,
@@ -1465,7 +1497,11 @@ impl PluginKernel {
             .unwrap_or_else(|e| e.into_inner())
             .insert(
                 agent_name.to_string(),
-                (provider.to_string(), model.to_string(), max_tokens.map(|v| v as u64)),
+                (
+                    provider.to_string(),
+                    model.to_string(),
+                    max_tokens.map(|v| v as u64),
+                ),
             );
     }
 
@@ -1480,7 +1516,10 @@ impl PluginKernel {
         seeded_provider: Option<&str>,
         seeded_model: Option<&str>,
     ) {
-        let mut routes = self.desired_routes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut routes = self
+            .desired_routes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let matches_seed = routes.get(agent_name).is_some_and(|(p, m, _)| {
             Some(p.as_str()) == seeded_provider && Some(m.as_str()) == seeded_model
         });
@@ -1701,20 +1740,17 @@ impl PluginKernel {
             .map(SessionId)
             .unwrap_or_else(|| SessionId(uuid::Uuid::new_v4().to_string()));
         let mut agent_options = self.default_agent_options(model);
-        // Text-only override (WI-1 P2, WI-152 S3): the log still carries
-        // Image blocks (history renders thumbnails), but the request-time
-        // projection must never put image data on the wire — every image
-        // goes cold and the model sees a metadata placeholder instead.
-        if let Some((max_images, max_request_bytes)) =
-            meta.as_ref().and_then(|m| m.image_hot_override)
-        {
+        // Declared-text-only model (dsh pattern): request assembly must
+        // reject any image block with an explicit error — the declaration is
+        // a claim about the endpoint, and this enforces it before the wire.
+        // The budgets are inert here (the reject check short-circuits before
+        // projection); only the flag matters.
+        if meta.as_ref().is_some_and(|m| m.reject_images) {
             agent_options.image_projection = Some(starriver_kernel::agent::ImageProjectionConfig {
-                max_images,
-                max_request_bytes,
-                // A zero in EITHER dimension disables images (WI-160):
-                // reload pulls could never ride, so placeholders must not
-                // advertise them (WI-152 S2 wording on the (0, 0) stamp).
-                allow_reload: !(max_images == 0 || max_request_bytes == 0),
+                max_images: 0,
+                max_request_bytes: 0,
+                allow_reload: false,
+                reject_images: true,
             });
         }
         // The execution-mode preset has already been pushed by the host into
@@ -1766,18 +1802,14 @@ impl PluginKernel {
                 "sandbox/mode",
                 starriver_kernel::json::JsonValue::Object(vec![(
                     "mode".into(),
-                    starriver_kernel::json::JsonValue::String(
-                        preset.sandbox.as_str().into(),
-                    ),
+                    starriver_kernel::json::JsonValue::String(preset.sandbox.as_str().into()),
                 )]),
             );
             let _ = session.append(
                 "approval/policy",
                 starriver_kernel::json::JsonValue::Object(vec![(
                     "policy".into(),
-                    starriver_kernel::json::JsonValue::String(
-                        preset.approval.as_str().into(),
-                    ),
+                    starriver_kernel::json::JsonValue::String(preset.approval.as_str().into()),
                 )]),
             );
         }
@@ -2143,7 +2175,6 @@ impl PluginKernel {
         }
     }
 
-
     fn default_agent_options(&self, model: Option<String>) -> AgentOptions {
         let caller = AgentOptions {
             compaction_tuning: None,
@@ -2163,7 +2194,7 @@ impl PluginKernel {
             Some("coding"),
             caller,
         );
- // WI-159: cold/hot image projection — request budgets
+        // WI-159: cold/hot image projection — request budgets
         // (count cap + base64 wire bytes); the host bridges the attachment
         // store for hot resolution and byte accounting.
         options.image_projection = Some(starriver_kernel::agent::ImageProjectionConfig {
@@ -2175,6 +2206,7 @@ impl PluginKernel {
                 starriver_kernel::agent::ImageProjectionConfig::default_max_request_bytes,
             ),
             allow_reload: true,
+            reject_images: false,
         });
         options.image_resolver = self
             .ctx
@@ -2309,7 +2341,7 @@ fn apply_visible_tool_policies(
     match options.visible_tools.as_mut() {
         // An explicit whitelist is extended with MCP names.
         Some(visible) => visible.extend(mcp_names.iter().cloned()),
- // No whitelist = every registered tool is visible (registry
+        // No whitelist = every registered tool is visible (registry
         // contract) — MCP tools included, they are registered too. Never
         // materialize a list here: None → Some([mcp…]) would HIDE every
         // builtin tool (read/bash/exit_plan_mode…) the moment any MCP server
@@ -2351,7 +2383,7 @@ impl PluginKernel {
         if let Some(provider) = provider {
             options.provider = Some(provider);
         } else if let Some((inherited_provider, inherited_model)) = inherited {
- // parent-inheritance parity: an unbound template runs the
+            // parent-inheritance parity: an unbound template runs the
             // child on the calling agent's live route instead of the preset
             // placeholder.
             options.provider = Some(inherited_provider);
@@ -2714,7 +2746,7 @@ pub mod bridge {
             }
             "compaction/summary" => {
                 // Context compaction checkpoint landed: surface the fold row
- // with the checkpoint Markdown (compaction/summary
+                // with the checkpoint Markdown (compaction/summary
                 // parity). start/end bookkeeping events stay silent.
                 let summary = event
                     .data
@@ -3178,7 +3210,7 @@ mod tests {
 
     #[test]
     fn visible_tool_policies_none_stays_none_when_mcp_present() {
- // None = everything visible (registry contract). Configuring an
+        // None = everything visible (registry contract). Configuring an
         // MCP server must NOT narrow the surface to MCP-only — that collapse
         // once hid read/bash/exit_plan_mode from every session.
         let options = AgentOptions {
@@ -3508,7 +3540,7 @@ mod tests {
         );
 
         // Language: follow-the-user by default; a configured language pins it
- // (`language`-section parity). Blank counts as unset.
+        // (`language`-section parity). Blank counts as unset.
         assert_eq!(
             language_section_text(None),
             "Write user-facing replies in the language of the user's messages."

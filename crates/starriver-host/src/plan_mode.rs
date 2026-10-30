@@ -193,14 +193,14 @@ impl PlanModeController {
         } else {
             // Append failure keeps the selection for a later accepted
             // pre-step (same recovery rule as mid-turn); nothing blocks.
-            self.pending.lock().unwrap().insert(key, active);
+            self.pending.lock().unwrap().insert(key, entry);
             PlanSelectOutcome::Queued
         }
     }
 
     /// Register the per-agent `agent/pre-step` listener that lands pending
     /// flips. Downstream listeners run first; the flip appends only after
- /// they accept the step and an append failure keeps the
+    /// they accept the step and an append failure keeps the
     /// selection pending without blocking the turn.
     pub fn register_step_listener(&self, agent: &Arc<dyn Agent>) -> EffectHandle {
         let pending = Arc::clone(&self.pending);
@@ -311,7 +311,13 @@ pub(crate) mod tests {
             _wakeup: bool,
         ) {
         }
-        fn cancel(&self, _cause: starriver_kernel::agent::AgentCancelCause, _keep_inbox: bool) -> bool { false }
+        fn cancel(
+            &self,
+            _cause: starriver_kernel::agent::AgentCancelCause,
+            _keep_inbox: bool,
+        ) -> bool {
+            false
+        }
         fn when_idle(&self) -> cordis_rslite::BoxFuture<()> {
             Box::pin(async {})
         }

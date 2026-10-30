@@ -1,5 +1,6 @@
 pub mod bash;
 pub mod bash_readonly;
+pub mod browser;
 pub mod code_runtime;
 pub mod common;
 pub mod edit;
@@ -14,9 +15,9 @@ pub mod patch;
 pub mod plan;
 pub mod question;
 pub mod read;
-pub mod skill;
 pub mod reload_image;
 pub mod session_reference;
+pub mod skill;
 pub mod spill;
 pub mod subagent;
 pub mod system_service;
@@ -49,6 +50,7 @@ pub fn tool_guide_sections() -> Vec<(&'static str, i32, &'static str)> {
         terminal::guide(),
         web_search::guide(),
         web_fetch::guide(),
+        browser::guide(),
         skill::guide(),
     ]
 }

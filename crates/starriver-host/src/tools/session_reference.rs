@@ -146,7 +146,11 @@ fn project_session(
         // byte-cost let CJK excerpts blow BUDGET_CHARS by ~3x).
         let cost = excerpt.chars().count().min(budget);
         budget -= cost;
-        let excerpt: String = if cost < excerpt.chars().count() { excerpt.chars().take(cost).collect() } else { excerpt };
+        let excerpt: String = if cost < excerpt.chars().count() {
+            excerpt.chars().take(cost).collect()
+        } else {
+            excerpt
+        };
         selected.push(excerpt);
     }
     selected.reverse();
@@ -349,7 +353,6 @@ mod tests {
         assert!(schema.parameters.get("required").is_some());
     }
 }
-
 
 // ── BUG-98/100 regressions (round 6) ──
 #[cfg(test)]

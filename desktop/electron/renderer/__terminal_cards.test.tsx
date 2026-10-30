@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { render } from '@testing-library/react';
-import { ToolRow, toolCommandOf } from './app';
+import { ToolRow, toolCommandOf, toolArgsJson } from './app';
 import { I18nProvider } from './i18n';
 
 const w = (ui: React.ReactElement) => render(<I18nProvider>{ui}</I18nProvider>);
@@ -45,5 +45,20 @@ describe('terminal tool cards (icon + args)', () => {
     expect(toolCommandOf(JSON.stringify({ shell: 'bash' }))).toBe('');
     expect(toolCommandOf(JSON.stringify({ id: 't-1', timeoutMs: 60000 }))).toBe('');
     expect(toolCommandOf(undefined)).toBe('');
+  });
+
+  // 2026-10-26: 实时卡片的无键回退——terminal_*/mcp_* 无 command/path 等已知
+  // 显示键时展示完整参数 JSON（与轨迹、历史重建一致），2000 字符截断。
+  it('toolArgsJson serializes the full input for keyless tools, byte-capped', () => {
+    expect(toolArgsJson({ id: 't9' })).toBe('{"id":"t9"}');
+    expect(toolArgsJson({ shell: 'bash' })).toBe('{"shell":"bash"}');
+    expect(toolArgsJson(JSON.stringify({ id: 'x' }))).toBe('{"id":"x"}', 'string payloads are parsed first');
+    expect(toolArgsJson(undefined)).toBe('');
+    expect(toolArgsJson(null)).toBe('');
+    expect(toolArgsJson('not-json{')).toBe('');
+    expect(toolArgsJson(42)).toBe('');
+    const out = toolArgsJson({ input: 'x'.repeat(3000) });
+    expect(out!.length).toBeLessThanOrEqual(2001);
+    expect(out!.endsWith('…')).toBe(true);
   });
 });

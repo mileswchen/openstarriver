@@ -21,7 +21,7 @@ pub struct AgentPresetRow {
     pub agent: String,
     pub name: String,
     pub description: String,
- /// `builtin` | `user` — the discovery root (trust layering; the
+    /// `builtin` | `user` — the discovery root (trust layering; the
     /// workspace/user split lands with the workspace-scoped agents roots).
     pub source: &'static str,
     /// Parse/validation failure: the row renders but cannot be selected.
@@ -93,7 +93,7 @@ pub fn apply_preset_spec(mut base: AgentOptions, spec: Option<&AgentPresetSpec>)
 impl HostRuntime {
     /// Discover the preset roster: the built-in `coding` composition plus
     /// every hub agent's AGENT.md. Re-parsed per call so a freshly authored
- /// preset is selectable without a restart (re-reads its roots too).
+    /// preset is selectable without a restart (re-reads its roots too).
     /// The hub carries a backfilled AGENT.md twin of each built-in agent; it
     /// is the user-editable copy, not a second agent, so roster rows dedupe
     /// by agent name. Order: Starriver Code, Chat Agent, rest alphabetically.

@@ -122,7 +122,7 @@ impl_from_host!(ModelProvider {
     api_format,
     reasoning_effort,
 });
-impl_from_host!(ModelVariant { id, name });
+impl_from_host!(ModelVariant { id, name, supports_vision });
 impl_from_host!(BoundModelInfo { id, name, enabled });
 impl_from_host!(WorktreeStatus {
     is_repo,
@@ -287,7 +287,6 @@ impl From<host_types::ModelEntry> for napi_types::ModelEntry {
             reasoning_effort: v.reasoning_effort,
             model_label: v.model_label,
             supports_vision: v.supports_vision,
-            vision_supported: v.vision_supported,
         }
     }
 }
@@ -1524,10 +1523,12 @@ mod tests {
                 host_types::ModelVariant {
                     id: "v1".into(),
                     name: "flash".into(),
+                    supports_vision: None,
                 },
                 host_types::ModelVariant {
                     id: "v2".into(),
                     name: "pro".into(),
+                    supports_vision: Some(false),
                 },
             ],
             default_model: "flash".into(),
@@ -1539,15 +1540,14 @@ mod tests {
             reasoning_effort: Some("high".into()),
             model_label: Some("DS".into()),
             supports_vision: Some(true),
-            vision_supported: true,
         };
         let n: napi_types::ModelEntry = entry.into();
         assert_eq!(n.models.len(), 2);
         assert_eq!(n.models[1].name, "pro");
+        assert_eq!(n.models[1].supports_vision, Some(false));
         assert_eq!(n.max_tokens, Some(8192));
         assert_eq!(n.reasoning_effort.as_deref(), Some("high"));
         assert_eq!(n.model_label.as_deref(), Some("DS"));
-        assert!(n.vision_supported);
 
         let binding = host_types::AgentModelBinding {
             agent_name: "Coding Agent".into(),

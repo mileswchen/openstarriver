@@ -783,6 +783,21 @@ export function toolCommandOf(input: unknown): string {
   } catch { return ''; }
 }
 
+/** 2026-10-26: full-arguments fallback for the live tool card label — tools
+ *  without a known display key (terminal_*, mcp_* …) previously degraded to a
+ *  bare "🔧 name" while the trajectory showed the full payload. Mirrors the
+ *  host's tool_call_arg: serialize the whole input JSON, byte-capped. */
+export function toolArgsJson(input: unknown): string {
+  if (!input) return '';
+  try {
+    const params = typeof input === 'string' ? JSON.parse(input) : input;
+    if (!params || typeof params !== 'object') return '';
+    const json = JSON.stringify(params);
+    const MAX = 2000;
+    return json.length <= MAX ? json : json.slice(0, MAX) + '…';
+  } catch { return ''; }
+}
+
 /** Tool output body → a language hint when it looks like code (XML/JSON), else null. */
 function detectOutputLanguage(body: string): string | null {
   const b = body.replace(/^[✓✗]\s*/, '').trim();
@@ -963,10 +978,44 @@ function WorkFoldRow({ group, expanded, onToggle }: {
   );
 }
 
-/** WI-150: one background-terminal row — start clock time + live elapsed
- *  (ticks every second while mounted). */
-function TerminalRow({ term, onKill }: {
-  term: { id: string; status: string; startedAtMs: number; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number } | null };
+/** 后台终端的用途标签：常见长驻模式一眼可辨；识别不出返回 null（不标）。 */
+function terminalPurposeLabel(cmd: string | null | undefined, t: (k: string) => string): string | null {
+  if (!cmd) return null;
+  const c = cmd.toLowerCase();
+  if (/(vite|next\s+(dev|start)|webpack|npm\s+run\s+dev|pnpm\s+dev|pnpm\s+run\s+dev|yarn\s+dev|uvicorn|flask|gunicorn|http\.server|http-server|serve\b|jekyll|hugo\s+server)/.test(c)) {
+    return t('coding.terminalPurposeServer');
+  }
+  if (/(watch|tail\s+-f|nodemon|-w\b)/.test(c)) return t('coding.terminalPurposeWatch');
+  if (/(^|\s)(python3?|node|irb|psql|sqlite3?|ipython|deno|bun)\s*$/.test(c)) return t('coding.terminalPurposeRepl');
+  if (/(build|compile|tsc\b|webpack\s+--mode\s+production)/.test(c)) return t('coding.terminalPurposeBuild');
+  return null;
+}
+
+/** 2026-10-26: the terminals popover renders as a table — PTY rows and one-shot
+ *  shell rows share one grid (dot | command | session | started | elapsed |
+ *  status | kill) under a header row, so the meta info aligns into columns
+ *  instead of squeezing into one line. */
+function TerminalsTableHead() {
+  const { t } = useI18n();
+  return (
+    <div className="terminals-grid terminals-head-row">
+      <span />
+      <span>{t('coding.terminalsColCommand')}</span>
+      <span>{t('coding.terminalsColSession')}</span>
+      <span>{t('coding.terminalsColStarted')}</span>
+      <span>{t('coding.terminalsColElapsed')}</span>
+      <span>{t('coding.terminalsColStatus')}</span>
+      <span />
+    </div>
+  );
+}
+
+/** WI-150: one background-terminal row — what it runs (FULL command, wrapped,
+ *  never truncated + purpose label), owning session, start clock time + live
+ *  elapsed (ticks every second while mounted), status chip, kill. */
+function TerminalRow({ term, sessionTitle, onKill }: {
+  term: { id: string; status: string; startedAtMs: number; ownerSessionId?: string | null; workspace?: string | null; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number; cmd?: string | null } | null };
+  sessionTitle?: string;
   onKill: () => void;
 }) {
   const { t } = useI18n();
@@ -978,15 +1027,25 @@ function TerminalRow({ term, onKill }: {
   // 逐字节实时一致（dsh 式标记契约）：命令有精确生命周期——发出即 running，
   // 结束标记一出现即 done · exit N；无标记信息时回退 host 会话状态。
   const cmd = term.command;
+  const cmdText = cmd?.cmd ?? null;
   const baseMs = cmd?.startedAtMs ?? term.startedAtMs;
   const startedText = new Date(baseMs).toLocaleTimeString(undefined, { hour12: false });
   const endMs = cmd?.finishedAtMs ?? null;
   const elapsed = fmtDuration(Math.max(0, (endMs ?? Date.now()) - baseMs));
   const done = cmd?.finishedAtMs != null;
-  const statusText = done ? `done · exit ${cmd?.exitCode ?? 0}` : term.status;
-  const statusClass = done ? 'done' : term.status;
+  const failed = done && (cmd?.exitCode ?? 0) !== 0;
+  const statusText = done ? `${t('coding.terminalDone')} · exit ${cmd?.exitCode ?? 0}` : term.status;
+  const statusClass = failed ? 'failed' : done ? 'done' : term.status;
+  const purpose = terminalPurposeLabel(cmdText, t);
+  const tip = [sessionTitle ?? term.ownerSessionId ?? '', cmdText ?? '', term.id].filter(Boolean).join('\n');
   return (
-    <div className="terminal-row" title={term.id}>
+    <div className="terminals-grid terminal-row" title={tip}>
+      <span className={`terminal-dot ${done ? 'off' : 'live'}`} aria-hidden />
+      <span className="terminal-cmd">
+        {cmdText ?? `PTY · ${term.id.slice(0, 8)}`}
+        {purpose && <span className="terminal-purpose">{purpose}</span>}
+      </span>
+      <span className="terminal-session" title={term.ownerSessionId ?? ''}>{sessionTitle ?? ''}</span>
       <span className="terminal-started">{startedText}</span>
       <span className="terminal-elapsed">{elapsed}</span>
       <span className={`terminal-status ${statusClass}`}>{statusText}</span>
@@ -995,9 +1054,11 @@ function TerminalRow({ term, onKill }: {
   );
 }
 
-/** WI-157: one running shell tool call in the terminals popover — command plus
- *  a live elapsed stopwatch (1s tick, same rhythm as TerminalRow). */
+/** WI-157: one running shell tool call in the terminals popover — FULL command
+ *  (wrapped) plus a live elapsed stopwatch (1s tick, same rhythm as
+ *  TerminalRow); shares the terminals grid so both row kinds align. */
 function ShellCmdRow({ entry }: { entry: { cmd: string; startedAt: number } }) {
+  const { t } = useI18n();
   const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick(n => n + 1), 1000);
@@ -1006,10 +1067,14 @@ function ShellCmdRow({ entry }: { entry: { cmd: string; startedAt: number } }) {
   const startedText = new Date(entry.startedAt).toLocaleTimeString(undefined, { hour12: false });
   const elapsed = fmtDuration(Math.max(0, Date.now() - entry.startedAt));
   return (
-    <div className="terminals-shell-cmd" title={entry.cmd}>
-      <span className="terminals-shell-dot" aria-hidden />
-      <span className="terminals-shell-text">{entry.cmd}</span>
-      <span className="terminals-shell-meta">{startedText} · {elapsed}</span>
+    <div className="terminals-grid terminal-row shell-row" title={entry.cmd}>
+      <span className="terminal-dot live" aria-hidden />
+      <span className="terminal-cmd">{entry.cmd}</span>
+      <span className="terminal-session">{t('coding.terminalsShellLabel')}</span>
+      <span className="terminal-started">{startedText}</span>
+      <span className="terminal-elapsed">{elapsed}</span>
+      <span className="terminal-status running">running</span>
+      <span />
     </div>
   );
 }
@@ -2677,13 +2742,17 @@ function QuestionCard({ question, onAnswer }: {
   );
 }
 
-/** WI-152 S2: resolved image-accept for one active route key — the active
- *  provider's `visionSupported` decides; unknown providers stay permissive
- *  (the backend strips images for truly text-only routes). */
+/** WI-152 v3 (dsh pattern): image-accept for one active route key — the
+ *  active MODEL's per-variant declaration decides; undeclared or unknown
+ *  routes stay permissive (a wrong "supports" claim surfaces the provider's
+ *  own error, per the claim-not-check philosophy). */
 export function imagesAcceptedForRoute(models: ModelEntry[], activeModelKey: string): boolean {
-  const providerId = activeModelKey.split('/')[0] || '';
+  const slash = activeModelKey.indexOf('/');
+  const providerId = slash >= 0 ? activeModelKey.slice(0, slash) : activeModelKey;
+  const modelId = slash >= 0 ? activeModelKey.slice(slash + 1) : '';
   const provider = models.find(m => m.id === providerId);
-  return provider ? provider.visionSupported !== false : true;
+  const variant = provider?.models?.find(v => v.id === modelId);
+  return variant ? variant.supportsVision !== false : true;
 }
 
 export function Composer(props: {
@@ -3527,6 +3596,11 @@ interface ModelVariant {
   name: string;
   /** Real context window reported by the provider (/v1/models context_length), if any. */
   contextLength?: number;
+  /** Per-model image-input declaration (dsh pattern): false = declared
+   *  text-only (image requests fail loudly at request assembly);
+   *  undefined/null = undeclared → permissive, the provider's own error is
+   *  the arbiter. */
+  supportsVision?: boolean | null;
 }
 
 interface ModelEntry {
@@ -3550,11 +3624,9 @@ interface ModelEntry {
   reasoningEffort?: string;
   /** Custom model ID used as the prefix of selector names; blank = provider name. */
   modelLabel?: string;
-  /** Legacy stored declaration (no UI, ignored — WI-152 v2 resolves capability automatically). */
+  /** Legacy provider-level declaration (no UI, ignored — capability is
+   *  declared per model variant now). */
   supportsVision?: boolean;
-  /** Resolved vision support (built-in provider table > supported; automatic).
-   *  The composer image gate consumes this (WI-152 S1). */
-  visionSupported?: boolean;
 }
 
 interface BoundModelInfo {
@@ -3781,7 +3853,7 @@ interface StarriverBridge {
   /** WI-92: inject a user message into the RUNNING turn (kernel steer). */
   steerSession(sessionId: string, task: string): Promise<{ steered: boolean }>;
   /** WI-93: background terminal panel. */
-  listTerminals?(): Promise<{ terminals: { id: string; status: string; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number } | null }[] }>;
+  listTerminals?(): Promise<{ terminals: { id: string; status: string; ownerSessionId?: string | null; workspace?: string | null; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number; cmd?: string | null } | null }[] }>;
   killTerminal?(id: string): Promise<{ killed: boolean }>;
   /** WI-101: paginated session messages. */
   getSessionMessagesPage?(sessionId: string, limit?: number, before?: number): Promise<{ messages: ChatMessage[]; total: number; hasMore: boolean }>;
@@ -4568,6 +4640,15 @@ export function ModelCatalogEditor(props: {
                       return next;
                     });
                   }} />
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, alignSelf: 'end', paddingBottom: 6,
+                fontSize: 12, color: 'var(--text-muted)', cursor: props.disabled ? 'default' : 'pointer' }}
+                title={t('models.textOnlyModelHint')}>
+                <input type="checkbox" disabled={props.disabled}
+                  checked={v.supportsVision === false}
+                  aria-label={`${t('models.textOnlyModel')} ${index + 1}`}
+                  onChange={(e) => patch(index, { supportsVision: e.target.checked ? false : undefined })} />
+                <span>{t('models.textOnlyModel')}</span>
               </label>
             </div>
           )}
@@ -7271,7 +7352,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       else localStorage.removeItem('starriver-goal-budget');
     } catch { /* storage unavailable */ }
   };
-  const [terminals, setTerminals] = useState<{ id: string; status: string; startedAtMs: number; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number } | null }[]>([]);
+  const [terminals, setTerminals] = useState<{ id: string; status: string; startedAtMs: number; ownerSessionId?: string | null; workspace?: string | null; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number; cmd?: string | null } | null }[]>([]);
   // Terminal ids whose idle state was already surfaced at a turn's settle —
   // one reminder per terminal per idle episode (re-armed once it shows
   // activity again).
@@ -7528,6 +7609,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const wsCtx = useWorkspaces();
   const {
     workspaces,
+    sessions,
     archivedSessions,
     activeWorkspaceId,
     setActiveWorkspaceId,
@@ -7539,6 +7621,17 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     handleUnarchive,
     newConvSeq,
   } = wsCtx;
+  // 工作区过滤：只显示本工作区（含其会话）启动的后台终端。workspace 字段
+  // 缺失的旧数据/宿主级终端照常显示——不藏数据。
+  const activeWorkspacePath = workspaces.find(w => w.id === activeWorkspaceId)?.path ?? null;
+  const workspaceTerminals = useMemo(
+    () => terminals.filter(x => !x.workspace || !activeWorkspacePath || x.workspace === activeWorkspacePath),
+    [terminals, activeWorkspacePath],
+  );
+  const sessionTitleOf = useCallback(
+    (sid?: string | null) => (sid ? sessions.find(s => s.id === sid)?.title : undefined),
+    [sessions],
+  );
  /** Middle-column view: conversation (message stream) | trajectory (-style ledger). */
   const [view, setView] = useState<'chat' | 'trajectory'>('chat');
   const [gitStatus, setGitStatus] = useState<WorktreeStatus | null>(null);
@@ -7946,9 +8039,9 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // null → Ungrouped (the Chat Agent keeps no workspace binding).
   const [chatWorkspaceId, setChatWorkspaceId] = useState<string | null>(null);
 
-  // WI-152 S2: resolve the image gate from the staged agent's active route.
-  // The resolved `visionSupported` (declaration > built-in table) decides;
-  // an unknown provider defaults to permissive (backend strips if wrong).
+  // WI-152 v3 (dsh pattern): resolve the image gate from the staged agent's
+  // active route. The active model's declaration decides; undeclared
+  // defaults to permissive (a wrong claim surfaces the provider's error).
   const activeModelKey = stagedChat ? chatModelId : activeModelId;
   useEffect(() => {
     const disabled = !imagesAcceptedForRoute(models, activeModelKey);
@@ -9031,7 +9124,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           // no ToolCallStart preceded (accumulator path) — never renders "undefined".
           if (mid) {
             const cmd = toolCommandOf(event.input);
-            updateMessage(mid, cmd ? `🔧 ${tname}: ${cmd}` : `🔧 ${tname || 'tool'}`, false);
+            const args = toolArgsJson(event.input);
+            updateMessage(mid, cmd ? `🔧 ${tname}: ${cmd}` : args ? `🔧 ${tname}: ${args}` : `🔧 ${tname || 'tool'}`, false);
           }
           break;
         }
@@ -9203,15 +9297,22 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           closeThinkingBubble();
           const tname = event.name || 'tool';
           const cmd = toolCommandOf(event.input);
-          const tmid = addMessage('tool', cmd ? `🔧 ${tname}: ${cmd}` : `🔧 ${tname}...`, true, tname);
+          // 完整参数回退：terminal_*/mcp_* 无已知显示键时展示完整 JSON（与
+          // 轨迹、历史重建一致），不再退化成裸工具名。
+          const args = toolArgsJson(event.input);
+          const tmid = addMessage('tool', cmd ? `🔧 ${tname}: ${cmd}` : args ? `🔧 ${tname}: ${args}` : `🔧 ${tname}...`, true, tname);
           toolMsgIdRef.current[event.id || ''] = tmid;
           toolNameByIdRef.current[event.id || ''] = tname;
           const startedAt = Date.now();
           toolStartRef.current[event.id || ''] = startedAt;
           // WI-152: shell-type tools (bash/terminal_*) light the terminal entry icon while running.
           // WI-157: record the start time; the popover row shows a running stopwatch.
-          if (/^bash$|^terminal/.test(tname)) {
-            shellCallsRef.current.set(event.id || '', { cmd: cmd || tname, startedAt });
+          // 2026-10-26: only REAL commands get a row — bookkeeping calls
+          // (terminal_wait/kill/list carry no command) must not show up as
+          // bogus "terminal_wait" shell rows.
+          if (cmd && /^bash$|^terminal/.test(tname)) {
+            // 面板完整显示命令（pre-wrap）：还原 toolCommandOf 为聊天行压平的换行。
+            shellCallsRef.current.set(event.id || '', { cmd: cmd.replace(/\\n/g, '\n'), startedAt });
             syncShellState();
           }
           // WI-91: subagent spawns render as nested activity rows.
@@ -10450,7 +10551,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
               </>
             );
           })()}
-          leadingControls={(terminals.length > 0 || shellBusy) ? (
+          leadingControls={(workspaceTerminals.length > 0 || shellBusy) ? (
             <button type="button" className="composer-terminals-btn" aria-label="background-terminals"
               title={t('coding.terminalsTitle')} onClick={() => setTerminalsOpen(o => !o)}
               dangerouslySetInnerHTML={{ __html: TERMINAL_ICON }} />
@@ -10507,19 +10608,23 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           } : null}
         />
         {/* WI-150: background terminals popover — hangs off the composer, above
-            the input bar; lists start time + live elapsed per terminal. */}
-        {terminalsOpen && (terminals.length > 0 || shellBusy) && (
+            the input bar; lists what each terminal runs (command + purpose),
+            its owning session, start time + live elapsed. Workspace-scoped:
+            only terminals started in this workspace (unknown-origin rows
+            still show). */}
+        {terminalsOpen && (workspaceTerminals.length > 0 || shellBusy) && (
           <div className="terminals-popover" data-testid="terminals-panel">
             <div className="terminals-head">
               <span>{t('coding.terminalsTitle')}</span>
-              <span className="terminals-count">{terminals.length + (shellBusy ? shellCmds.length : 0)}</span>
+              <span className="terminals-count">{workspaceTerminals.length + (shellBusy ? shellCmds.length : 0)}</span>
             </div>
+            <TerminalsTableHead />
             {/* WI-152: running bash command (one-shot process, not a PTY); since WI-157 shows start time + running stopwatch. */}
             {shellCmds.map((entry, i) => (
               <ShellCmdRow key={`shell-${i}`} entry={entry} />
             ))}
-            {terminals.map(term => (
-              <TerminalRow key={term.id} term={term} onKill={() => {
+            {workspaceTerminals.map(term => (
+              <TerminalRow key={term.id} term={term} sessionTitle={sessionTitleOf(term.ownerSessionId)} onKill={() => {
                 window.starriver.killTerminal?.(term.id)
                   .then(() => setTerminals(prev => prev.filter(x => x.id !== term.id)))
                   .catch(() => {});

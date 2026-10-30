@@ -152,7 +152,7 @@ fn malformed_config_returns_err() {
 fn workspace_admin_error_paths() {
     let t = test_host();
 
- // semantics: only existing directories resolve (no mkdir)
+    // semantics: only existing directories resolve (no mkdir)
     assert!(t
         .host
         .create_workspace("/nonexistent-dir-xyz".into())
@@ -218,8 +218,8 @@ fn agent_named_execution_and_workspace_activation() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .ok();
         assert_eq!(
             t.host.debug_resident_agent().as_deref(),
@@ -262,8 +262,7 @@ fn execute_without_engine_fails_contract_compliant() {
     // session_id (plugin kernel UiEvent contract).
     let mut rx = t
         .host
-        .execute("hi".into(), None, None, None, None, None,
-            None,)
+        .execute("hi".into(), None, None, None, None, None, None)
         .expect("execute accepts");
     let handle = t.host.runtime_handle();
     let events: Vec<serde_json::Value> = handle.block_on(async move {
@@ -297,8 +296,8 @@ fn execute_without_engine_fails_contract_compliant() {
             None,
             None,
             None,
-        
-                None,)
+            None,
+        )
         .unwrap();
     let handle = t.host.runtime_handle();
     let events: Vec<serde_json::Value> = handle.block_on(async move {
@@ -328,8 +327,15 @@ fn single_input_slot_returns_session_busy_and_releases_after_run() {
     // The first execute synchronously occupies the input slot (the guard inserts into the running set).
     let rx = t
         .host
-        .execute("first".into(), Some(sid.clone()), None, None, None, None,
-            None,)
+        .execute(
+            "first".into(),
+            Some(sid.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .expect("first execute");
     assert!(
         t.host.is_session_running(&sid),
@@ -339,8 +345,15 @@ fn single_input_slot_returns_session_busy_and_releases_after_run() {
     // A second execute on the same session → SESSION_BUSY (serializing concurrent commands from multiple clients).
     let err = t
         .host
-        .execute("second".into(), Some(sid.clone()), None, None, None, None,
-            None,)
+        .execute(
+            "second".into(),
+            Some(sid.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .unwrap_err();
     assert!(err.to_string().contains("SESSION_BUSY"), "{err}");
 
@@ -374,8 +387,15 @@ fn single_input_slot_returns_session_busy_and_releases_after_run() {
     // After it finishes, the same session can execute again.
     let _rx2 = t
         .host
-        .execute("third".into(), Some(sid.clone()), None, None, None, None,
-            None,)
+        .execute(
+            "third".into(),
+            Some(sid.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .expect("execute after release");
     assert!(t.host.is_session_running(&sid));
 }
@@ -437,8 +457,8 @@ fn execute_stamps_workspace_root_into_session_header() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .unwrap();
         let handle = t.host.runtime_handle();
         handle.block_on(async move {
@@ -551,8 +571,8 @@ fn execution_mode_binds_to_session_and_locks() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute accepts");
         let sid = {
             let handle = t.host.runtime_handle();
@@ -612,8 +632,8 @@ fn execution_mode_binds_to_session_and_locks() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute accepts");
         let handle = t.host.runtime_handle();
         handle.block_on(async move {
@@ -655,8 +675,15 @@ fn execute_rejects_unknown_execution_mode() {
         let t = test_host();
         let err = t
             .host
-            .execute("hi".into(), None, Some("bogus".into()), None, None, None,
-            None,)
+            .execute(
+                "hi".into(),
+                None,
+                Some("bogus".into()),
+                None,
+                None,
+                None,
+                None,
+            )
             .expect_err("unknown mode must be rejected");
         assert!(err.to_string().contains("unknown execution mode"), "{err}");
     });
@@ -692,8 +719,8 @@ fn workspace_grouping_e2e_filter_archive_delete_then_ungroup() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .unwrap();
         let handle = t.host.runtime_handle();
         handle.block_on(async move {
@@ -1597,8 +1624,8 @@ fn forked_child_shares_parent_workspace_or_lists_ungrouped() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .unwrap();
         let handle = t.host.runtime_handle();
         handle.block_on(async move {
@@ -2055,8 +2082,8 @@ fn fast_failing_model_does_not_spin_the_driver() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute accepts");
         let handle = host.runtime_handle();
         let events: Vec<serde_json::Value> = handle.block_on(async move {
@@ -2088,7 +2115,10 @@ fn fast_failing_model_does_not_spin_the_driver() {
 
         // After the terminal failure the driver must stay idle: no further
         // turn/start appends may land while nothing new enters the inbox.
-        let count = || host.debug_session_log_event_data(sid.clone(), "turn/start".into()).len();
+        let count = || {
+            host.debug_session_log_event_data(sid.clone(), "turn/start".into())
+                .len()
+        };
         let before = count();
         std::thread::sleep(std::time::Duration::from_millis(1500));
         let after = count();
@@ -2112,8 +2142,8 @@ fn title_request_audited_even_without_engine() {
             None,
             None,
             None,
-        
-                None,)
+            None,
+        )
         .expect("execute accepts");
     let handle = t.host.runtime_handle();
     handle.block_on(async move {
@@ -2169,8 +2199,8 @@ fn named_execute_and_review_mirror_into_kernel_residents() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .ok();
         let preview = t.host.debug_kernel_system_preview().expect("kernel live");
         assert!(
@@ -2198,8 +2228,8 @@ fn named_execute_and_review_mirror_into_kernel_residents() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .ok();
         let preview = t.host.debug_kernel_system_preview().expect("kernel live");
         assert!(
@@ -2217,8 +2247,8 @@ fn named_execute_and_review_mirror_into_kernel_residents() {
                 Some(starriver_host::CHAT_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .ok();
         t.host
             .execute(
@@ -2228,8 +2258,8 @@ fn named_execute_and_review_mirror_into_kernel_residents() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .ok();
         let preview = t.host.debug_kernel_system_preview().expect("kernel live");
         assert!(
@@ -2272,8 +2302,8 @@ fn title_audit_skipped_for_user_pinned_sessions() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&t.host, rx);
 
@@ -2340,8 +2370,8 @@ fn review_mode_reaches_the_wire_as_system_and_tool_whitelist() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&t.host, rx);
 
@@ -2408,8 +2438,8 @@ fn memory_recall_injects_into_the_system_prompt() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&t.host, rx);
 
@@ -2532,8 +2562,8 @@ fn ask_user_tool_resolves_via_interaction_respond() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
 
         // The question event lands in the session log (this is what the
@@ -2600,8 +2630,8 @@ fn ask_user_tool_times_out_and_reports_the_miss() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
@@ -2638,7 +2668,9 @@ fn ask_user_in_scheduled_run_fails_fast_without_reaching_the_bridge() {
         let host = host_in(dir);
         let adapter = Arc::new(ask_user_e2e::AskUserAdapter {
             calls: std::sync::atomic::AtomicUsize::new(0),
-            args_json: std::sync::Mutex::new(r#"{"question":"which location?","timeout_secs":120}"#.into()),
+            args_json: std::sync::Mutex::new(
+                r#"{"question":"which location?","timeout_secs":120}"#.into(),
+            ),
             saw_unattended: std::sync::atomic::AtomicBool::new(false),
         });
         host.debug_register_adapter(adapter.clone() as Arc<dyn starriver_kernel::llm::LlmAdapter>);
@@ -2674,8 +2706,7 @@ fn ask_user_in_scheduled_run_fails_fast_without_reaching_the_bridge() {
         let sid = sid.expect("scheduled run settled with a session id");
 
         // The question never reached the bridge: no pending modal event.
-        let events =
-            host.debug_session_log_event_data(sid.clone(), "interaction/question".into());
+        let events = host.debug_session_log_event_data(sid.clone(), "interaction/question".into());
         assert!(
             events.is_empty(),
             "scheduled-run ask must not surface a question: {events:?}"
@@ -2689,7 +2720,9 @@ fn ask_user_in_scheduled_run_fails_fast_without_reaching_the_bridge() {
         );
         // And the assembled prompt carried the unattended contract section.
         assert!(
-            adapter.saw_unattended.load(std::sync::atomic::Ordering::SeqCst),
+            adapter
+                .saw_unattended
+                .load(std::sync::atomic::Ordering::SeqCst),
             "scheduled run's prompt must carry the run:unattended section"
         );
     });
@@ -2793,8 +2826,8 @@ fn plan_review_approval_exits_plan_mode_and_releases_readonly() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
 
         // The review request lands in the session log (the Plan card's source).
@@ -2876,8 +2909,8 @@ fn plan_review_rejection_keeps_plan_mode_and_carries_feedback() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
 
         let mut request_id = None;
@@ -2916,7 +2949,7 @@ fn plan_review_rejection_keeps_plan_mode_and_carries_feedback() {
             .expect("sandbox/mode events");
         assert_eq!(last, "read-only");
 
- // The failed call carries the feedback (: keep-planning is a
+        // The failed call carries the feedback (: keep-planning is a
         // failed call, so the model revises and presents again).
         let results = poll_session_events(&host, "plan-r", "tool/result");
         let rendered = format!("{:?}", results.last().expect("tool result logged"));
@@ -2948,15 +2981,15 @@ fn exit_plan_mode_in_standard_mode_requests_review_and_approval_resumes() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-
-                None,)
+                None,
+            )
             .expect("execute");
 
         // The review IS requested in standard mode now.
         let mut request_id = None;
         for _ in 0..200 {
-            let events =
-                host.debug_session_log_event_data("plan-off".into(), "plan/review-requested".into());
+            let events = host
+                .debug_session_log_event_data("plan-off".into(), "plan/review-requested".into());
             if let Some(data) = events.first() {
                 request_id = data.as_str_at("id").map(String::from);
                 break;
@@ -3115,8 +3148,8 @@ fn desktop_provider_route_reaches_the_wire_end_to_end() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
@@ -3328,8 +3361,8 @@ fn missing_credential_fails_the_run_with_missing_credential() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         let handle = host.runtime_handle();
         let blob: String = handle.block_on(async move {
@@ -3454,8 +3487,8 @@ fn image_attachment_reaches_the_wire_as_inline_image_url() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         let handle = host.runtime_handle();
         handle.block_on(async move {
@@ -3632,7 +3665,7 @@ fn subagent_delegation_config_and_job_panel_roundtrip() {
         );
 
         // Enable explorer and bind a child model route. The tool re-registers
- // (schema-layer parity): the description now advertises explorer
+        // (schema-layer parity): the description now advertises explorer
         // and only explorer.
         host.set_subagent_config("explorer".into(), true, Some("ds/deepseek-chat".into()))
             .expect("enable explorer");
@@ -3756,8 +3789,8 @@ fn openai_responses_api_format_routes_to_the_responses_protocol() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
@@ -3854,8 +3887,8 @@ fn execute_does_not_leak_ui_subscriptions_into_followup_runs() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute1");
         handle.block_on(async {
             for _ in 0..40 {
@@ -3878,8 +3911,8 @@ fn execute_does_not_leak_ui_subscriptions_into_followup_runs() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute2");
         handle.block_on(async {
             for _ in 0..40 {
@@ -4255,8 +4288,8 @@ fn live_turn_persists_usage_and_projects_duration_for_history() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&t.host, rx);
 
@@ -4401,8 +4434,8 @@ fn live_edit_turn_persists_file_changes_for_history() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         // edit needs approval: poll-and-approve (same pattern as the plugin_kernel approver).
         for _ in 0..500 {
@@ -4542,10 +4575,10 @@ fn session_messages_project_file_changes_from_persisted_log() {
 }
 
 mod vision_degrade_e2e {
-    //! Text-only gating: a route that rejects image content records in the
-    //! runtime error memory (WI-152 S4) and every later request degrades to
-    //! cold metadata placeholders (WI-152 S2) instead of putting image data
-    //! back on the wire; vision-capable models still receive Image blocks.
+    //! Image gating (dsh pattern): a declared text-only route fails the turn
+    //! at request assembly with an explicit error; undeclared routes ride
+    //! images and the provider's own rejection (CapturingAdapter's
+    //! `reject_images`) is the arbiter.
 
     use base64::Engine as _;
     use futures::stream::{BoxStream, StreamExt};
@@ -4558,8 +4591,7 @@ mod vision_degrade_e2e {
         pub provider: String,
         pub captured: Arc<Mutex<Vec<Vec<Message>>>>,
         /// Fail any request carrying an Image block with the exact
-        /// GLM/bigmodel validation error (code 1210) — the rejection whose
-        /// Chinese wording no English keyword probe could match.
+        /// GLM/bigmodel validation error (code 1210).
         pub reject_images: bool,
     }
 
@@ -4574,10 +4606,11 @@ mod vision_degrade_e2e {
         ) -> BoxStream<'static, Result<StreamChunk, LlmError>> {
             self.captured.lock().unwrap().push(options.messages.clone());
             if self.reject_images
-                && options
-                    .messages
-                    .iter()
-                    .any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::Image { .. })))
+                && options.messages.iter().any(|m| {
+                    m.content
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::Image { .. }))
+                })
             {
                 return Box::pin(futures::stream::iter(vec![Err(LlmError::Call {
                     code: "INVALID_REQUEST".into(),
@@ -4614,129 +4647,6 @@ mod vision_degrade_e2e {
         img.write_to(&mut png, image::ImageFormat::Png).unwrap();
         base64::engine::general_purpose::STANDARD.encode(png.get_ref())
     }
-}
-
-#[test]
-fn text_only_model_never_receives_image_blocks() {
-    with_temp_home(|dir| {
-        let host = host_in(dir);
-        host.add_model(
-            "text-prov".into(),
-            "Text".into(),
-            "cloud".into(),
-            "openai-compat".into(),
-            Some("https://example.com".into()),
-            Some("k".into()),
-            None,
-            "m1".into(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("openai-chat".into()),
-            None,
-            None,
-            None,
-        )
-        .expect("add model");
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        host.debug_register_adapter(Arc::new(vision_degrade_e2e::CapturingAdapter {
-            provider: "text-prov".into(),
-            captured: Arc::clone(&captured),
-            reject_images: true,
-        }));
-
-        let admitted = host
-            .admit_image_attachments(format!(
-                r#"[{{"name":"shot.png","mediaType":"image/png","data":"{}"}}]"#,
-                vision_degrade_e2e::png_base64()
-            ))
-            .expect("admit");
-        assert!(!admitted.is_empty(), "image must be admitted");
-        let ref_id = admitted[0].id.clone();
-
-        // Turn 1: the undeclared route rejects the image with GLM's Chinese
-        // validation error (code 1210) — no English keyword anywhere in the
-        // text, so this turn fails and only the error memory can adapt.
-        let rx = host
-            .execute(
-                format!("look at ![shot]({ref_id})"),
-                Some("degrade-1".into()),
-                None,
-                None,
-                None,
-                None,
-
-                None,)
-            .expect("execute");
-        wait_terminal(&host, rx);
-
-        // WI-152 S4: the runtime error memory records the route as text-only
-        // (this execute carries no explicit model, so the route key holds the
-        // empty model — the same key the next execute's precheck reads).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while host.active_model_supports_vision_for("text-prov", "") != Some(false) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the GLM 1210 rejection must mark the route text-only"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-
-        // Turn 2: same route, same image — the request degrades to text-only
-        // placeholders and the adapter (still rejecting images) succeeds.
-        captured.lock().unwrap().clear();
-        let rx = host
-            .execute(
-                format!("look again ![shot]({ref_id})"),
-                Some("degrade-2".into()),
-                None,
-                None,
-                None,
-                None,
-
-                None,)
-            .expect("execute");
-        wait_terminal(&host, rx);
-
-        let guard = captured.lock().unwrap();
-        assert!(!guard.is_empty(), "adapter must have been called");
-        for messages in guard.iter() {
-            for message in messages {
-                for block in &message.content {
-                    assert!(
-                        !matches!(block, ContentBlock::Image { .. }),
-                        "纯文本模型不得收到 Image 块: {block:?}"
-                    );
-                }
-            }
-        }
-        let all_text: String = guard
-            .iter()
-            .flat_map(|ms| ms.iter())
-            .flat_map(|m| m.content.iter())
-            .filter_map(|b| match b {
-                ContentBlock::Text(t) => Some(t.clone()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            all_text.contains("本模型仅支持文本输入"),
-            "降级后请求文本必须带 text-only 占位(WI-152 S2): {all_text}"
-        );
-        // The text-only placeholder must not advertise reload_image (a pull
-        // would put image data back on the wire).
-        assert!(
-            !all_text.contains("reload_image"),
-            "text-only 占位不得提示 reload_image: {all_text}"
-        );
-        // WI-152 S3: no content summaries — placeholders carry identity only.
-        assert!(
-            !all_text.contains("![shot]("),
-            "markdown 引用不得原样进请求: {all_text}"
-        );
-    });
 }
 
 #[test]
@@ -4787,8 +4697,8 @@ fn vision_model_still_receives_image_blocks() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
@@ -4805,12 +4715,108 @@ fn vision_model_still_receives_image_blocks() {
     });
 }
 
+/// dsh pattern: a variant declared text-only (`supports_vision: false`)
+/// fails the turn at request assembly — the adapter is never called and the
+/// error names the model. The image stays in the logged message (history
+/// renders it); nothing is silently stripped.
+#[test]
+fn declared_text_only_model_rejects_image_turn() {
+    use starriver_host::CODING_AGENT_NAME;
+    with_temp_home(|dir| {
+        let host = host_in(dir);
+        let variants =
+            serde_json::json!([{ "id": "m1", "name": "M1", "supports_vision": false }]).to_string();
+        host.add_model(
+            "text-prov".into(),
+            "Text".into(),
+            "cloud".into(),
+            "openai-compat".into(),
+            Some("https://example.com".into()),
+            Some("k".into()),
+            None,
+            "m1".into(),
+            Some(variants),
+            None,
+            None,
+            None,
+            None,
+            Some("openai-chat".into()),
+            None,
+            None,
+            None,
+        )
+        .expect("add model");
+        host.set_agent_active_model(CODING_AGENT_NAME.into(), "text-prov".into(), "m1".into())
+            .expect("bind text-only model");
+        assert!(
+            host.model_declares_text_only("text-prov", "m1"),
+            "declaration must resolve before the run"
+        );
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        host.debug_register_adapter(Arc::new(vision_degrade_e2e::CapturingAdapter {
+            provider: "text-prov".into(),
+            captured: Arc::clone(&captured),
+            reject_images: false,
+        }));
+
+        let admitted = host
+            .admit_image_attachments(format!(
+                r#"[{{"name":"shot.png","mediaType":"image/png","data":"{}"}}]"#,
+                vision_degrade_e2e::png_base64()
+            ))
+            .expect("admit");
+        let ref_id = admitted[0].id.clone();
+
+        let rx = host
+            .execute(
+                format!("look at ![shot]({ref_id})"),
+                Some("text-only-reject".into()),
+                None,
+                Some(CODING_AGENT_NAME.into()),
+                None,
+                None,
+                None,
+            )
+            .expect("execute");
+        let handle = host.runtime_handle();
+        let terminal = handle.block_on(async move {
+            let mut rx = rx;
+            let mut terminal = "<no terminal event>".to_string();
+            for _ in 0..200 {
+                match rx.recv().await {
+                    Ok(ev) => {
+                        let ty = ev["type"].as_str().unwrap_or_default();
+                        if ty == "turnError" || ty == "TaskFailed" || ty == "turnEnd" {
+                            terminal = ev.to_string();
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        terminal = "<channel closed>".to_string();
+                        break;
+                    }
+                }
+            }
+            terminal
+        });
+        assert!(
+            terminal.contains("纯文本") && terminal.contains("m1"),
+            "terminal event must refuse images and name the model, got: {terminal}"
+        );
+        let guard = captured.lock().unwrap();
+        assert!(
+            guard.is_empty(),
+            "adapter must never be called, got {} requests",
+            guard.len()
+        );
+    });
+}
+
 /// Execute once and wait for the turn to end (terminates with turnError/turnEnd under an empty engine).
 fn execute_and_wait(t: &TestHost, task: &str, sid: &str) {
     let rx = t
         .host
-        .execute(task.into(), Some(sid.into()), None, None, None, None,
-            None,)
+        .execute(task.into(), Some(sid.into()), None, None, None, None, None)
         .expect("execute");
     let handle = t.host.runtime_handle();
     handle.block_on(async move {
@@ -5138,8 +5144,8 @@ fn permission_preset_roundtrip_writes_both_knobs_and_derives() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute accepts");
         wait_terminal(&t.host, rx);
 
@@ -5210,11 +5216,11 @@ fn permission_preset_creation_binding_steers_the_session() {
             assert_eq!(sessions.len(), 1, "one fresh session expected");
             sessions[0].id.clone()
         };
-        let perm = t
-            .host
-            .get_permission(sid.clone())
-            .expect("get_permission");
-        assert_eq!(perm["sandbox"], "danger-full-access", "fold after creation binding: {perm}");
+        let perm = t.host.get_permission(sid.clone()).expect("get_permission");
+        assert_eq!(
+            perm["sandbox"], "danger-full-access",
+            "fold after creation binding: {perm}"
+        );
         assert_eq!(perm["approval"], "bypass");
         assert_eq!(perm["preset"], "danger-full-access");
 
@@ -5237,7 +5243,10 @@ fn permission_preset_creation_binding_steers_the_session() {
             .host
             .get_permission(sid.clone())
             .expect("get_permission after ignored preset");
-        assert_eq!(perm["preset"], "danger-full-access", "continuation must keep its binding: {perm}");
+        assert_eq!(
+            perm["preset"], "danger-full-access",
+            "continuation must keep its binding: {perm}"
+        );
 
         // Unknown preset names fail loudly instead of silently defaulting.
         let err = t
@@ -5252,7 +5261,10 @@ fn permission_preset_creation_binding_steers_the_session() {
                 Some("nope".into()),
             )
             .unwrap_err();
-        assert!(err.to_string().contains("unknown permission preset"), "{err}");
+        assert!(
+            err.to_string().contains("unknown permission preset"),
+            "{err}"
+        );
     });
 }
 
@@ -5275,8 +5287,8 @@ fn permission_fold_reports_custom_for_non_table_combo() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute accepts");
         wait_terminal(&t.host, rx);
 
@@ -5398,8 +5410,15 @@ fn attach_workspace_unarchives_and_rehomes() {
         // A real session (a turn with no engine still persists the log), archived.
         let rx = t
             .host
-            .execute("hello".into(), Some("att-t".into()), None, None, None, None,
-            None,)
+            .execute(
+                "hello".into(),
+                Some("att-t".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .expect("execute");
         wait_terminal(&t.host, rx);
         t.host.archive_session("att-t".into()).expect("archive");
@@ -5619,8 +5638,8 @@ fn image_projection_log_stays_referenced_and_reload_pulls_hot() {
                     None,
                     None,
                     None,
-                
-                None,) {
+                    None,
+                ) {
                     Ok(receiver) => {
                         rx = Some(receiver);
                         break;
@@ -5662,8 +5681,8 @@ fn image_projection_log_stays_referenced_and_reload_pulls_hot() {
                 None,
                 None,
                 None,
-            
-                None,) {
+                None,
+            ) {
                 Ok(receiver) => {
                     rx = Some(receiver);
                     break;
@@ -5712,8 +5731,7 @@ fn image_projection_log_stays_referenced_and_reload_pulls_hot() {
         let a_text = pre_reload.iter().any(|m| {
             m.content.iter().any(|b| match b {
                 ContentBlock::Text(t) => {
-                    t.contains(&format!("file_id={}", ref_ids[0]))
-                        && t.contains("reload_image")
+                    t.contains(&format!("file_id={}", ref_ids[0])) && t.contains("reload_image")
                 }
                 _ => false,
             })
@@ -5803,8 +5821,8 @@ fn five_small_images_in_one_message_all_ride() {
                 None,
                 None,
                 None,
-
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
@@ -5890,8 +5908,8 @@ fn byte_budget_sheds_oldest_images_e2e() {
                 None,
                 None,
                 None,
-
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
@@ -6035,8 +6053,8 @@ fn duplicate_reload_noop_lands_in_the_log_e2e() {
                 None,
                 None,
                 None,
-
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
@@ -6132,13 +6150,11 @@ fn pruned_asset_reload_fails_and_repeat_gets_failure_hint_e2e() {
         std::fs::remove_file(&object).expect("prune the stored object");
 
         let captured = Arc::new(Mutex::new(Vec::new()));
-        host.debug_register_adapter(Arc::new(
-            image_projection_e2e::ReloadCallingAdapter {
-                provider: "prune-prov".into(),
-                file_id: Arc::new(std::sync::Mutex::new(ref_id.clone())),
-                captured: Arc::clone(&captured),
-            },
-        ));
+        host.debug_register_adapter(Arc::new(image_projection_e2e::ReloadCallingAdapter {
+            provider: "prune-prov".into(),
+            file_id: Arc::new(std::sync::Mutex::new(ref_id.clone())),
+            captured: Arc::clone(&captured),
+        }));
         let rx = host
             .execute(
                 format!("final check ![g]({ref_id})"),
@@ -6147,12 +6163,13 @@ fn pruned_asset_reload_fails_and_repeat_gets_failure_hint_e2e() {
                 None,
                 None,
                 None,
-
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
-        let results = host.debug_session_log_event_data("prune-reload".into(), "tool/result".into());
+        let results =
+            host.debug_session_log_event_data("prune-reload".into(), "tool/result".into());
         let rendered = format!("{results:?}");
         assert!(
             rendered.contains("NOT_FOUND") || rendered.contains("unavailable"),
@@ -6238,8 +6255,8 @@ fn zero_byte_budget_disables_images_e2e() {
                 None,
                 None,
                 None,
-
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
@@ -6308,8 +6325,8 @@ fn feedback_record_is_durable_and_validated() {
                 None,
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         wait_terminal(&host, rx);
 
@@ -6389,8 +6406,8 @@ fn execute_rejects_unknown_agent_preset() {
             Some(starriver_host::CODING_AGENT_NAME.into()),
             None,
             Some("no-such-preset".into()),
-        
-                None,)
+            None,
+        )
         .unwrap_err();
     assert!(
         err.to_string().contains("AGENT_PRESET_NOT_FOUND"),
@@ -6413,8 +6430,8 @@ fn execute_rejects_agent_preset_on_continuing_session() {
             Some(starriver_host::CODING_AGENT_NAME.into()),
             None,
             None,
-        
-                None,)
+            None,
+        )
         .expect("first run");
     wait_terminal(&t.host, rx);
     // The lock is durability-based: wait until the session's row is visible,
@@ -6441,8 +6458,8 @@ fn execute_rejects_agent_preset_on_continuing_session() {
             Some(starriver_host::CODING_AGENT_NAME.into()),
             None,
             Some("coding".into()),
-        
-                None,) {
+            None,
+        ) {
             Err(e) if e.to_string().contains("AGENT_PRESET_LOCKED") => {
                 err = Some(e);
                 break;
@@ -6475,8 +6492,8 @@ fn execute_accepts_the_builtin_coding_preset_on_new_sessions() {
             Some(starriver_host::CODING_AGENT_NAME.into()),
             None,
             Some("coding".into()),
-        
-                None,)
+            None,
+        )
         .expect("execute with builtin preset");
     wait_terminal(&t.host, rx);
     assert!(
@@ -6508,7 +6525,11 @@ fn fork_point_reports_the_clamped_cutoff() {
         .into_iter()
         .find(|s| s.id == over.id)
         .expect("listed");
-    assert_eq!(listed_over.fork_point, Some(4), "listing reads the clamped seed_length");
+    assert_eq!(
+        listed_over.fork_point,
+        Some(4),
+        "listing reads the clamped seed_length"
+    );
 
     let negative = t
         .host
@@ -6526,8 +6547,7 @@ fn steer_injects_into_live_session() {
     let t = test_host();
     let rx = t
         .host
-        .execute("count from 1".into(), None, None, None, None, None,
-            None,)
+        .execute("count from 1".into(), None, None, None, None, None, None)
         .expect("execute");
     // Wait for the session to exist, then steer into it.
     let handle = t.host.runtime_handle();
@@ -6573,10 +6593,7 @@ mod gated_route_adapter {
         pub gate: Arc<tokio::sync::Notify>,
     }
 
-    fn tool_call_chunks(
-        call: &str,
-        args: &str,
-    ) -> Vec<Result<StreamChunk, LlmError>> {
+    fn tool_call_chunks(call: &str, args: &str) -> Vec<Result<StreamChunk, LlmError>> {
         vec![
             Ok(StreamChunk::ToolCallDelta {
                 index: 0,
@@ -6711,8 +6728,8 @@ fn mid_run_model_switch_takes_effect_on_the_next_llm_call() {
                 Some(CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
 
         // The second LLM call enters once the first read tool settled; it is
@@ -6726,12 +6743,8 @@ fn mid_run_model_switch_takes_effect_on_the_next_llm_call() {
         assert_eq!(calls.lock().unwrap().len(), 2, "second call never started");
 
         // Switch mid-run from a plain thread (the host path blocks on locks).
-        host.set_agent_active_model(
-            CODING_AGENT_NAME.into(),
-            "p-new".into(),
-            "new-m".into(),
-        )
-        .expect("switch mid-run");
+        host.set_agent_active_model(CODING_AGENT_NAME.into(), "p-new".into(), "new-m".into())
+            .expect("switch mid-run");
 
         gate.notify_one();
         handle.block_on(async {
@@ -6852,8 +6865,7 @@ fn paged_history_reports_entry_window_and_stamps_seq() {
         .seed_test_log("page-1".into(), None, None, events)
         .expect("seed log");
 
-    let (msgs, total, has_more) =
-        t.host.get_session_messages_paged("page-1".into(), None, 4);
+    let (msgs, total, has_more) = t.host.get_session_messages_paged("page-1".into(), None, 4);
     assert_eq!(total, 6);
     assert!(has_more, "older entries exist beyond the window");
     assert_eq!(msgs.len(), 4);
@@ -6861,7 +6873,8 @@ fn paged_history_reports_entry_window_and_stamps_seq() {
     assert_eq!(msgs[3].seq, Some(5), "newest row");
 
     let (older, _total, has_more_head) =
-        t.host.get_session_messages_paged("page-1".into(), Some(2), 4);
+        t.host
+            .get_session_messages_paged("page-1".into(), Some(2), 4);
     assert_eq!(older.len(), 2);
     assert!(!has_more_head, "reached the head of history");
     assert_eq!(older[0].seq, Some(0));
@@ -6871,8 +6884,8 @@ fn paged_history_reports_entry_window_and_stamps_seq() {
 /// round, live usage accounting, and a hard stop at the budget.
 #[test]
 fn goal_loop_runs_rounds_and_stops_at_budget() {
-    use starriver_host::CODING_AGENT_NAME;
     use futures::stream::BoxStream;
+    use starriver_host::CODING_AGENT_NAME;
     use starriver_kernel::llm::{
         ContentBlock, ContentBlockType, FinishReason, GenerateOptions, LlmAdapter, LlmError,
         StreamChunk, TokenUsage,
@@ -6886,7 +6899,10 @@ fn goal_loop_runs_rounds_and_stops_at_budget() {
             static PROVIDERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
             PROVIDERS.get_or_init(|| vec!["mock".into()])
         }
-        fn stream(&self, _options: GenerateOptions) -> BoxStream<'static, Result<StreamChunk, LlmError>> {
+        fn stream(
+            &self,
+            _options: GenerateOptions,
+        ) -> BoxStream<'static, Result<StreamChunk, LlmError>> {
             *self.calls.lock().unwrap() += 1;
             Box::pin(futures::stream::iter(vec![
                 Ok(StreamChunk::Usage {
@@ -6941,8 +6957,8 @@ fn goal_loop_runs_rounds_and_stops_at_budget() {
                 Some(CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         let mut sid = String::new();
         handle.block_on(async {
@@ -6989,8 +7005,8 @@ fn goal_loop_runs_rounds_and_stops_at_budget() {
                 Some(CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         let mut saw_budget_limited = false;
         handle.block_on(async {
@@ -7008,7 +7024,10 @@ fn goal_loop_runs_rounds_and_stops_at_budget() {
                 }
             }
         });
-        assert!(saw_budget_limited, "goalStatus broadcast reached the stream");
+        assert!(
+            saw_budget_limited,
+            "goalStatus broadcast reached the stream"
+        );
         let ran = *calls.lock().unwrap() - before;
         // The accounting is asynchronous by design (the watcher consumes the
         // relayed usage stream), so under scheduler load the BudgetLimited
@@ -7038,7 +7057,9 @@ fn search_session_content_finds_matching_sessions_with_snippet() {
                 msg_json(
                     MessageRole::User,
                     "m0",
-                    vec![ContentBlock::Text("please grep the repo for zstd caches".into())],
+                    vec![ContentBlock::Text(
+                        "please grep the repo for zstd caches".into(),
+                    )],
                 ),
                 true,
             )],
@@ -7066,7 +7087,10 @@ fn search_session_content_finds_matching_sessions_with_snippet() {
     assert_eq!(hits.len(), 1, "only the matching session surfaces");
     assert_eq!(hits[0]["sessionId"], "search-a");
     let snippet = hits[0]["snippet"].as_str().unwrap_or_default();
-    assert!(snippet.contains("zstd"), "snippet carries the needle: {snippet}");
+    assert!(
+        snippet.contains("zstd"),
+        "snippet carries the needle: {snippet}"
+    );
     assert_eq!(hits[0]["matches"], 1);
 
     assert!(t
@@ -7080,9 +7104,9 @@ fn search_session_content_finds_matching_sessions_with_snippet() {
 /// waiting for the next chunk.
 #[test]
 fn cancel_during_silent_stream_takes_effect_immediately() {
-    use starriver_host::CODING_AGENT_NAME;
     use futures::stream::BoxStream;
     use futures::StreamExt as _;
+    use starriver_host::CODING_AGENT_NAME;
     use starriver_kernel::llm::{
         ContentBlockType, GenerateOptions, LlmAdapter, LlmError, StreamChunk,
     };
@@ -7114,9 +7138,8 @@ fn cancel_during_silent_stream_takes_effect_immediately() {
             });
             // Chain a never-resolving item after the first chunk: the
             // stream yields one block-start, then sits silent forever.
-            let silent = futures::stream::once(futures::future::pending::<
-                Result<StreamChunk, LlmError>,
-            >());
+            let silent =
+                futures::stream::once(futures::future::pending::<Result<StreamChunk, LlmError>>());
             Box::pin(stream.chain(silent))
         }
         fn chat(
@@ -7142,8 +7165,8 @@ fn cancel_during_silent_stream_takes_effect_immediately() {
                 Some(CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
 
         // Wait until the turn has actually entered the stream (one chunk in).
@@ -7153,7 +7176,10 @@ fn cancel_during_silent_stream_takes_effect_immediately() {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(entered.load(Ordering::SeqCst) > 0, "turn never started streaming");
+        assert!(
+            entered.load(Ordering::SeqCst) > 0,
+            "turn never started streaming"
+        );
         // Drain any queued events (blockStart etc.) so only the terminal one
         // is awaited below.
         let mut session_id = String::new();
@@ -7252,8 +7278,8 @@ fn truncated_llm_stream_fails_the_turn_visibly() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         let mut got_error = None;
         handle.block_on(async {
@@ -7317,9 +7343,8 @@ fn running_session_ids_tracks_the_single_input_slot() {
                     block_type: ContentBlockType::Text,
                 })
             });
-            let silent = futures::stream::once(futures::future::pending::<
-                Result<StreamChunk, LlmError>,
-            >());
+            let silent =
+                futures::stream::once(futures::future::pending::<Result<StreamChunk, LlmError>>());
             Box::pin(stream.chain(silent))
         }
         fn chat(
@@ -7352,8 +7377,8 @@ fn running_session_ids_tracks_the_single_input_slot() {
                 Some(starriver_host::CODING_AGENT_NAME.into()),
                 None,
                 None,
-            
-                None,)
+                None,
+            )
             .expect("execute");
         for _ in 0..500 {
             if entered.load(Ordering::SeqCst) > 0 {
@@ -7361,33 +7386,50 @@ fn running_session_ids_tracks_the_single_input_slot() {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(entered.load(Ordering::SeqCst) > 0, "turn never started streaming");
+        assert!(
+            entered.load(Ordering::SeqCst) > 0,
+            "turn never started streaming"
+        );
         let _ = &mut rx;
 
         // While the (hung) turn lives, the backend reports the slot held —
         // this is what the UI's Stop affordance re-arms from after a reload.
         let mut observed_held = false;
         for _ in 0..100 {
-            if host.running_session_ids().iter().any(|id| id == &session_id) {
+            if host
+                .running_session_ids()
+                .iter()
+                .any(|id| id == &session_id)
+            {
                 observed_held = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(observed_held, "running_session_ids must report the live turn");
+        assert!(
+            observed_held,
+            "running_session_ids must report the live turn"
+        );
 
         // Cancel → the slot releases (guard drop), i.e. the session is
         // usable again — exactly what the frontend's recovery flow waits for.
         assert!(host.cancel(session_id.clone()));
         let mut released = false;
         for _ in 0..200 {
-            if !host.running_session_ids().iter().any(|id| id == &session_id) {
+            if !host
+                .running_session_ids()
+                .iter()
+                .any(|id| id == &session_id)
+            {
                 released = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert!(released, "slot must release after the stale turn is cancelled");
+        assert!(
+            released,
+            "slot must release after the stale turn is cancelled"
+        );
     })
 }
 
@@ -7427,9 +7469,8 @@ fn fresh_session_first_turn_holds_slot_and_lists_during_the_run() {
                     block_type: ContentBlockType::Text,
                 })
             });
-            let silent = futures::stream::once(futures::future::pending::<
-                Result<StreamChunk, LlmError>,
-            >());
+            let silent =
+                futures::stream::once(futures::future::pending::<Result<StreamChunk, LlmError>>());
             Box::pin(stream.chain(silent))
         }
         fn chat(
@@ -7476,7 +7517,10 @@ fn fresh_session_first_turn_holds_slot_and_lists_during_the_run() {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(entered.load(Ordering::SeqCst) > 0, "turn never started streaming");
+        assert!(
+            entered.load(Ordering::SeqCst) > 0,
+            "turn never started streaming"
+        );
         let _ = &mut rx;
 
         // (a) The minted sid holds the single input slot during the turn —
@@ -7521,7 +7565,10 @@ fn fresh_session_first_turn_holds_slot_and_lists_during_the_run() {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert!(released, "adopted slot must release after the turn is cancelled");
+        assert!(
+            released,
+            "adopted slot must release after the turn is cancelled"
+        );
     })
 }
 
@@ -7560,9 +7607,9 @@ fn acp_subagent_template_parses_and_routes_to_the_client() {
 /// running to completion instead of going silent.
 #[test]
 fn send_now_followup_turn_stays_visible_on_execute_stream() {
-    use starriver_host::CODING_AGENT_NAME;
     use futures::stream::BoxStream;
     use futures::StreamExt as _;
+    use starriver_host::CODING_AGENT_NAME;
     use starriver_kernel::llm::{
         ContentBlock, ContentBlockType, FinishReason, GenerateOptions, LlmAdapter, LlmError,
         StreamChunk,
@@ -7652,7 +7699,10 @@ fn send_now_followup_turn_stays_visible_on_execute_stream() {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(entered.load(Ordering::SeqCst) > 0, "turn never started streaming");
+        assert!(
+            entered.load(Ordering::SeqCst) > 0,
+            "turn never started streaming"
+        );
 
         let mut session_id = String::new();
         handle.block_on(async {
@@ -7685,19 +7735,17 @@ fn send_now_followup_turn_stays_visible_on_execute_stream() {
                 if std::time::Instant::now() >= deadline {
                     break;
                 }
-                match tokio::time::timeout(
-                    std::time::Duration::from_millis(500),
-                    rx.recv(),
-                )
-                .await
-                {
+                match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
                     Ok(Ok(ev)) => {
                         let ty = ev["type"].as_str().unwrap_or_default().to_string();
                         if ty == "cancelled" {
                             saw_cancelled = true;
                         }
                         if ty == "assistantText"
-                            && ev["text"].as_str().unwrap_or_default().contains("follow-up answered")
+                            && ev["text"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .contains("follow-up answered")
                         {
                             saw_followup_text = true;
                         }
@@ -7733,8 +7781,8 @@ fn send_now_followup_turn_stays_visible_on_execute_stream() {
 /// TaskStarted handler reads `event.session_id`.
 #[test]
 fn turn_start_projects_legacy_task_started_event() {
-    use starriver_host::CODING_AGENT_NAME;
     use futures::stream::BoxStream;
+    use starriver_host::CODING_AGENT_NAME;
     use starriver_kernel::llm::{
         ContentBlock, ContentBlockType, FinishReason, GenerateOptions, LlmAdapter, LlmError,
         StreamChunk,
@@ -7826,9 +7874,9 @@ fn turn_start_projects_legacy_task_started_event() {
 /// stay visible on the execute stream (same relay contract as Send Now).
 #[test]
 fn queued_message_auto_claim_streams_followup_turn() {
-    use starriver_host::CODING_AGENT_NAME;
     use futures::stream::BoxStream;
     use futures::StreamExt as _;
+    use starriver_host::CODING_AGENT_NAME;
     use starriver_kernel::llm::{
         ContentBlock, ContentBlockType, FinishReason, GenerateOptions, LlmAdapter, LlmError,
         StreamChunk,
@@ -7937,7 +7985,9 @@ fn queued_message_auto_claim_streams_followup_turn() {
         });
         assert!(!session_id.is_empty());
         // Queue while turn 1 streams; it must claim at the turn boundary.
-        assert!(host.queue_add(session_id, "queued follow-up".into()).is_some());
+        assert!(host
+            .queue_add(session_id, "queued follow-up".into())
+            .is_some());
 
         let mut saw_followup_text = false;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -7949,7 +7999,10 @@ fn queued_message_auto_claim_streams_followup_turn() {
                 match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
                     Ok(Ok(ev)) => {
                         if ev["type"] == "assistantText"
-                            && ev["text"].as_str().unwrap_or_default().contains("queued answer")
+                            && ev["text"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .contains("queued answer")
                         {
                             saw_followup_text = true;
                             break;

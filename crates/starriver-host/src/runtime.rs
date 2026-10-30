@@ -232,9 +232,9 @@ impl HostRuntime {
         // default_agent_options) instead of silently vanishing from the
         // model's vocabulary.
         let mcp_unavailable = Arc::new(crate::mcp_status_state::McpUnavailableServers::default());
-        let _ = plugin_ctx.provide::<crate::mcp_status_state::McpUnavailableServers>(
-            Arc::clone(&mcp_unavailable),
-        );
+        let _ = plugin_ctx.provide::<crate::mcp_status_state::McpUnavailableServers>(Arc::clone(
+            &mcp_unavailable,
+        ));
         // Attachment seam: register the default content-addressed store so
         // loop-side consumers resolve it via `ctx.require` (WI-6 seam conversion).
         {
@@ -517,7 +517,7 @@ impl HostRuntime {
         // LLP §4.4: declare every configured provider in the kernel directory
         // and wire discovery even before any route is activated.
         runtime.register_llm_directory();
- // subagent parity: the in-process subagent driver tool.
+        // subagent parity: the in-process subagent driver tool.
         runtime.install_subagent_tool();
         // WI-67 user-questions: the agent can ask the user mid-run.
         runtime.install_question_tool();
@@ -549,7 +549,7 @@ impl HostRuntime {
     /// Register the `subagent_spawn` tool backed by an in-process driver:
     /// a fresh agent session runs the prompt under the template's bound model
     /// (settings `subagents:` namespace), or inherits the calling agent's
- /// route when the template binds none (parent-inheritance parity),
+    /// route when the template binds none (parent-inheritance parity),
     /// and returns its final text. Only enabled templates are advertised in
     /// the model-facing description and accepted at spawn time.
     pub fn install_subagent_tool(&self) {
@@ -589,7 +589,7 @@ impl HostRuntime {
                 let inner = Arc::clone(&inner);
                 let settings = Arc::clone(&settings);
                 Box::pin(async move {
- // Runtime gate mirrors the executor's check (two-layer
+                    // Runtime gate mirrors the executor's check (two-layer
                     // parity): settings may change between schema read and spawn.
                     let (bound_model, acp_agent) = {
                         let s = settings.read().unwrap();
@@ -625,7 +625,8 @@ impl HostRuntime {
                             .map(|result| {
                                 format!(
                                     "{} (stopReason: {})",
-                                    result.text.trim(), result.stop_reason
+                                    result.text.trim(),
+                                    result.stop_reason
                                 )
                             })
                             .map_err(|e| e.to_string())
@@ -640,7 +641,7 @@ impl HostRuntime {
                     let Some(kernel) = kernel else {
                         return Err("runtime unavailable".into());
                     };
- // parent-inheritance parity: an unbound template runs
+                    // parent-inheritance parity: an unbound template runs
                     // the child on the calling agent's live route instead of
                     // the preset placeholder.
                     let inherited = if bound_model.is_none() {
@@ -681,7 +682,6 @@ impl HostRuntime {
         let (template, prompt) = (template.to_string(), prompt.to_string());
         runtime.block_on(async move { spawner(template, prompt, None).await })
     }
-
 
     /// Re-register `subagent_spawn` after a delegation-config change: the
     /// model-facing description names the enabled templates, so the old
@@ -788,6 +788,7 @@ impl HostRuntime {
                     .map(|v| LlmVariantSettings {
                         id: v.id.clone(),
                         name: v.name.clone(),
+                        supports_vision: None,
                     })
                     .collect(),
                 default_model: e.default_model.clone(),
@@ -1148,7 +1149,7 @@ impl HostRuntime {
 
     /// Register every configured provider into the kernel's configurable
     /// provider directory and wire up model discovery, so the configuration
- /// surface is visible even before a route is activated (: directory is
+    /// surface is visible even before a route is activated (: directory is
     /// the registry twin; zero routes still declare the catalog). Re-syncs are
     /// idempotent: previous directory/discovery handles are disposed first, so
     /// add/remove-model changes take effect without a restart.
@@ -1327,92 +1328,26 @@ impl HostRuntime {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    #[allow(unused_assignments)]
-    /// In-process memory of "this provider+model route rejects images",
-    /// written by probing the error keywords of an image-sending turn
-    /// (WI-152 S4: keyed per route and TTL-bounded; only consulted for routes
-    /// with NO vision declaration — a declared route is never flipped by a
-    /// runtime error, and the UI's supports_vision checkbox always wins).
-    fn text_only_providers(
-    ) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::SystemTime>> {
-        static SET: std::sync::OnceLock<
-            std::sync::Mutex<std::collections::HashMap<String, std::time::SystemTime>>,
-        > = std::sync::OnceLock::new();
-        SET.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-    }
-
-    /// Memory key for one provider+model route (WI-152 S4 granularity).
-    fn vision_memory_key(provider: &str, model: &str) -> String {
-        format!("{provider}/{model}")
-    }
-
-    /// Whether a recorded memory still counts (WI-152 S4 TTL; `0` = forever).
-    fn memory_entry_current(
-        recorded: std::time::SystemTime,
-        ttl_hours: u64,
-        now: std::time::SystemTime,
-    ) -> bool {
-        ttl_hours == 0
-            || now
-                .duration_since(recorded)
-                .map(|age| age < std::time::Duration::from_secs(ttl_hours * 3600))
-                .unwrap_or(true)
-    }
-
     fn active_provider_key(&self) -> String {
         self.debug_default_provider()
             .map(|p| p.to_string())
             .unwrap_or_else(|| "mock".into())
     }
 
-    /// Same lookup for an explicit provider+model route (the run's activated
- /// route). Fully automatic (WI-152 v2 — /`inputModalities`
-    /// semantics, no user setting):
-    /// 1. the built-in provider table decides for known providers;
-    /// 2. unknown providers default to supported, with the runtime error
-    ///    memory (TTL-bounded, provider+model keyed) as the only corrective.
-    pub fn active_model_supports_vision_for(&self, key: &str, model: &str) -> Option<bool> {
-        let ttl_hours = self
-            .settings
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .agent
-            .vision_error_memory_ttl_hours
-            .unwrap_or(168);
-        // WI-152: the built-in provider table decides and is never flipped by
-        // runtime errors.
-        if let Some(builtin) = crate::vision::builtin_vision(key) {
-            return Some(builtin);
-        }
-        // Undeclared custom endpoint: consult (and expire) the error memory.
-        let memory_key = Self::vision_memory_key(key, model);
-        let mut memory = Self::text_only_providers()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        match memory.get(&memory_key).copied() {
-            Some(recorded)
-                if Self::memory_entry_current(
-                    recorded,
-                    ttl_hours,
-                    std::time::SystemTime::now(),
-                ) =>
-            {
-                return Some(false);
-            }
-            Some(_) => {
-                memory.remove(&memory_key);
-            }
-            None => {}
-        }
-        None
-    }
-
-    /// The current model's image capability. `Some(false)`: declaration, the
-    /// built-in table, or (undeclared routes only) unexpired error memory
-    /// says text-only; `Some(true)`/`None`: treat as supported.
-    pub fn active_model_supports_vision(&self) -> Option<bool> {
-        let key = self.active_provider_key();
-        self.active_model_supports_vision_for(&key, "")
+    /// Per-model image-input declaration (dsh pattern): does this route's
+    /// variant declare itself text-only? `false` = undeclared or declared
+    /// vision — images ride the wire and the provider's own error is the
+    /// arbiter. Unknown providers/variants are permissive.
+    pub fn model_declares_text_only(&self, provider_id: &str, model_id: &str) -> bool {
+        let settings = self.settings.read().unwrap();
+        settings
+            .llm
+            .providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .and_then(|p| p.resolve_variant(model_id))
+            .and_then(|v| v.supports_vision)
+            == Some(false)
     }
 
     #[api_method("session.execute", permissions = ["session:execute"], streaming = true)]
@@ -1427,7 +1362,7 @@ impl HostRuntime {
         agent_preset: Option<String>,
         permission_preset: Option<String>,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
- // Staged execution mode for a NEW session (binding: chosen at
+        // Staged execution mode for a NEW session (binding: chosen at
         // creation, locked per session). Only an explicitly passed value takes
         // effect (the Coding renderer always sends one for new sessions,
         // including standard; Chat sends none and the kernel mode stays
@@ -1459,7 +1394,10 @@ impl HostRuntime {
                 let p = crate::permission_presets::parse(name).ok_or_else(|| {
                     anyhow::anyhow!("unknown permission preset `{name}` (manual|accept-edits|auto|danger-full-access)")
                 })?;
-                Some(crate::preset::Preset { sandbox: p.sandbox, approval: p.approval })
+                Some(crate::preset::Preset {
+                    sandbox: p.sandbox,
+                    approval: p.approval,
+                })
             }
             None => None,
         };
@@ -1491,7 +1429,7 @@ impl HostRuntime {
         // falling back.
         let agent_name = agent.unwrap_or_else(|| crate::CHAT_AGENT_NAME.to_string());
         self.ensure_agent_residency(&agent_name)?;
- // WI-5 (ui-agent-preset parity): agent_preset is a creation-time
+        // WI-5 (ui-agent-preset parity): agent_preset is a creation-time
         // binding like execution_mode. New session → validate against the
         // roster and thread to the kernel header stamp; continuing session →
         // locked (AGENT_PRESET_LOCKED). Every run re-syncs the registry so
@@ -1720,29 +1658,25 @@ impl HostRuntime {
         }
 
         let (event_tx, event_rx) = tokio::sync::broadcast::channel::<serde_json::Value>(1024);
-        // P2 precheck: the current model is declared/remembered as text-only → images never ride the wire (cold placeholders).
-        // P2 precheck keyed on the provider this execute actually activated
-        // (title_provider), not the first-registered route — provider B's
-        // turns must not inherit provider A's vision declaration. Memory key
-        // carries the model (WI-152 S4): a text-only variant must not poison
-        // a vision-capable sibling on the same provider.
-        let provider_key = if title_provider.is_empty() {
-            self.active_provider_key()
+        // P2 precheck (dsh pattern): the activated model variant's
+        // declaration is a claim about the endpoint, not a check of it.
+        // Undeclared/true → images ride the wire and the provider's own
+        // error arbitrates; declared text-only (`supports_vision: false`) →
+        // the run is stamped so request assembly rejects any image block
+        // loudly (user message, history after a mid-session switch, tool
+        // output). Keyed on the route this execute actually activated
+        // (title_provider/title_model), not the first-registered route —
+        // provider B's turns must not inherit provider A's declaration.
+        let (declared_provider, declared_model) = if !title_provider.is_empty() {
+            (Some(title_provider.clone()), Some(title_model.clone()))
         } else {
-            title_provider.clone()
+            let cfg = self.resolve_agent_config(&agent_name);
+            (cfg.model_id, cfg.model)
         };
-        let memory_model = if title_model.is_empty() {
-            config.model.clone().unwrap_or_default()
-        } else {
-            title_model.clone()
+        let rejects_images = match (&declared_provider, &declared_model) {
+            (Some(pid), Some(mid)) => self.model_declares_text_only(pid, mid),
+            _ => false,
         };
-        let text_only_model =
-            self.active_model_supports_vision_for(&provider_key, &memory_model) == Some(false);
-        // WI-152: only routes with NO built-in declaration may learn a
-        // text-only memory from a failed image turn — table-backed routes
-        // surface the error to the user instead of silently flipping.
-        let vision_memory_eligible = crate::vision::builtin_vision(&provider_key).is_none();
-        let watch_rx = event_rx.resubscribe();
         // WI-97: the goal watcher's own subscription — taken before the
         // outer spawn moves event_rx.
         let goal_watch_rx = event_rx.resubscribe();
@@ -1846,78 +1780,11 @@ impl HostRuntime {
             //
             // WI-152 S3: no OCR preprocessing — every reference either
             // resolves (rides the request per the cold/hot projection) or
-            // stays verbatim in the text. Text-only models never receive
-            // image data (request-time projection sheds them to placeholders).
+            // stays verbatim in the text. Declared-text-only runs never
+            // reach the wire with image data: request assembly rejects the
+            // turn with an explicit error instead of stripping.
             let (task, image_blocks) =
                 crate::attachments::extract_image_blocks(&task, &attachment_store);
-            // WI-152 S2 backend defense: a text-only route never receives
-            // image data (composer gate blocks new attachments; this catches
-            // history images after a mid-session model switch and API-direct
-            // sends). The note rides the logged user message so both the
-            // model and the UI see why the images are absent; the request-time
-            // projection sheds the blocks to placeholders.
-            //
-            // extract_image_blocks now returns the position-faithful content
-            // (text segments interleaved with Image blocks), so the note
-            // becomes a trailing Text block instead of being glued onto the
-            // (stripped) title text.
-            let image_count = image_blocks
-                .iter()
-                .filter(|b| matches!(b, starriver_kernel::llm::ContentBlock::Image { .. }))
-                .count();
-            let image_blocks = if text_only_model && image_count > 0 {
-                let mut blocks = image_blocks;
-                blocks.push(starriver_kernel::llm::ContentBlock::Text(format!(
-                    "[已忽略 {image_count} 张图片：当前模型不支持图片输入]"
-                )));
-                blocks
-            } else {
-                image_blocks
-            };
-            let has_images = image_count > 0;
-
-            // Error memory: if a turn that sent images ends with an
-            // "images not supported"-style error, remember the route (S4:
-            // provider+model key, TTL-bounded at read time) and downgrade
-            // automatically afterwards. Only undeclared routes are recorded —
-            // declared/table-backed routes surface the error to the user
-            // instead of silently flipping (the UI's supports_vision checkbox
-            // always wins and can correct a record).
-            if has_images {
-                let memory_key = Self::vision_memory_key(&provider_key, &memory_model);
-                let mut watch_rx = watch_rx.resubscribe();
-                tokio::spawn(async move {
-                    for _ in 0..600 {
-                        match tokio::time::timeout(
-                            std::time::Duration::from_millis(500),
-                            watch_rx.recv(),
-                        )
-                        .await
-                        {
-                            Ok(Ok(ev)) if ev["type"] == "turnError" => {
-                                let msg = ev["error"].as_str().unwrap_or("");
-                                // GLM/bigmodel's Chinese validation error
-                                // (`messages.content.type 参数非法，取值范围
-                                // ['text']`) matched none of the English
-                                // keywords, so the route never learned and
-                                // every image turn failed identically.
-                                if vision_memory_eligible
-                                    && crate::vision::is_text_only_rejection(msg)
-                                {
-                                    Self::text_only_providers()
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner())
-                                        .insert(memory_key, std::time::SystemTime::now());
-                                }
-                                break;
-                            }
-                            Ok(Ok(ev)) if ev["type"] == "turnEnd" => break,
-                            Ok(_) => {}
-                            _ => break,
-                        }
-                    }
-                });
-            }
 
 
 
@@ -2041,14 +1908,11 @@ impl HostRuntime {
                         cancel.clone(),
                         Some(crate::plugin_kernel::HostSessionMeta {
                             title: Some(crate::helpers::truncate_title(&round_task, 40)),
-                            // Text-only model: images never ride the wire —
-                            // request-time projection goes all-cold
-                            // (metadata placeholders replace Image blocks).
-                            image_hot_override: if text_only_model {
-                                Some((0, 0))
-                            } else {
-                                None
-                            },
+                            // Declared-text-only model (dsh pattern): the
+                            // request-assembly projection rejects any image
+                            // block with an explicit error instead of
+                            // putting image data on the wire.
+                            reject_images: rejects_images,
                         }),
                         // Stamp the resolved workspace root (or the worktree when
                         // isolated) into the header — the sandbox boundary.
@@ -2235,7 +2099,6 @@ impl HostRuntime {
         Ok(event_rx)
     }
 
-
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         // Only do the final checkpoint; do not drop the runtime here:
         // the shutdown future runs on this runtime's own worker, and dropping the runtime itself would panic
@@ -2243,6 +2106,21 @@ impl HostRuntime {
         // The runtime lives as long as HostRuntime itself.
         let l = self.inner.lock().await;
         if let Some(inner) = l.as_ref() {
+            // 最后防线：宿主退出前回收全部后台终端。否则只能指望 OS 在
+            // 进程退出时对 PTY 前台进程组发 SIGHUP——孤儿化的后台进程组
+            // （不响应 HUP 的 dev server 等）会活过宿主生命周期。
+            // kill 是 bounded-quiescent 的（SIGKILL 后通常一次轮询即退出），
+            // 放在最终 flush 前不影响退出路径。
+            let killed = inner.agent.terminal_service.kill_all();
+            if killed > 0 {
+                tracing::info!(killed, "background terminals reaped at host shutdown");
+            }
+            // 浏览器会话回收：headless Chrome 子进程与 profile 目录不会
+            // 随宿主退出自动清理，必须在最终 flush 前显式收割。
+            let reaped = inner.agent.browser_service.kill_all().await;
+            if reaped > 0 {
+                tracing::info!(reaped, "browser sessions reaped at host shutdown");
+            }
             // WI-164: the final checkpoint flush is the last chance to
             // persist the tail of every live session — dropping its error
             // silently meant quiet data loss at shutdown.
@@ -2405,7 +2283,9 @@ mod tests {
             parameters: cordis_rslite::Value::new(()),
             output: cordis_rslite::Value::new(()),
             render: std::sync::Arc::new(|_, value| {
-                vec![starriver_kernel::llm::ContentBlock::Text(format!("{value:?}"))]
+                vec![starriver_kernel::llm::ContentBlock::Text(format!(
+                    "{value:?}"
+                ))]
             }),
             executor: std::sync::Arc::new(Echo),
             is_concurrency_safe: None,
@@ -2460,92 +2340,6 @@ mod tests {
         assert!(HostRuntime::credential_ref_from("").is_none());
     }
 
-    /// WI-152 S4: the TTL check is pure — fresh entries count, aged entries
-    /// expire, and `ttl_hours == 0` means "keep forever".
-    #[test]
-    fn vision_error_memory_ttl_is_pure_and_zero_means_forever() {
-        let now = std::time::SystemTime::now();
-        assert!(HostRuntime::memory_entry_current(now, 168, now));
-        let old = now - std::time::Duration::from_secs(169 * 3600);
-        assert!(!HostRuntime::memory_entry_current(old, 168, now));
-        assert!(
-            HostRuntime::memory_entry_current(old, 0, now),
-            "0 = forever"
-        );
-    }
-
-    /// WI-152 S4: the error memory is keyed per provider+model and only
-    /// consulted for routes WITHOUT a built-in declaration — a table-backed
-    /// provider is never flipped by a runtime error record.
-    #[test]
-    fn vision_error_memory_is_route_scoped_and_table_shielded() {
-        crate::testutil::with_temp_home(|_home| {
-            let host = crate::HostRuntime::new(None).expect("host boots");
-            host.add_model(
-                "relay".into(),
-                "Relay".into(),
-                "cloud".into(),
-                "openai-compat".into(),
-                Some("https://relay.example.com".into()),
-                Some("sk-test".into()),
-                None,
-                "relay-chat".into(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("add model");
-            let record = |provider: &str, model: &str| {
-                HostRuntime::text_only_providers().lock().unwrap().insert(
-                    HostRuntime::vision_memory_key(provider, model),
-                    std::time::SystemTime::now(),
-                );
-            };
-
-            // Route granularity: relay/m1 poisoned → relay/m2 unaffected.
-            record("relay", "m1");
-            assert_eq!(
-                host.active_model_supports_vision_for("relay", "m1"),
-                Some(false)
-            );
-            assert_eq!(host.active_model_supports_vision_for("relay", "m2"), None);
-
-            // Table-backed providers are never flipped by a memory record.
-            host.add_model(
-                "deepseek".into(),
-                "DeepSeek".into(),
-                "cloud".into(),
-                "openai-compat".into(),
-                Some("https://api.deepseek.com".into()),
-                Some("sk-test".into()),
-                None,
-                "deepseek-chat".into(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .expect("add deepseek");
-            record("deepseek", "deepseek-chat");
-            assert_eq!(
-                host.active_model_supports_vision_for("deepseek", "deepseek-chat"),
-                Some(true),
-                "builtin-table providers ignore error memory"
-            );
-        });
-    }
-
     #[test]
     fn resolve_credential_field_resolves_refs_and_normalizes_missing() {
         // Env var refs resolve through the environment.
@@ -2578,7 +2372,9 @@ async fn account_goal_usage(
     if ev["type"].as_str() != Some("usage") {
         return;
     }
-    let tokens = ev["inputTokens"].as_u64().unwrap_or(0)
+    let tokens = ev["inputTokens"]
+        .as_u64()
+        .unwrap_or(0)
         .saturating_add(ev["outputTokens"].as_u64().unwrap_or(0));
     let broadcast = {
         let inner = inner_arc.lock().await;
@@ -2636,7 +2432,10 @@ async fn reregister_discovered(
     name: String,
     definitions: Vec<starriver_kernel::tools::ToolDefinition>,
 ) {
-    if let Err(error) = agent.register_mcp_definitions(&name, definitions.clone()).await {
+    if let Err(error) = agent
+        .register_mcp_definitions(&name, definitions.clone())
+        .await
+    {
         tracing::warn!(server = %name, error = %error, "kernel MCP registration failed");
     }
     mcp_tools.write().unwrap().insert(

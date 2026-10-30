@@ -125,6 +125,10 @@ pub struct ModelProvider {
 pub struct ModelVariant {
     pub id: String,
     pub name: String,
+    /// Per-model image-input declaration (dsh pattern): None = undeclared
+    /// (permissive); Some(false) = declared text-only, image requests fail
+    /// loudly at assembly.
+    pub supports_vision: Option<bool>,
 }
 
 /// Global model registry entry
@@ -147,12 +151,9 @@ pub struct ModelEntry {
     pub reasoning_effort: Option<String>,
     /// Custom model ID used as the selector-name prefix; None = use `name`.
     pub model_label: Option<String>,
-    /// Whether the model supports image input (declared in model settings); None = undeclared.
+    /// Legacy, provider-level declaration (no UI, ignored — capability is
+    /// declared per model variant now).
     pub supports_vision: Option<bool>,
-    /// Resolved vision support (UI declaration > built-in provider table >
-    /// default supported). The composer gate and runtime text-only checks
-    /// consume this, not the raw declaration (WI-152 S1).
-    pub vision_supported: bool,
 }
 
 /// Per-model enabled state within an agent binding
@@ -361,7 +362,7 @@ pub struct MemoryEntry {
     pub body: String,
     /// "compaction" | "extract"
     pub source: String,
- /// Agent whose session produced this memory ("starriver" | "" |...).
+    /// Agent whose session produced this memory ("starriver" | "" |...).
     pub source_agent: String,
     /// project_id, or "_global" for cross-project facts
     pub project: String,

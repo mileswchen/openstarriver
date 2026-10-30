@@ -223,10 +223,7 @@ mod tests {
             token: starriver_kernel::tools::mint_tool_execution_token(),
             cancellation: None,
         };
-        (
-            Value::new(command_json),
-            ToolRunContext::new(execution),
-        )
+        (Value::new(command_json), ToolRunContext::new(execution))
     }
 
     async fn run_list(cell: SkillsCell) -> String {
@@ -267,7 +264,9 @@ mod tests {
         assert!(out.contains("Read the tests"), "body missing: {out}");
         assert!(out.contains("restore-stubbed-function"), "header missing");
 
-        let err = run_load(cell, "no-such-skill").await.expect_err("must fail");
+        let err = run_load(cell, "no-such-skill")
+            .await
+            .expect_err("must fail");
         assert_eq!(err.code(), "SKILL_NOT_FOUND");
         assert!(
             err.to_string().contains("restore-stubbed-function"),
