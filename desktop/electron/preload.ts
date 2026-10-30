@@ -111,8 +111,10 @@ contextBridge.exposeInMainWorld('starriver', {
   listAgentPresets: () => call('agentPresets.list', {}),
   // Plan fold: answer a pending exit_plan_mode review (Plan confirm card).
   // requestId may be omitted to answer the session's latest pending review.
-  planReviewDecision: (sessionId: string, requestId: string, approved: boolean, feedback?: string) =>
-    call('plan.reviewDecision', { sessionId, requestId: requestId || undefined, approved, feedback: feedback || undefined }),
+  // `preset` rides the decision: the host applies it atomically with the
+  // approval (staged under the Plan profile, appended directly otherwise).
+  planReviewDecision: (sessionId: string, requestId: string, approved: boolean, feedback?: string, preset?: string) =>
+    call('plan.reviewDecision', { sessionId, requestId: requestId || undefined, approved, feedback: feedback || undefined, preset: preset || undefined }),
   setApprovalMode: (sessionId: string, mode: string) => call('session.setApprovalMode', { sessionId, mode }),
  // Permission presets (permission-presets parity): one preset writes both
   // knob events; getPermission folds {sandbox, approval, preset} (preset is

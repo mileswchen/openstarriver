@@ -47,7 +47,6 @@ pub mod title;
 pub mod tools;
 pub mod types;
 pub mod ui_channel;
-pub mod vision;
 pub mod workspace;
 
 #[cfg(test)]

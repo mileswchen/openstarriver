@@ -10,9 +10,9 @@ use starriver_host::types;
 use starriver_host::HostRuntime;
 use starriver_protocol::permission::{
     PERM_AGENTS_READ, PERM_AGENTS_WRITE, PERM_APPROVAL_RESPOND, PERM_ATTACHMENTS_READ,
-    PERM_ATTACHMENTS_WRITE, PERM_CREDENTIALS_READ, PERM_CREDENTIALS_WRITE, PERM_JOBS_READ,
-    PERM_MARKET_READ, PERM_MCP_READ, PERM_MCP_WRITE, PERM_MEMORY_READ, PERM_MEMORY_WRITE,
-    PERM_HOOKS_READ, PERM_HOOKS_WRITE, PERM_MODELS_READ, PERM_MODELS_WRITE, PERM_PLUGINS_READ,
+    PERM_ATTACHMENTS_WRITE, PERM_CREDENTIALS_READ, PERM_CREDENTIALS_WRITE, PERM_HOOKS_READ,
+    PERM_HOOKS_WRITE, PERM_JOBS_READ, PERM_MARKET_READ, PERM_MCP_READ, PERM_MCP_WRITE,
+    PERM_MEMORY_READ, PERM_MEMORY_WRITE, PERM_MODELS_READ, PERM_MODELS_WRITE, PERM_PLUGINS_READ,
     PERM_PLUGINS_WRITE, PERM_PROJECT_WRITE, PERM_REVIEW_START, PERM_SCHEDULED_READ,
     PERM_SCHEDULED_WRITE, PERM_SESSION_EXECUTE, PERM_SESSION_READ, PERM_SESSION_WRITE,
     PERM_SKILLS_READ, PERM_SKILLS_WRITE, PERM_TOOLS_READ, PERM_WORKSPACES_READ,
@@ -66,6 +66,7 @@ pub fn build() -> MethodRegistry<HostRuntime> {
         HostRuntime::__api_session_confirmPlan(),
         session_search(),
         sessions_running(),
+        session_wait_turn(),
         session_timeline(),
         session_trace(),
         session_compact(),
@@ -178,10 +179,7 @@ fn session_search() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
         "session.search",
         object(
-            &[
-                ("query", string_schema()),
-                ("limit", integer_schema()),
-            ],
+            &[("query", string_schema()), ("limit", integer_schema())],
             &["query"],
         ),
         any_schema(),
@@ -216,13 +214,13 @@ fn session_messages() -> MethodSpec<HostRuntime> {
             // WI-101: pagination — `limit` (default 50) caps the page;
             // `before` (a timeline seq) pages earlier. Without `limit`,
             // full history (legacy behavior).
-            let limit = optional_u32(&call.params, "limit")
-                .map(|l| (l.max(1)) as usize);
+            let limit = optional_u32(&call.params, "limit").map(|l| (l.max(1)) as usize);
             let before = optional_u32(&call.params, "before").map(u64::from);
             match (limit, before) {
                 (Some(limit), _) => {
-                    let (messages, total, has_more) =
-                        call.host.get_session_messages_paged(session_id, before, limit);
+                    let (messages, total, has_more) = call
+                        .host
+                        .get_session_messages_paged(session_id, before, limit);
                     Ok(json!({
                         "messages": messages.iter().map(chat_message_json).collect::<Vec<_>>(),
                         "total": total,
@@ -302,10 +300,7 @@ fn session_steer() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
         "session.steer",
         object(
-            &[
-                ("sessionId", string_schema()),
-                ("task", string_schema()),
-            ],
+            &[("sessionId", string_schema()), ("task", string_schema())],
             &["sessionId", "task"],
         ),
         any_schema(),
@@ -324,7 +319,10 @@ fn session_queue_list() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
         "session.queueList",
         object(&[("sessionId", string_schema())], &["sessionId"]),
-        array_schema(object(&[("id", string_schema()), ("text", string_schema())], &[])),
+        array_schema(object(
+            &[("id", string_schema()), ("text", string_schema())],
+            &[],
+        )),
         &[PERM_SESSION_EXECUTE],
         false,
         |call: HostCall<'_>| {
@@ -344,10 +342,7 @@ fn session_queue_add() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
         "session.queueAdd",
         object(
-            &[
-                ("sessionId", string_schema()),
-                ("text", string_schema()),
-            ],
+            &[("sessionId", string_schema()), ("text", string_schema())],
             &["sessionId", "text"],
         ),
         object(&[("id", string_schema())], &["id"]),
@@ -356,12 +351,9 @@ fn session_queue_add() -> MethodSpec<HostRuntime> {
         |call: HostCall<'_>| {
             let session_id = required_string(&call.params, "sessionId")?;
             let text = required_string(&call.params, "text")?;
-            let id = call
-                .host
-                .queue_add(session_id, text)
-                .ok_or_else(|| {
-                    ApiError::new("SESSION_NOT_FOUND", "session has no resident agent")
-                })?;
+            let id = call.host.queue_add(session_id, text).ok_or_else(|| {
+                ApiError::new("SESSION_NOT_FOUND", "session has no resident agent")
+            })?;
             Ok(json!({ "id": id }))
         },
     )
@@ -563,6 +555,8 @@ fn review_structured() -> MethodSpec<HostRuntime> {
 }
 
 /// WI-93: background terminal panel — list active PTYs / kill one.
+/// Full snapshots: `cmd` answers「这个终端在跑什么」, `ownerSessionId` /
+/// `workspace` power the session-title row and the workspace filter.
 fn terminal_list() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
         "terminal.list",
@@ -575,13 +569,16 @@ fn terminal_list() -> MethodSpec<HostRuntime> {
                 .host
                 .terminals()
                 .into_iter()
-                .map(|(id, status, started_at_ms, command)| {
+                .map(|t| {
                     json!({
-                        "id": id, "status": status, "startedAtMs": started_at_ms,
-                        "command": command.map(|c| json!({
+                        "id": t.id, "status": t.status, "startedAtMs": t.started_at_ms,
+                        "ownerSessionId": t.owner,
+                        "workspace": t.workspace,
+                        "command": t.command.map(|c| json!({
                             "startedAtMs": c.started_ms,
                             "finishedAtMs": c.finished_ms,
                             "exitCode": c.exit_code,
+                            "cmd": c.cmd,
                         })),
                     })
                 })
@@ -721,6 +718,11 @@ fn plan_review_decide() -> MethodSpec<HostRuntime> {
                 ("requestId", string_schema()),
                 ("approved", boolean_schema()),
                 ("feedback", string_schema()),
+                // Permission preset chosen on the review card; applied
+                // atomically with the approval (staged under the Plan
+                // profile, appended directly otherwise). Invalid names fail
+                // the call without resolving the review.
+                ("preset", string_schema()),
             ],
             &["sessionId", "approved"],
         ),
@@ -740,19 +742,36 @@ fn plan_review_decide() -> MethodSpec<HostRuntime> {
                 .get("feedback")
                 .and_then(Value::as_str)
                 .map(String::from);
-            if !call
-                .host
-                .respond_plan_review(session_id.clone(), request_id, approved, feedback)
-            {
-                return Err(ApiError::with_data(
-                    "PLAN_REVIEW_NOT_PENDING",
-                    format!(
-                        "no pending plan review for session `{session_id}` (already answered or none requested)"
-                    ),
+            let preset = call
+                .params
+                .get("preset")
+                .and_then(Value::as_str)
+                .map(String::from);
+            match call.host.respond_plan_review(
+                session_id.clone(),
+                request_id,
+                approved,
+                feedback,
+                preset,
+            ) {
+                Ok(responded) => {
+                    if !responded {
+                        return Err(ApiError::with_data(
+                            "PLAN_REVIEW_NOT_PENDING",
+                            format!(
+                                "no pending plan review for session `{session_id}` (already answered or none requested)"
+                            ),
+                            json!({ "sessionId": session_id }),
+                        ));
+                    }
+                    Ok(json!({ "ok": true }))
+                }
+                Err(message) => Err(ApiError::with_data(
+                    "INVALID_PERMISSION_PRESET",
+                    message,
                     json!({ "sessionId": session_id }),
-                ));
+                )),
             }
-            Ok(json!({ "ok": true }))
         },
     )
 }
@@ -862,6 +881,69 @@ fn sessions_running() -> MethodSpec<HostRuntime> {
                     .map(Value::String)
                     .collect(),
             ))
+        },
+    )
+}
+
+/// BUG-156: server-side turn-completion wait. Blocking by design — the HTTP
+/// dispatcher already runs handlers on the blocking pool. `reason` reports
+/// `completed` (turn ended; `finalAssistant` carries the last assistant
+/// message), `timeout` (still running at the deadline), or
+/// `session_not_running` (the execute never started / session unknown —
+/// previously indistinguishable from "still running" for polling clients).
+fn session_wait_turn() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "session.waitTurn",
+        object(
+            &[
+                ("sessionId", string_schema()),
+                ("timeoutMs", integer_schema()),
+            ],
+            &["sessionId"],
+        ),
+        object(
+            &[
+                ("ended", starriver_protocol::schema::boolean_schema()),
+                ("reason", string_schema()),
+            ],
+            &["ended", "reason"],
+        ),
+        &[PERM_SESSION_READ],
+        false,
+        |call: HostCall<'_>| {
+            let session_id = required_string(&call.params, "sessionId")?;
+            // Default 300s; hard cap 1h — the longest turn we have ever
+            // observed plus headroom (harness2 bench data).
+            let timeout_ms = optional_u32(&call.params, "timeoutMs")
+                .map(u64::from)
+                .unwrap_or(300_000)
+                .min(3_600_000);
+            let outcome = call
+                .host
+                .wait_turn(&session_id, std::time::Duration::from_millis(timeout_ms));
+            let (ended, reason) = match outcome {
+                starriver_host::runtime::WaitTurnOutcome::Completed => (true, "completed"),
+                starriver_host::runtime::WaitTurnOutcome::Timeout => (false, "timeout"),
+                starriver_host::runtime::WaitTurnOutcome::NotRunning => {
+                    (false, "session_not_running")
+                }
+            };
+            let final_assistant = if ended {
+                call.host
+                    .get_session_messages(session_id.clone())
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "assistant")
+                    .map(chat_message_json)
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            Ok(json!({
+                "ended": ended,
+                "reason": reason,
+                "finalAssistant": final_assistant,
+            }))
         },
     )
 }
@@ -1065,7 +1147,12 @@ fn session_compact() -> MethodSpec<HostRuntime> {
             call.host.bump_trace_epoch(&session_id);
             let result = call
                 .host
-                .compact_session(session_id, keep_recent.filter(|v| *v <= u32::MAX as u64).map(|v| v as u32))
+                .compact_session(
+                    session_id,
+                    keep_recent
+                        .filter(|v| *v <= u32::MAX as u64)
+                        .map(|v| v as u32),
+                )
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             Ok(compact_result_json(&result))
         },
@@ -2879,7 +2966,11 @@ fn model_entry_json(m: &types::ModelEntry) -> Value {
         "baseUrl": m.base_url,
         "hasApiKey": !m.api_key.is_empty(),
         "modelPath": m.model_path,
-        "models": m.models.iter().map(|v| json!({ "id": v.id, "name": v.name })).collect::<Vec<_>>(),
+        "models": m.models.iter().map(|v| json!({
+            "id": v.id,
+            "name": v.name,
+            "supportsVision": v.supports_vision,
+        })).collect::<Vec<_>>(),
         "defaultModel": m.default_model,
         "concurrency": m.concurrency,
         "maxTokens": m.max_tokens,
@@ -2889,7 +2980,6 @@ fn model_entry_json(m: &types::ModelEntry) -> Value {
         "reasoningEffort": m.reasoning_effort,
         "modelLabel": m.model_label,
         "supportsVision": m.supports_vision,
-        "visionSupported": m.vision_supported,
     })
 }
 
@@ -2995,6 +3085,7 @@ mod tests {
             "session.attachWorkspace",
             "session.listArchived",
             "session.execute",
+            "session.waitTurn",
             "session.cancel",
             "session.compact",
             "session.usage",
@@ -3567,6 +3658,7 @@ mod approval_contract_tests {
                             "requestId": { "type": "string" },
                             "approved": { "type": "boolean" },
                             "feedback": { "type": "string" },
+                            "preset": { "type": "string" }
                         },
                         "required": ["sessionId", "approved"],
                         "additionalProperties": false,

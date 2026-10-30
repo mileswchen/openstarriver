@@ -202,10 +202,7 @@ pub fn clean_html(s: &str) -> String {
         }
         .to_string()
     });
-    decoded
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Test-only HTTP plumbing shared by the web tool suites and engine-level e2e

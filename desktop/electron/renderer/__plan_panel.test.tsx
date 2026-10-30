@@ -181,11 +181,12 @@ describe('Plan panel + status phase + Todo widget', () => {
     const manual = screen.getByRole('radio', { name: /Manual/ });
     expect(manual.getAttribute('aria-checked')).toBe('true');
 
-    // Start-implementation applies the preset first, then the approval decision.
+    // Start-implementation rides the preset on the approval decision itself
+    // (plan.reviewDecision `preset` param — atomic host-side application).
     fireEvent.click(screen.getByText('Start implementing'));
     await waitFor(() => {
-      expect(window.starriver.setPermissionPreset).toHaveBeenCalledWith('s-plan', 'manual');
-      expect(window.starriver.planReviewDecision).toHaveBeenCalledWith('s-plan', 'r1', true);
+      expect(window.starriver.setPermissionPreset).not.toHaveBeenCalled();
+      expect(window.starriver.planReviewDecision).toHaveBeenCalledWith('s-plan', 'r1', true, undefined, 'manual');
     });
   });
 
@@ -229,8 +230,8 @@ describe('Plan panel + status phase + Todo widget', () => {
     expect(enable.disabled).toBe(false);
     fireEvent.click(enable);
     await waitFor(() => {
-      expect(window.starriver.setPermissionPreset).toHaveBeenCalledWith('s-plan', 'danger-full-access');
-      expect(window.starriver.planReviewDecision).toHaveBeenCalledWith('s-plan', 'r1', true);
+      expect(window.starriver.setPermissionPreset).not.toHaveBeenCalled();
+      expect(window.starriver.planReviewDecision).toHaveBeenCalledWith('s-plan', 'r1', true, undefined, 'danger-full-access');
     });
   });
 });

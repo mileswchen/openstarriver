@@ -936,7 +936,9 @@ async fn health_monitor_gives_up_after_max_attempts_and_marks_dead() {
     handle.stop();
     let detail = dead_detail.lock().unwrap().clone();
     assert!(
-        detail.as_deref().is_some_and(|d| d.contains("giving up after 2 attempts")),
+        detail
+            .as_deref()
+            .is_some_and(|d| d.contains("giving up after 2 attempts")),
         "dead hook carried the give-up detail: {detail:?}"
     );
 }

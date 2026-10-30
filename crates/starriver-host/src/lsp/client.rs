@@ -270,9 +270,7 @@ impl LspClient {
                 // Remove the waiter before returning — a hung server would
                 // otherwise leak one pending entry per timed-out request.
                 self.pending.remove(&id);
-                let _ = self
-                    .notify("$/cancelRequest", json!({ "id": id }))
-                    .await;
+                let _ = self.notify("$/cancelRequest", json!({ "id": id })).await;
                 return Err(anyhow::anyhow!("LSP request timeout: {method}"));
             }
         };

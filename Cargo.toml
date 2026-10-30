@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+
 members = [
     "crates/starriver-host",
     "crates/starriver-desktop",
@@ -27,6 +28,7 @@ members = [
     "crates/starriver-sandbox",
     "crates/starriver-acp",
     "crates/starriver-acp-client",
+    "crates/starriver-browser",
 ]
 
 [workspace.dependencies]

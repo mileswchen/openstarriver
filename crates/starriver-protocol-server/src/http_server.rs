@@ -299,23 +299,30 @@ async fn handle_connection(
             .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
         let via_header = authorized(&request, &token);
         if query_token != Some(token.as_str()) && !via_header {
-            return write_response(&mut stream, 401, "application/json",
+            return write_response(
+                &mut stream,
+                401,
+                "application/json",
                 br#"{"error":{"code":"UNAUTHORIZED","message":"missing or invalid token"}}"#,
-            ).await;
+            )
+            .await;
         }
         let key = request
             .headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("sec-websocket-key"))
             .map(|(_, value)| value.clone());
-        let wants_upgrade = request
-            .headers
-            .iter()
-            .any(|(name, value)| {
-                name.eq_ignore_ascii_case("upgrade") && value.eq_ignore_ascii_case("websocket")
-            });
+        let wants_upgrade = request.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("upgrade") && value.eq_ignore_ascii_case("websocket")
+        });
         let (Some(key), true) = (key, wants_upgrade) else {
-            return write_response(&mut stream, 400, "text/plain", b"websocket upgrade required").await;
+            return write_response(
+                &mut stream,
+                400,
+                "text/plain",
+                b"websocket upgrade required",
+            )
+            .await;
         };
         let after = request
             .query
@@ -362,7 +369,17 @@ async fn handle_connection(
             .as_deref()
             .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("session=")))
             .map(str::to_string);
-        return serve_sse(&mut stream, events, history, after, session, heartbeat, &instance_id, &next_seq).await;
+        return serve_sse(
+            &mut stream,
+            events,
+            history,
+            after,
+            session,
+            heartbeat,
+            &instance_id,
+            &next_seq,
+        )
+        .await;
     }
 
     write_response(&mut stream, 404, "text/plain", b"not found").await
@@ -533,9 +550,8 @@ async fn serve_mux(
                                 // Host methods block internally — the same
                                 // spawn_blocking rule as the HTTP invoke.
                                 let task = tokio::task::spawn_blocking(move || {
-                                    dispatch(&request, emit).unwrap_or_else(|error| {
-                                        Response::err(&request, error)
-                                    })
+                                    dispatch(&request, emit)
+                                        .unwrap_or_else(|error| Response::err(&request, error))
                                 });
                                 match task.await {
                                     Ok(response) => {
@@ -1036,7 +1052,10 @@ mod tests {
         .await
         .unwrap_or_default();
         let hits = text.matches(": keepalive").count();
-        assert!(hits >= 2, "expected ≥2 keepalive frames, got {hits}: {text}");
+        assert!(
+            hits >= 2,
+            "expected ≥2 keepalive frames, got {hits}: {text}"
+        );
         server.shutdown();
     }
 
@@ -1216,7 +1235,12 @@ mod tests {
     }
 
     impl WsClient {
-        async fn connect(port: u16, token: &str, after: Option<u64>, session: Option<&str>) -> Self {
+        async fn connect(
+            port: u16,
+            token: &str,
+            after: Option<u64>,
+            session: Option<&str>,
+        ) -> Self {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
                 .await
@@ -1457,8 +1481,8 @@ mod tests {
             .as_slice(),
         )
         .await;
-        let mut ws = WsClient::connect(server.port(), server.token(), Some(0), Some("sess-a"))
-            .await;
+        let mut ws =
+            WsClient::connect(server.port(), server.token(), Some(0), Some("sess-a")).await;
         let only = ws.recv_text().await;
         assert!(only.contains("sess-a"), "{only}");
         assert!(!only.contains("sess-b"), "{only}");
@@ -1480,10 +1504,7 @@ mod tests {
         let text = ws.recv_text().await;
         let response: Response = serde_json::from_str(&text).unwrap();
         assert!(!response.ok);
-        assert_eq!(
-            response.error.unwrap().code,
-            "INVALID_PARAMS"
-        );
+        assert_eq!(response.error.unwrap().code, "INVALID_PARAMS");
         server.shutdown();
     }
 
@@ -1494,8 +1515,14 @@ mod tests {
         let response = client.get(format!("{base}/remote")).send().await.unwrap();
         assert_eq!(response.status().as_u16(), 200);
         let body = response.text().await.unwrap();
-        assert!(body.contains("/api/v1/mux"), "the shell connects to the mux: {body:?}");
-        assert!(body.contains("approval.respond"), "approval decisions ride the mux: {body:?}");
+        assert!(
+            body.contains("/api/v1/mux"),
+            "the shell connects to the mux: {body:?}"
+        );
+        assert!(
+            body.contains("approval.respond"),
+            "approval decisions ride the mux: {body:?}"
+        );
         server.shutdown();
     }
 }

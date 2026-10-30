@@ -391,9 +391,7 @@ impl TaskScheduler {
                     // next save() would irreversibly overwrite the user's
                     // whole task list. Keep a .corrupt backup (same policy as
                     // settings.yaml) and surface the error.
-                    let backup = self
-                        .config_path
-                        .with_extension("yaml.corrupt");
+                    let backup = self.config_path.with_extension("yaml.corrupt");
                     let _ = tokio::fs::copy(&self.config_path, &backup).await;
                     tracing::error!(
                         path = %self.config_path.display(),
@@ -1426,5 +1424,4 @@ mod tests {
         // And the in-memory task list stays empty (nothing half-loaded).
         assert!(scheduler.tasks.lock().await.tasks.is_empty());
     }
-
 }

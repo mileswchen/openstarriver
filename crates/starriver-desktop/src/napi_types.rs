@@ -109,6 +109,10 @@ pub struct ModelProvider {
 pub struct ModelVariant {
     pub id: String,
     pub name: String,
+    /// Per-model image-input declaration (dsh pattern): null = undeclared
+    /// (permissive); false = declared text-only, image requests fail loudly
+    /// at request assembly.
+    pub supports_vision: Option<bool>,
 }
 
 /// Global model registry entry
@@ -132,9 +136,9 @@ pub struct ModelEntry {
     pub reasoning_effort: Option<String>,
     /// Custom model ID used as the selector-name prefix; null = use `name`.
     pub model_label: Option<String>,
+    /// Legacy, provider-level declaration (no UI, ignored — capability is
+    /// declared per model variant now).
     pub supports_vision: Option<bool>,
-    /// Resolved vision support (declaration > built-in table > supported).
-    pub vision_supported: bool,
 }
 
 /// Per-model enabled state within an agent binding

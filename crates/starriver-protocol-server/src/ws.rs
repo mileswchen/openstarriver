@@ -75,9 +75,7 @@ fn unmask(payload: &mut [u8], mask: [u8; 4]) {
 /// Read the next complete client message. Fragmented text messages are
 /// assembled; pings are surfaced for the caller to pong; control frames
 /// must not be fragmented per RFC (they are treated as protocol errors).
-pub async fn read_message<S: AsyncReadExt + Unpin>(
-    stream: &mut S,
-) -> anyhow::Result<WsMessage> {
+pub async fn read_message<S: AsyncReadExt + Unpin>(stream: &mut S) -> anyhow::Result<WsMessage> {
     let mut assembled: Vec<u8> = Vec::new();
     loop {
         let header = read_header(stream).await?;

@@ -27,6 +27,7 @@ impl HostRuntime {
                     .map(|v| types::ModelVariant {
                         id: v.id.clone(),
                         name: v.name.clone(),
+                        supports_vision: v.supports_vision,
                     })
                     .collect(),
                 default_model: e.default_model.clone(),
@@ -38,7 +39,6 @@ impl HostRuntime {
                 reasoning_effort: e.reasoning_effort.clone(),
                 model_label: e.model_label.clone(),
                 supports_vision: e.supports_vision,
-                vision_supported: crate::vision::effective_vision_support(&e.id),
             })
             .collect()
     }
@@ -87,7 +87,7 @@ impl HostRuntime {
 
     /// Current execution mode. Without a session id: the deployment default
     /// (settings.yaml — the initial staged value for new sessions). With a
- /// session id: that session's creation-locked mode (binding), also
+    /// session id: that session's creation-locked mode (binding), also
     /// replayed onto the kernel — after a restart or a session switch the
     /// sandbox/approval presets follow the session instead of sticking to the
     /// previous one. Empty strings normalize to "standard"; sessions created
@@ -243,12 +243,7 @@ impl HostRuntime {
             // In-place update on the same id — a replace must not reorder the
             // registry (list order is the display + default-pick order, and
             // memory routing falls back to providers.first()).
-            if let Some(slot) = settings
-                .llm
-                .providers
-                .iter_mut()
-                .find(|p| p.id == entry.id)
-            {
+            if let Some(slot) = settings.llm.providers.iter_mut().find(|p| p.id == entry.id) {
                 *slot = entry;
             } else {
                 settings.llm.providers.push(entry);
@@ -638,56 +633,58 @@ fn write_agent_md_model(dir: &std::path::Path, agent_name: &str, key: &str) -> a
 mod tests {
     use super::*;
 
-    /// WI-152 S1: the built-in vision table fills undeclared providers —
-    /// deepseek resolves to vision-capable, moonshot to text-only, unknown
-    /// custom endpoints default to supported. The raw UI declaration stays
-    /// `None` (only the resolved field flips).
+    /// dsh-pattern per-model declaration: `supports_vision` lives on the
+    /// variant, resolves per (provider, model), and unknown routes stay
+    /// permissive. No provider-level table involved.
     #[test]
-    fn builtin_vision_table_fills_undeclared_providers() {
+    fn per_model_vision_declaration_resolves_per_variant() {
         crate::testutil::with_temp_home(|_home| {
             let host = crate::HostRuntime::new(None).expect("host boots");
-            for (id, base_url, expected) in [
-                ("deepseek", "https://api.deepseek.com", true),
-                ("moonshot", "https://api.moonshot.cn/v1", false),
-            ] {
-                host.add_model(
-                    id.into(),
-                    id.into(),
-                    "cloud".into(),
-                    "openai-compat".into(),
-                    Some(base_url.into()),
-                    Some("sk-test-key".into()),
-                    None,
-                    format!("{id}-chat"),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-                .expect("add model");
-                assert_eq!(
-                    host.active_model_supports_vision_for(id, &format!("{id}-chat")),
-                    Some(expected),
-                    "{id} runtime resolution"
-                );
-                let listed = host
-                    .list_models()
-                    .into_iter()
-                    .find(|m| m.id == id)
-                    .unwrap_or_else(|| panic!("{id} listed"));
-                assert_eq!(listed.vision_supported, expected, "{id} resolved DTO field");
-                assert_eq!(listed.supports_vision, None, "{id} raw declaration stays None");
-            }
-            // Undeclared + unknown provider → treated as supported (None).
-            assert_eq!(
-                host.active_model_supports_vision_for("custom-endpoint", ""),
-                None
+            let variants = serde_json::json!([
+                { "id": "vision-model", "name": "Vision" },
+                { "id": "text-model", "name": "Text", "supports_vision": false }
+            ])
+            .to_string();
+            host.add_model(
+                "zhipu".into(),
+                "zhipu".into(),
+                "cloud".into(),
+                "openai-compat".into(),
+                Some("https://open.bigmodel.cn/api/paas/v4".into()),
+                Some("sk-test-key".into()),
+                None,
+                "vision-model".into(),
+                Some(variants),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("add model");
+            assert!(
+                !host.model_declares_text_only("zhipu", "vision-model"),
+                "undeclared variant is permissive"
             );
+            assert!(
+                host.model_declares_text_only("zhipu", "text-model"),
+                "declared text-only variant rejects images"
+            );
+            // Unknown variant / unknown provider → permissive (the
+            // provider's own error is the arbiter).
+            assert!(!host.model_declares_text_only("zhipu", "does-not-exist"));
+            assert!(!host.model_declares_text_only("custom-endpoint", "anything"));
+            // DTO: the per-variant declaration rides the models list.
+            let listed = host
+                .list_models()
+                .into_iter()
+                .find(|m| m.id == "zhipu")
+                .expect("zhipu listed");
+            assert_eq!(listed.models[0].supports_vision, None);
+            assert_eq!(listed.models[1].supports_vision, Some(false));
         });
     }
 

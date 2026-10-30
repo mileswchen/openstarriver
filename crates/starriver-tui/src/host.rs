@@ -363,6 +363,7 @@ pub mod mock {
                     .map(|v| starriver_host::types::ModelVariant {
                         id: v.to_string(),
                         name: v.to_string(),
+                        supports_vision: None,
                     })
                     .collect(),
                 default_model: variants.first().map(|s| s.to_string()).unwrap_or_default(),
@@ -374,7 +375,6 @@ pub mod mock {
                 reasoning_effort: None,
                 model_label: None,
                 supports_vision: None,
-                vision_supported: true,
             });
         }
     }

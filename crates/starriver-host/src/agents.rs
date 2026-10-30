@@ -418,23 +418,109 @@ impl HostRuntime {
     /// approvals). Approval flips the logged plan state at the next accepted
     /// in-turn pre-step; rejection carries the feedback back to the model as
     /// the failed tool call.
+    ///
+    /// `preset` is the permission bundle chosen on the review card, applied
+    /// atomically with the approval: under the Plan profile it is staged and
+    /// lands bundled with the sandbox release (the read-only pairing holds
+    /// until the pre-step lands); under other profiles it is appended
+    /// immediately (same semantics as `session.setPermissionPreset`, minus
+    /// the planning lock — no in-plan review exists there). An invalid preset
+    /// name fails the call BEFORE anything is resolved or written.
     pub fn respond_plan_review(
         &self,
         session_id: String,
         request_id: Option<String>,
         approved: bool,
         feedback: Option<String>,
-    ) -> bool {
+        preset: Option<String>,
+    ) -> Result<bool, String> {
+        // Validate first: an unknown preset must leave the review pending and
+        // the session log untouched.
+        let parsed = match preset.as_deref() {
+            None => None,
+            Some(name) => Some(
+                crate::permission_presets::parse(name)
+                    .map(|p| crate::preset::Preset {
+                        sandbox: p.sandbox,
+                        approval: p.approval,
+                    })
+                    .ok_or_else(|| format!("unknown permission preset `{name}`"))?,
+            ),
+        };
+        if approved {
+            if let Some(preset) = parsed {
+                // Cheap pre-lock peek at the execution profile to decide
+                // stage-vs-append; re-checked under the inner lock below.
+                let plan_locked = {
+                    let inner = self.inner.blocking_lock();
+                    inner.as_ref().is_some_and(|inner| {
+                        inner.agent.execution_mode()
+                            == Some(crate::execution_mode::ExecutionMode::Plan)
+                    })
+                };
+                if plan_locked {
+                    let inner = self.inner.blocking_lock();
+                    if let Some(inner) = inner.as_ref() {
+                        inner
+                            .agent
+                            .plan_controller()
+                            .stage_exit_preset(&session_id, preset);
+                    }
+                } else {
+                    // Standard/unset profile: no read-only pairing to hold —
+                    // write both knobs now, before the decision resolves.
+                    // Same persistence path as session.setPermissionPreset
+                    // (confirm_plan's thread+block_on pattern).
+                    let inner = self.inner.clone();
+                    let handle = self.runtime_handle.clone();
+                    let append_session = session_id.clone();
+                    let _ = std::thread::spawn(move || {
+                        handle.block_on(async {
+                            let l = inner.lock().await;
+                            let Some(runtime) = l.as_ref() else {
+                                return;
+                            };
+                            for (event, field, value) in [
+                                ("sandbox/mode", "mode", preset.sandbox.as_str()),
+                                ("approval/policy", "policy", preset.approval.as_str()),
+                            ] {
+                                let _ = crate::sessions::append_session_event(
+                                    runtime,
+                                    &append_session,
+                                    event,
+                                    starriver_kernel::json::JsonValue::Object(vec![(
+                                        field.into(),
+                                        starriver_kernel::json::JsonValue::String(value.into()),
+                                    )]),
+                                )
+                                .await;
+                            }
+                        });
+                    })
+                    .join();
+                }
+            }
+        } else if parsed.is_some() {
+            // Rejected review: drop anything staged (defensive — nothing
+            // should be staged for a rejection path).
+            let inner = self.inner.blocking_lock();
+            if let Some(inner) = inner.as_ref() {
+                inner
+                    .agent
+                    .plan_controller()
+                    .discard_staged_preset(&session_id);
+            }
+        }
         let inner = self.inner.blocking_lock();
         let Some(inner) = inner.as_ref() else {
-            return false;
+            return Ok(false);
         };
         let bridge = &inner.agent.plan_review_bridge;
         let id = match request_id {
             Some(id) => id,
             None => match bridge.session_latest_request(&session_id) {
                 Some(id) => id,
-                None => return false,
+                None => return Ok(false),
             },
         };
         let decision = if approved {
@@ -442,7 +528,7 @@ impl HostRuntime {
         } else {
             crate::plan_review_bridge::PlanDecision::Rejected { feedback }
         };
-        bridge.respond(&id, decision)
+        Ok(bridge.respond(&id, decision))
     }
 
     /// Final decision of the session's latest approval request when it was
@@ -489,19 +575,23 @@ impl HostRuntime {
         let value = {
             let inner = inner.as_ref()?;
             let goals = inner.goals.lock().unwrap();
-            goals.get(session_id).map(|g| serde_json::json!({
-                "objective": g.objective,
-                "tokenBudget": g.token_budget,
-                "tokensUsed": g.tokens_used,
-                "status": g.status.as_str(),
-            }))
+            goals.get(session_id).map(|g| {
+                serde_json::json!({
+                    "objective": g.objective,
+                    "tokenBudget": g.token_budget,
+                    "tokensUsed": g.tokens_used,
+                    "status": g.status.as_str(),
+                })
+            })
         };
         value
     }
 
     pub fn clear_goal(&self, session_id: &str) -> bool {
         let inner = self.inner.blocking_lock();
-        let Some(inner) = inner.as_ref() else { return false };
+        let Some(inner) = inner.as_ref() else {
+            return false;
+        };
         let removed = inner.goals.lock().unwrap().remove(session_id).is_some();
         removed
     }
@@ -526,7 +616,9 @@ impl HostRuntime {
     /// Returns Some(continuation-prompt) when the goal should drive on.
     pub(crate) fn goal_continuation(&self, session_id: &str) -> Option<String> {
         let inner = self.inner.blocking_lock();
-        inner.as_ref().and_then(|i| goal_continuation_for(i, session_id))
+        inner
+            .as_ref()
+            .and_then(|i| goal_continuation_for(i, session_id))
     }
 
     /// WI-96: structured review — resolve the target (git diff), run the
@@ -557,8 +649,7 @@ impl HostRuntime {
                 "note": "target has no changes",
             }));
         }
-        let prompt =
-            crate::prompts::review::structured_review_prompt(&files, &diff, &dimensions);
+        let prompt = crate::prompts::review::structured_review_prompt(&files, &diff, &dimensions);
         let kernel = {
             let inner = self.inner.blocking_lock();
             let Some(inner) = inner.as_ref() else {
@@ -596,17 +687,28 @@ impl HostRuntime {
     /// WI-98: read-only doctor checks.
     pub fn doctor(&self) -> Vec<serde_json::Value> {
         let mut checks: Vec<serde_json::Value> = Vec::new();
-        let push = |checks: &mut Vec<serde_json::Value>, name: &str, status: &str, detail: String| {
-            checks.push(serde_json::json!({
-                "name": name, "status": status, "detail": detail,
-            }));
-        };
+        let push =
+            |checks: &mut Vec<serde_json::Value>, name: &str, status: &str, detail: String| {
+                checks.push(serde_json::json!({
+                    "name": name, "status": status, "detail": detail,
+                }));
+            };
 
         // 1) Config load.
-        let settings = { self.settings.read().unwrap_or_else(|e| e.into_inner()).clone() };
+        let settings = {
+            self.settings
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        };
         let providers = &settings.llm.providers;
         if providers.is_empty() {
-            push(&mut checks, "config", "FAIL", "no LLM providers configured".into());
+            push(
+                &mut checks,
+                "config",
+                "FAIL",
+                "no LLM providers configured".into(),
+            );
         } else {
             push(
                 &mut checks,
@@ -619,9 +721,19 @@ impl HostRuntime {
         // 2) Model route: default model exists?
         let has_default = providers.iter().any(|p| !p.default_model.is_empty());
         if has_default {
-            push(&mut checks, "model-route", "PASS", "default model present".into());
+            push(
+                &mut checks,
+                "model-route",
+                "PASS",
+                "default model present".into(),
+            );
         } else {
-            push(&mut checks, "model-route", "WARN", "no default model on any provider".into());
+            push(
+                &mut checks,
+                "model-route",
+                "WARN",
+                "no default model on any provider".into(),
+            );
         }
 
         // 3) Sandbox availability: confine a trivial command; rejection
@@ -636,7 +748,12 @@ impl HostRuntime {
             vec!["true".into()],
             &probe_policy,
         ) {
-            Ok(_) => push(&mut checks, "sandbox", "PASS", "OS sandbox available".into()),
+            Ok(_) => push(
+                &mut checks,
+                "sandbox",
+                "PASS",
+                "OS sandbox available".into(),
+            ),
             Err(e) => push(
                 &mut checks,
                 "sandbox",
@@ -656,12 +773,19 @@ impl HostRuntime {
         push(
             &mut checks,
             "disk",
-            if dir_size > 8 * 1024 * 1024 * 1024 { "WARN" } else { "PASS" },
+            if dir_size > 8 * 1024 * 1024 * 1024 {
+                "WARN"
+            } else {
+                "PASS"
+            },
             format!(
                 "data dir {:.1} MB{}",
                 dir_size as f64 / 1024.0 / 1024.0,
-                free.map(|f| format!(", volume free {:.1} GB", f as f64 / 1024.0 / 1024.0 / 1024.0))
-                    .unwrap_or_default(),
+                free.map(|f| format!(
+                    ", volume free {:.1} GB",
+                    f as f64 / 1024.0 / 1024.0 / 1024.0
+                ))
+                .unwrap_or_default(),
             ),
         );
 
@@ -672,8 +796,9 @@ impl HostRuntime {
                 &db_path,
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
             )
-            .and_then(|conn| conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0)))
-            {
+            .and_then(|conn| {
+                conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
+            }) {
                 Ok(result) if result == "ok" => {
                     push(&mut checks, "session-db", "PASS", "quick_check ok".into())
                 }
@@ -681,7 +806,12 @@ impl HostRuntime {
                 Err(e) => push(&mut checks, "session-db", "FAIL", format!("{e}")),
             }
         } else {
-            push(&mut checks, "session-db", "WARN", "database not found yet".into());
+            push(
+                &mut checks,
+                "session-db",
+                "WARN",
+                "database not found yet".into(),
+            );
         }
 
         checks
@@ -705,10 +835,7 @@ impl HostRuntime {
             return false;
         };
         agent.steer(starriver_kernel::llm::Message {
-            id: starriver_kernel::llm::MessageId(format!(
-                "steer-{}",
-                uuid::Uuid::new_v4()
-            )),
+            id: starriver_kernel::llm::MessageId(format!("steer-{}", uuid::Uuid::new_v4())),
             role: starriver_kernel::llm::MessageRole::User,
             content: vec![starriver_kernel::llm::ContentBlock::Text(text)],
             source: starriver_kernel::llm::MessageSource::User,
@@ -875,8 +1002,9 @@ impl HostRuntime {
         true
     }
 
-    /// WI-93/150: active background terminals (id, status, started ms).
-    pub fn terminals(&self) -> Vec<(String, String, u64, Option<crate::terminal::CommandRun>)> {
+    /// WI-93/150: active background terminals (full snapshots — owner +
+    /// workspace + command ride along for the workspace-scoped panel).
+    pub fn terminals(&self) -> Vec<crate::terminal::TerminalInfo> {
         let inner = self.inner.blocking_lock();
         let Some(inner) = inner.as_ref() else {
             return Vec::new();
@@ -884,13 +1012,14 @@ impl HostRuntime {
         inner.agent.terminal_service.list()
     }
 
-    /// WI-93: kill one background terminal by id.
+    /// WI-93: kill one background terminal by id. UI 入口走宿主权限
+    /// （owner = None），不受会话归属限制。
     pub fn terminal_kill(&self, id: String) -> bool {
         let inner = self.inner.blocking_lock();
         let Some(inner) = inner.as_ref() else {
             return false;
         };
-        inner.agent.terminal_service.kill(&id).is_ok()
+        inner.agent.terminal_service.kill(&id, None).is_ok()
     }
 
     /// Session ids currently holding the single input slot (an execute is
@@ -944,7 +1073,9 @@ impl HostRuntime {
 
 fn dir_size_bytes(dir: &std::path::Path) -> u64 {
     let mut total = 0u64;
-    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
     for entry in entries.flatten() {
         let Ok(meta) = entry.metadata() else { continue };
         if meta.is_file() {
@@ -994,10 +1125,7 @@ fn fs2_free_bytes(dir: &std::path::Path) -> Option<u64> {
 fn render_workspace_instructions(
     files: &[starriver_agent_loop::instructions::InstructionFile],
 ) -> Option<String> {
-    render_workspace_instructions_with(
-        files,
-        starriver_agent_loop::instructions::MAX_BYTES,
-    )
+    render_workspace_instructions_with(files, starriver_agent_loop::instructions::MAX_BYTES)
 }
 
 /// [`render_workspace_instructions`] under an explicit byte budget — the
@@ -1087,8 +1215,7 @@ mod round5_tests {
         let small = file("keep me");
         let big = file(&"x".repeat(8_000));
         let files = vec![small, big];
-        let banner =
-            render_workspace_instructions_with(&files, 4_000).expect("banner content");
+        let banner = render_workspace_instructions_with(&files, 4_000).expect("banner content");
         assert!(
             banner.contains("keep me"),
             "the fitting block stays (got {} bytes)",
