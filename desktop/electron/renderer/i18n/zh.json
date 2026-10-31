@@ -48,6 +48,20 @@
     "wrongCode": "口令不正确，请重试",
     "window": "锁定期：{start} – {end}"
   },
+  "lanChat": {
+    "title": "消息",
+    "searching": "正在搜索局域网实例…",
+    "empty": "未发现其他 Starriver 实例",
+    "self": "本机",
+    "online": "在线",
+    "offline": "离线",
+    "placeholder": "输入消息…",
+    "send": "发送",
+    "attachImage": "发送图片",
+    "imageTooLarge": "图片过大（需小于 4MB）",
+    "sendFailed": "发送失败",
+    "notEnabled": "消息服务未启用（STARRIVER_LAN_CHAT=0 已关闭）"
+  },
   "chat": {
     "title": "对话",
     "placeholder": "输入消息…",
@@ -112,9 +126,6 @@
     "trajSystem": "系统提示",
     "trajContext": "上下文",
     "trajCompaction": "上下文压缩",
-    "trajSourceCurrent": "当前上下文",
-    "trajSourceArchive": "完整归档",
-    "trajArchive": "历史来源",
     "trajTool": "工具",
     "trajTurn": "第 {n} 轮",
     "trajMode": "轨迹显示方式",

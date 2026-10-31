@@ -57,6 +57,11 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
   "approval.respond": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"allowed":{"type":"boolean"},"remember":{"type":"boolean"}},"required":["sessionId","allowed"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["approval:respond"] },
   "plan.reviewDecision": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"requestId":{"type":"string"},"approved":{"type":"boolean"},"feedback":{"type":"string"},"preset":{"type":"string"}},"required":["sessionId","approved"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "interaction.respond": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"questionId":{"type":"string"},"answer":{"type":"string"}},"required":["sessionId","questionId","answer"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["approval:respond"] },
+  "lan.state": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
+  "lan.messages": { params: {"type":"object","properties":{"peerId":{"type":"string"},"sinceId":{"type":"integer"}},"required":["peerId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
+  "lan.send": { params: {"type":"object","properties":{"peerId":{"type":"string"},"kind":{"type":"string"},"text":{"type":"string"},"imageBase64":{"type":"string"},"mime":{"type":"string"}},"required":["peerId","kind"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
+  "lan.attachment": { params: {"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
+  "lan.markRead": { params: {"type":"object","properties":{"peerId":{"type":"string"}},"required":["peerId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
   "approval.listRules": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "approval.revokeRule": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"ruleId":{"type":"string"}},"required":["sessionId","ruleId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "agentPresets.list": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"object","properties":{"presets":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"agent":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},"source":{"type":"string"},"broken":{"type":"string"},"isDefault":{"type":"boolean"}},"required":["id","agent","name","description","source","isDefault"],"additionalProperties":false}},"default":{"type":"string"}},"required":["presets","default"],"additionalProperties":false}, streaming: false, permissions: ["agents:read"] },
@@ -185,6 +190,11 @@ export interface ProtocolClientMethods {
   approvalRespond(params: { sessionId: string; allowed: boolean; remember?: boolean }): Promise<unknown>;
   planReviewDecision(params: { sessionId: string; requestId?: string; approved: boolean; feedback?: string; preset?: string }): Promise<unknown>;
   interactionRespond(params: { sessionId: string; questionId: string; answer: string }): Promise<unknown>;
+  lanState(params: {  }): Promise<unknown>;
+  lanMessages(params: { peerId: string; sinceId?: number }): Promise<unknown>;
+  lanSend(params: { peerId: string; kind: string; text?: string; imageBase64?: string; mime?: string }): Promise<unknown>;
+  lanAttachment(params: { id: string }): Promise<unknown>;
+  lanMarkRead(params: { peerId: string }): Promise<unknown>;
   approvalListRules(params: { sessionId: string }): Promise<unknown>;
   approvalRevokeRule(params: { sessionId: string; ruleId: string }): Promise<unknown>;
   agentPresetsList(params: {  }): Promise<{ presets: { id: string; agent: string; name: string; description: string; source: string; broken?: string; isDefault: boolean }[]; default: string }>;

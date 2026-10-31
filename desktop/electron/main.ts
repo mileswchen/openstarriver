@@ -21,8 +21,21 @@ let mainWindow: BrowserWindow | null = null;
 let runtime: any = null;
 // FPM P4b: with `STARRIVER_MODE=daemon` (or STARRIVER_DAEMON=1) Electron acts as a
 // launcher + client: spawn/connect starriverd, protocol requests proxied over HTTP+SSE;
-// app exit does not kill the daemon (shared service). Default embedded (in-process NAPI), unchanged.
-const DAEMON_MODE = process.env.STARRIVER_MODE === 'daemon' || process.env.STARRIVER_DAEMON === '1';
+// app exit does not kill the daemon (shared service).
+// BUG-158 mitigation: packaged builds DEFAULT to daemon mode. The embedded NAPI
+// runtime runs protocol.dispatch synchronously on the Electron main thread — long
+// agent operations freeze the window (GNOME "not responding") — and keep all
+// HostRuntime memory inside the Electron process (anon-rss 5.8G → kernel OOM,
+// 2026-10-29). starriverd ships in resources/; `STARRIVER_MODE=embedded` opts back
+// into the in-process mode (debugging the NAPI bridge itself).
+const DAEMON_MODE =
+  process.env.STARRIVER_MODE === 'daemon' ||
+  process.env.STARRIVER_DAEMON === '1' ||
+  (process.env.STARRIVER_MODE !== 'embedded' &&
+    app.isPackaged &&
+    fs.existsSync(
+      path.join(process.resourcesPath, process.platform === 'win32' ? 'starriverd.exe' : 'starriverd'),
+    ));
 let daemon: DaemonClient | null = null;
 // Set when the NAPI module load or AgentRuntime construction fails. Surfaced to
 // the renderer via `runtime:backendHealth` so a dead backend shows an error

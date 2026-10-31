@@ -379,6 +379,9 @@ pub struct AgentRuntime {
     host: std::sync::Arc<starriver_host::HostRuntime>,
     protocol: starriver_protocol::MethodRegistry<starriver_host::HostRuntime>,
     http_server: std::sync::Mutex<Option<http_server::HttpServer>>,
+    /// LAN chat service (discovery + peer messaging); lifecycle-tied to the
+    /// HTTP server so both start/stop together.
+    lan_chat: std::sync::Mutex<Option<std::sync::Arc<starriver_protocol_server::lan_chat::ChatService>>>,
     script_runtime: Arc<RwLock<Option<Arc<ScriptRuntime>>>>,
     /// host's tokio handle: execute's per-run receiver relay task is spawned here.
     runtime_handle: tokio::runtime::Handle,
@@ -404,6 +407,7 @@ impl AgentRuntime {
             host,
             protocol: protocol_catalog::build(),
             http_server: std::sync::Mutex::new(None),
+            lan_chat: std::sync::Mutex::new(None),
             script_runtime,
             runtime_handle,
         })
@@ -412,10 +416,18 @@ impl AgentRuntime {
     /// Generic protocol entry (FPM P1): `requestJson` is the full request
     /// envelope; streaming-method events are delivered via an optional
     /// callback (each event is an `EventEnvelope` JSON).
+    ///
+    /// BUG-158: this used to run `protocol.dispatch` inline on the Electron
+    /// main thread — one long agent execute / session read / compact froze
+    /// the whole window (GNOME "not responding"). The dispatch now runs on
+    /// the host runtime's blocking pool and the response resolves on the
+    /// returned Promise; `ipcMain.handle('runtime:invoke')` awaits it
+    /// natively. Event delivery (js ThreadsafeFunction + embedded HTTP SSE
+    /// tee) is unchanged.
     #[napi(
         ts_args_type = "requestJson: string, callback?: (err: null | Error, event: any) => void"
     )]
-    pub fn invoke(
+    pub async fn invoke(
         &self,
         request_json: String,
         callback: Option<ThreadsafeFunction<serde_json::Value>>,
@@ -464,10 +476,23 @@ impl AgentRuntime {
             (only_js, None) => only_js,
             (None, only_http) => only_http,
         };
-        let response = self
-            .protocol
-            .dispatch(self.host.as_ref(), &request, None, emit)
-            .unwrap_or_else(|error| Response::err(&request, error));
+        // BUG-158: dispatch is a synchronous, potentially minutes-long call.
+        // It must not run on the Node main thread — hand it to the host
+        // runtime's blocking pool (a plain thread context, where host's
+        // block_on-based internals are legal) and await the result from the
+        // napi runtime. Concurrency now matches daemon mode (the HTTP server
+        // dispatches per request onto the same registry).
+        let host = self.host.clone();
+        let protocol = self.protocol.clone();
+        let runtime = self.runtime_handle.clone();
+        let response = runtime
+            .spawn_blocking(move || {
+                protocol
+                    .dispatch(host.as_ref(), &request, None, emit)
+                    .unwrap_or_else(|error| Response::err(&request, error))
+            })
+            .await
+            .map_err(|e| Error::from_reason(format!("protocol dispatch task failed: {e}")))?;
         serde_json::to_string(&response)
             .map_err(|e| Error::from_reason(format!("encode protocol response: {e}")))
     }
@@ -537,7 +562,30 @@ impl AgentRuntime {
         })) {
             let _ = std::fs::write(&state_path, state);
         }
+        let emit_handle = server.emit_handle();
         *self.http_server.lock().unwrap() = Some(server);
+
+        // LAN chat rides the protocol server lifecycle: discovery beacon +
+        // peer message endpoint, emitting into the same event bus (paired
+        // phone / SSE clients see lanMessage too). Opt-out via
+        // STARRIVER_LAN_CHAT=0; a failed start never breaks the protocol
+        // server (chat surface degrades to `lan.state {enabled:false}`).
+        if !starriver_protocol_server::lan_chat::disabled_by_env() {
+            match runtime.block_on(starriver_protocol_server::lan_chat::ChatService::start(
+                starriver_protocol_server::lan_chat::ChatOptions {
+                    emit: Some(emit_handle),
+                    ..Default::default()
+                },
+                runtime.clone(),
+            )) {
+                Ok(service) => {
+                    *self.lan_chat.lock().unwrap() = Some(service);
+                }
+                Err(error) => {
+                    tracing::warn!("lan chat start failed (chat disabled): {error}");
+                }
+            }
+        }
         Ok(info)
     }
 
@@ -545,6 +593,9 @@ impl AgentRuntime {
     pub fn stop_http_server(&self) -> Result<()> {
         if let Some(server) = self.http_server.lock().unwrap().take() {
             server.shutdown();
+        }
+        if let Some(chat) = self.lan_chat.lock().unwrap().take() {
+            chat.stop();
         }
         Ok(())
     }
@@ -1787,6 +1838,51 @@ mod tests {
             .unwrap();
 
         // Exit does not panic (regression: used to crash when dropped inside its own runtime)
+        rt.runtime_handle.block_on(rt.shutdown()).expect("shutdown");
+    }
+
+    /// BUG-158 regression: the protocol entry must dispatch through the host
+    /// runtime's blocking pool and resolve via the async bridge instead of
+    /// running inline on the caller's thread (which was the Electron main
+    /// thread — long executes froze the window). js-free: callback = None.
+    #[test]
+    fn napi_facade_invoke_dispatches_via_async_bridge() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = format!(
+            "version: 1\nmode: offline\ninference: {{ engines: [] }}\nagent: {{}}\nserver: {{ http: {{ enabled: false, bind: \"127.0.0.1:0\" }} }}\nsession: {{ db_path: \"{}\" }}\n",
+            dir.path()
+                .join("t.db")
+                .display()
+                .to_string()
+                .replace('\\', "/")
+        );
+        let cfg_path = dir.path().join("config.toml");
+        std::fs::write(&cfg_path, config).expect("write config");
+        let rt = AgentRuntime::new(Some(cfg_path.to_string_lossy().into_owned())).expect("new");
+
+        let request = serde_json::json!({
+            "v": 1,
+            "id": "bug158-1",
+            "method": "protocol.info",
+            "params": {}
+        })
+        .to_string();
+        let response = rt
+            .runtime_handle
+            .block_on(rt.invoke(request, None))
+            .expect("invoke protocol.info");
+        let parsed: serde_json::Value = serde_json::from_str(&response).expect("response is json");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["id"], "bug158-1");
+        assert_eq!(parsed["result"]["protocolVersion"], 1);
+
+        // Bad envelope → Err through the same bridge (the renderer gets a
+        // rejected promise, never a main-thread stall).
+        assert!(rt
+            .runtime_handle
+            .block_on(rt.invoke("not-json".into(), None))
+            .is_err());
+
         rt.runtime_handle.block_on(rt.shutdown()).expect("shutdown");
     }
 

@@ -1114,6 +1114,116 @@
       "streaming": false
     },
     {
+      "name": "lan.state",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "lan.messages",
+      "params": {
+        "type": "object",
+        "properties": {
+          "peerId": {
+            "type": "string"
+          },
+          "sinceId": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "peerId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "lan.send",
+      "params": {
+        "type": "object",
+        "properties": {
+          "peerId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "imageBase64": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "peerId",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "lan.attachment",
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "lan.markRead",
+      "params": {
+        "type": "object",
+        "properties": {
+          "peerId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "peerId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
+      ],
+      "streaming": false
+    },
+    {
       "name": "approval.listRules",
       "params": {
         "type": "object",

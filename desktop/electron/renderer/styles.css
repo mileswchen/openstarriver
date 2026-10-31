@@ -2549,3 +2549,116 @@ button[data-tip]:hover::after,
 /* ─── 侧栏 footer 图标按钮组：锁形（定时锁）+ 手机（远程配对）紧邻贴右 ─── */
 .sb-footer-icons { display: flex; align-items: stretch; }
 .sb-footer-icon { width: 36px; padding: 12px 0; justify-content: center; border-radius: 0; }
+/* LAN chat 未读徽标（消息图标右上角红点） */
+.sb-footer-icon { position: relative; }
+.sb-footer-badge {
+  position: absolute; top: 3px; right: 2px; min-width: 14px; height: 14px;
+  padding: 0 3px; border-radius: 7px; background: var(--danger); color: #fff;
+  font-size: 9px; line-height: 14px; font-weight: 600; text-align: center;
+  pointer-events: none;
+}
+
+/* ─── LAN chat 消息小程序（侧栏左下角消息图标弹出） ─── */
+.lan-chat-dialog {
+  position: relative; background: var(--surface); border-radius: 10px;
+  width: 720px; max-width: calc(100vw - 48px); height: 480px; max-height: calc(100vh - 64px);
+  box-shadow: var(--shadow-md); display: flex; flex-direction: column; overflow: hidden;
+}
+.lan-chat-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.lan-chat-title { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
+.lan-chat-close { background: none; border: none; font-size: 16px; cursor: pointer; color: var(--text-muted); padding: 2px 4px; }
+.lan-chat-close:hover { color: var(--text); }
+.lan-chat-disabled { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 13px; }
+.lan-chat-body { flex: 1; display: flex; min-height: 0; }
+
+/* 左列：实例列表 */
+.lan-chat-peer-list {
+  width: 200px; flex-shrink: 0; border-right: 1px solid var(--border);
+  background: var(--panel-bg); overflow-y: auto; padding: 8px 6px; display: flex; flex-direction: column; gap: 2px;
+}
+.lan-chat-self {
+  display: flex; flex-direction: column; padding: 6px 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.lan-chat-self-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+.lan-chat-self-name { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lan-chat-empty { padding: 18px 10px; font-size: 12px; color: var(--text-muted); text-align: center; line-height: 1.6; }
+.lan-chat-peer-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 8px; border: none; border-radius: 6px; background: none;
+  cursor: pointer; text-align: left; font-family: inherit;
+}
+.lan-chat-peer-row:hover { background: var(--accent-soft); }
+.lan-chat-peer-row.active { background: var(--ws-active); }
+.lan-chat-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+.lan-chat-dot.online { background: var(--success); }
+.lan-chat-peer-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.lan-chat-peer-name { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lan-chat-peer-row.active .lan-chat-peer-name { color: #fff; }
+.lan-chat-peer-sub { font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lan-chat-peer-row.active .lan-chat-peer-sub { color: rgba(255, 255, 255, 0.75); }
+.lan-chat-unread {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--danger); color: #fff; font-size: 10px; line-height: 16px;
+  font-weight: 600; text-align: center; flex-shrink: 0;
+}
+
+/* 右列：会话 */
+.lan-chat-conversation { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.lan-chat-conv-header {
+  display: flex; align-items: baseline; gap: 8px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.lan-chat-conv-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.lan-chat-conv-status { font-size: 11px; color: var(--text-muted); }
+.lan-chat-conv-status.online { color: var(--success); }
+.lan-chat-conv-sub { font-size: 10px; color: var(--text-muted); font-family: var(--mono); }
+.lan-chat-messages { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.lan-chat-none { margin: auto; font-size: 12px; color: var(--text-muted); }
+.lan-chat-row { display: flex; flex-direction: column; }
+.lan-chat-row.in { align-items: flex-start; }
+.lan-chat-row.out { align-items: flex-end; }
+.lan-chat-msg {
+  position: relative; max-width: 78%; padding: 7px 10px; border-radius: 10px;
+  font-size: 13px; line-height: 1.5; word-break: break-word; white-space: pre-wrap;
+}
+.lan-chat-msg.in { background: var(--bubble-user); color: var(--text); border-top-left-radius: 3px; }
+.lan-chat-msg.out { background: var(--accent); color: var(--on-accent); border-top-right-radius: 3px; }
+.lan-chat-msg.failed { outline: 1px solid var(--danger); }
+.lan-chat-msg-flag {
+  position: absolute; top: -5px; right: -5px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--danger); color: #fff; font-size: 10px; line-height: 14px; text-align: center; font-weight: 700;
+}
+.lan-chat-msg-loading { color: inherit; opacity: 0.6; }
+.lan-chat-msg-time { font-size: 9px; color: var(--text-muted); margin-top: 2px; }
+
+/* 输入行 */
+.lan-chat-composer { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.lan-chat-attach {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border: none; border-radius: 6px; background: none;
+  color: var(--text-secondary); cursor: pointer; flex-shrink: 0;
+}
+.lan-chat-attach:hover { background: var(--accent-soft); }
+.lan-chat-input {
+  flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--border-strong);
+  border-radius: 8px; font-size: 13px; background: var(--bg-inset); color: var(--text); outline: none;
+}
+.lan-chat-input:focus { border-color: var(--accent); }
+.lan-chat-send {
+  padding: 7px 14px; border: none; border-radius: 8px; background: var(--accent);
+  color: var(--on-accent); font-size: 13px; cursor: pointer; flex-shrink: 0;
+}
+.lan-chat-send:hover:not(:disabled) { background: var(--accent-hover); }
+.lan-chat-send:disabled { opacity: 0.45; cursor: default; }
+.lan-chat-error { padding: 0 12px 8px; font-size: 11px; color: var(--danger); flex-shrink: 0; }
+
+/* 图片放大遮罩 */
+.lan-chat-imgzoom {
+  position: absolute; inset: 0; background: rgba(0, 0, 0, 0.82);
+  display: flex; align-items: center; justify-content: center; cursor: zoom-out; z-index: 10;
+}
+.lan-chat-imgzoom img { max-width: 92%; max-height: 92%; border-radius: 8px; }

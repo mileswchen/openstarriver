@@ -8,5 +8,6 @@
 //!   share the same implementation.
 
 pub mod http_server;
+pub mod lan_chat;
 pub mod protocol_catalog;
 pub mod ws;

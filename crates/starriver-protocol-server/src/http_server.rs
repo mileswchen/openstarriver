@@ -199,17 +199,17 @@ async fn serve(
     }
 }
 
-struct HttpRequest {
-    method: String,
-    path: String,
-    query: Option<String>,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
+pub(crate) struct HttpRequest {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) query: Option<String>,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
     /// Bytes already read past `Content-Length` (a WebSocket client may
     /// pipeline its first frame with the handshake GET — the upgrade path
     /// MUST replay them into the frame reader or the first frame is lost).
     #[allow(dead_code)]
-    leftover: Vec<u8>,
+    pub(crate) leftover: Vec<u8>,
 }
 
 async fn handle_connection(
@@ -748,7 +748,7 @@ async fn serve_sse(
     Ok(())
 }
 
-async fn read_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequest> {
+pub(crate) async fn read_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequest> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let header_end;
@@ -807,7 +807,7 @@ async fn read_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequest> {
     })
 }
 
-async fn write_response(
+pub(crate) async fn write_response(
     stream: &mut TcpStream,
     status: u16,
     content_type: &str,
@@ -818,6 +818,8 @@ async fn write_response(
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        413 => "Payload Too Large",
+        429 => "Too Many Requests",
         _ => "Status",
     };
     let head = format!(

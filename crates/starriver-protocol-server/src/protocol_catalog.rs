@@ -11,7 +11,7 @@ use starriver_host::HostRuntime;
 use starriver_protocol::permission::{
     PERM_AGENTS_READ, PERM_AGENTS_WRITE, PERM_APPROVAL_RESPOND, PERM_ATTACHMENTS_READ,
     PERM_ATTACHMENTS_WRITE, PERM_CREDENTIALS_READ, PERM_CREDENTIALS_WRITE, PERM_HOOKS_READ,
-    PERM_HOOKS_WRITE, PERM_JOBS_READ, PERM_MARKET_READ, PERM_MCP_READ, PERM_MCP_WRITE,
+    PERM_HOOKS_WRITE, PERM_JOBS_READ, PERM_LAN_CHAT, PERM_MARKET_READ, PERM_MCP_READ, PERM_MCP_WRITE,
     PERM_MEMORY_READ, PERM_MEMORY_WRITE, PERM_MODELS_READ, PERM_MODELS_WRITE, PERM_PLUGINS_READ,
     PERM_PLUGINS_WRITE, PERM_PROJECT_WRITE, PERM_REVIEW_START, PERM_SCHEDULED_READ,
     PERM_SCHEDULED_WRITE, PERM_SESSION_EXECUTE, PERM_SESSION_READ, PERM_SESSION_WRITE,
@@ -77,6 +77,12 @@ pub fn build() -> MethodRegistry<HostRuntime> {
         approval_respond(),
         plan_review_decide(),
         interaction_respond(),
+        // ── LAN chat：局域网实例互发消息（lan_chat 模块） ──
+        lan_state(),
+        lan_messages(),
+        lan_send(),
+        lan_attachment(),
+        lan_mark_read(),
         HostRuntime::__api_approval_listRules(),
         HostRuntime::__api_approval_revokeRule(),
         agent_presets_list(),
@@ -649,6 +655,119 @@ fn settings_update() -> MethodSpec<HostRuntime> {
                     ::serde_json::Value::Null,
                 )
             })
+        },
+    )
+}
+
+// ── LAN chat (starriver-protocol-server::lan_chat)：局域网实例互发消息 ──
+
+fn lan_state() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "lan.state",
+        object(&[], &[]),
+        any_schema(),
+        &[PERM_LAN_CHAT],
+        false,
+        |_call: HostCall<'_>| match crate::lan_chat::global() {
+            Some(service) => Ok(service.state_json()),
+            None => Ok(json!({
+                "enabled": false, "peers": [], "conversations": [],
+                "unread": {}, "unreadTotal": 0,
+            })),
+        },
+    )
+}
+
+fn lan_messages() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "lan.messages",
+        object(
+            &[("peerId", string_schema()), ("sinceId", integer_schema())],
+            &["peerId"],
+        ),
+        any_schema(),
+        &[PERM_LAN_CHAT],
+        false,
+        |call: HostCall<'_>| {
+            let peer_id = required_string(&call.params, "peerId")?;
+            let since_id = call.params.get("sinceId").and_then(Value::as_u64);
+            let service = crate::lan_chat::global().ok_or_else(|| {
+                ApiError::new("LAN_CHAT_DISABLED", "lan chat service is not running")
+            })?;
+            Ok(service.messages_json(&peer_id, since_id))
+        },
+    )
+}
+
+fn lan_send() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "lan.send",
+        object(
+            &[
+                ("peerId", string_schema()),
+                ("kind", string_schema()),
+                ("text", string_schema()),
+                ("imageBase64", string_schema()),
+                ("mime", string_schema()),
+            ],
+            &["peerId", "kind"],
+        ),
+        any_schema(),
+        &[PERM_LAN_CHAT],
+        false,
+        |call: HostCall<'_>| {
+            let peer_id = required_string(&call.params, "peerId")?;
+            let kind = required_string(&call.params, "kind")?;
+            let text = call.params.get("text").and_then(Value::as_str).map(str::to_string);
+            let image_base64 =
+                call.params.get("imageBase64").and_then(Value::as_str).map(str::to_string);
+            let mime = call.params.get("mime").and_then(Value::as_str).map(str::to_string);
+            let service = crate::lan_chat::global().ok_or_else(|| {
+                ApiError::new("LAN_CHAT_DISABLED", "lan chat service is not running")
+            })?;
+            // Async POST runs detached; the record flips sending→sent/failed.
+            let id = service
+                .send(&peer_id, kind, text, image_base64, mime)
+                .map_err(|e| ApiError::new(e.code, e.message))?;
+            Ok(json!({ "ok": true, "id": id }))
+        },
+    )
+}
+
+fn lan_attachment() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "lan.attachment",
+        object(&[("id", string_schema())], &["id"]),
+        any_schema(),
+        &[PERM_LAN_CHAT],
+        false,
+        |call: HostCall<'_>| {
+            let id = required_string(&call.params, "id")?;
+            let service = crate::lan_chat::global().ok_or_else(|| {
+                ApiError::new("LAN_CHAT_DISABLED", "lan chat service is not running")
+            })?;
+            service
+                .attachment_json(&id)
+                .ok_or_else(|| ApiError::new("ATTACHMENT_NOT_FOUND", format!("chat image `{id}` unavailable")))
+        },
+    )
+}
+
+fn lan_mark_read() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "lan.markRead",
+        object(&[("peerId", string_schema())], &["peerId"]),
+        any_schema(),
+        &[PERM_LAN_CHAT],
+        false,
+        |call: HostCall<'_>| {
+            let peer_id = required_string(&call.params, "peerId")?;
+            let service = crate::lan_chat::global().ok_or_else(|| {
+                ApiError::new("LAN_CHAT_DISABLED", "lan chat service is not running")
+            })?;
+            service.mark_read(&peer_id);
+            service.request_probe();
+            Ok(json!({ "ok": true }))
         },
     )
 }

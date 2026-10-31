@@ -61,6 +61,10 @@ base64 = "0.22"
 sha1 = "0.10"
 portable-pty = "0.9"
 zstd = "0.13"
+# LAN chat（starriver-protocol-server::lan_chat）：UDP 发现 + hostname 标识 + 子网定向广播
+socket2 = "0.6"
+hostname = "0.4"
+if-addrs = "0.13"
 
 [workspace.package]
 version = "0.1.0"

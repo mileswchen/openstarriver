@@ -48,6 +48,20 @@
     "wrongCode": "Incorrect passcode, please retry",
     "window": "Lock window: {start} – {end}"
   },
+  "lanChat": {
+    "title": "LAN Messages",
+    "searching": "Searching for LAN instances…",
+    "empty": "No other Starriver instance found",
+    "self": "This Mac",
+    "online": "Online",
+    "offline": "Offline",
+    "placeholder": "Type a message…",
+    "send": "Send",
+    "attachImage": "Send image",
+    "imageTooLarge": "Image too large (must be under 4MB)",
+    "sendFailed": "Failed to send",
+    "notEnabled": "Messaging disabled (STARRIVER_LAN_CHAT=0)"
+  },
   "chat": {
     "title": "Chat",
     "placeholder": "Type a message to start chatting",
@@ -112,9 +126,6 @@
     "trajSystem": "System",
     "trajContext": "Context",
     "trajCompaction": "Compaction",
-    "trajSourceCurrent": "Live context",
-    "trajSourceArchive": "Full archive",
-    "trajArchive": "History source",
     "trajTool": "Tool",
     "trajTurn": "Turn {n}",
     "trajMode": "Trajectory display mode",
