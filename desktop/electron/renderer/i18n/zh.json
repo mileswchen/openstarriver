@@ -436,6 +436,8 @@
     "themeDesc": "主题可定制颜色、字体、圆角与密度；插件也可贡献主题。",
     "remoteTitle": "远程接入（Phone 配对）",
     "remoteHint": "启动协议服务器后，Phone 客户端可通过局域网/Tailscale 连接本机。",
+    "quitStopsDaemon": "退出时停止后台服务",
+    "quitStopsDaemonHint": "默认关闭：退出应用后 starriverd 继续运行，手机配对/远程界面不受影响。开启后每次退出应用会一并停止后台服务。",
     "remoteStart": "启动协议服务器",
     "remoteAddr": "地址",
     "remoteToken": "Token",

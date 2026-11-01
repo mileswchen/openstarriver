@@ -394,6 +394,19 @@ run_electron_builder() {
   done
 }
 
+# deb 控制段注入：electron-builder 只暴露 afterInstall/afterRemove（→ postinst/postrm），
+# 没有 prerm 钩子，而优雅停运行中 starriverd 必须发生在 dpkg 删文件之前。
+# prerm/postrm 源文件在 build/deb/，注入器纯 node（ar/ustar/gzip），农场无需 binutils。
+inject_deb_scripts() {
+  local deb
+  for deb in "$DIST_DIR"/*.deb; do
+    [ -e "$deb" ] || continue
+    echo "[deb] inject maintainer scripts into $(basename "$deb")"
+    node "$ELECTRON_DIR/scripts/inject-deb-control.mjs" "$deb" \
+      "$ELECTRON_DIR/build/deb/prerm" "$ELECTRON_DIR/build/deb/postrm"
+  done
+}
+
 package_one() {
   # $1 = platform
   local p="$1"
@@ -406,6 +419,9 @@ package_one() {
   python3 "$ROOT/desktop/scripts/gen-icons.py"
   build_frontend
   run_electron_builder "$p"
+  if [ "$p" = "linux" ]; then
+    inject_deb_scripts
+  fi
   if [ "$p" = "mac" ]; then
     notarize_mac
     cleanup_unpacked

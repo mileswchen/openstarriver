@@ -142,6 +142,10 @@ contextBridge.exposeInMainWorld('starriver', {
   // Models page "open config file": open ~/.starriver/settings.yaml in the system editor.
   openModelsConfig: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openModelsConfig'),
+  // 设置页：退出时是否顺带停止后台服务（starriverd）。默认关（shared service）。
+  getQuitStopsDaemon: (): Promise<boolean> => ipcRenderer.invoke('prefs:getQuitStopsDaemon'),
+  setQuitStopsDaemon: (value: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('prefs:setQuitStopsDaemon', value),
   onDaemonStatus: (callback: (status: any) => void): (() => void) => {
     const handler = (_e: any, status: any) => callback(status);
     ipcRenderer.on('daemon:status', handler);

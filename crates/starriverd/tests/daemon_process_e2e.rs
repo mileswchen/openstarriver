@@ -62,6 +62,9 @@ struct DaemonInfo {
     port: u16,
     token: String,
     pid: u32,
+    // Wire format is snake_case (serde default on the daemon side).
+    #[serde(rename = "build_id")]
+    build_id: String,
     #[serde(default)]
     existing: bool,
 }
@@ -79,6 +82,24 @@ fn daemon_lifecycle_start_yield_health_invoke_shutdown() {
     assert!(info.port > 0);
     assert!(!info.token.is_empty());
     assert!(starriver_dir.join("daemon.json").exists());
+
+    // 1b. build_id: the startup line reports the sha256 prefix of the real
+    // binary (the Electron client's takeover check relies on this).
+    {
+        use sha2::{Digest, Sha256};
+        let bytes = std::fs::read(daemon_bin()).unwrap();
+        let expect: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+            [..16]
+            .into();
+        assert_eq!(info.build_id, expect, "startup line build_id mismatch");
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(starriver_dir.join("daemon.json")).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["build_id"], expect, "daemon.json build_id mismatch");
+    }
 
     // 2. /health responds without auth.
     let client = reqwest::blocking::Client::new();
@@ -109,6 +130,7 @@ fn daemon_lifecycle_start_yield_health_invoke_shutdown() {
     let (mut second, info2) = spawn_daemon(home.path());
     assert!(info2.existing, "second start must report existing");
     assert_eq!(info2.port, info.port);
+    assert_eq!(info2.build_id, info.build_id, "yield must carry build_id");
     // The yielding process exits immediately.
     assert!(
         wait_exit(&mut second, Duration::from_secs(10)),

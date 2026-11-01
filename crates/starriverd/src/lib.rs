@@ -30,6 +30,13 @@ pub struct DaemonInfo {
     pub version: String,
     pub protocol_version: u32,
     pub started_at: u64,
+    /// Build identity: sha256 prefix of this daemon's own executable. The
+    /// Electron client compares it against the bundled binary before reusing
+    /// a running instance — a mismatch (or absence, i.e. a pre-upgrade
+    /// legacy daemon.json) triggers a takeover. `default` keeps daemon.json
+    /// files written by older builds parseable.
+    #[serde(default)]
+    pub build_id: String,
 }
 
 impl DaemonInfo {
@@ -68,6 +75,34 @@ pub fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Build identity of this daemon: sha256 of the running executable, first 16
+/// hex chars. Empty string when the executable cannot be read (the Electron
+/// client treats any non-matching / absent id as a takeover trigger, so
+/// "unknown" safely degrades to a restart rather than a wrong reuse).
+///
+/// The hash target is `current_exe()`, which resolves to the inode the
+/// process actually started from (`/proc/self/exe`): an in-place package
+/// upgrade replaces the file on disk but not the running process's inode, so
+/// an old daemon keeps truthfully reporting the OLD content's identity —
+/// exactly what the client's reuse check must see.
+pub fn compute_build_id() -> String {
+    match std::env::current_exe() {
+        Ok(path) => compute_build_id_for(&path),
+        Err(_) => String::new(),
+    }
+}
+
+/// `compute_build_id` for an explicit path (unit-testable form).
+pub fn compute_build_id_for(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let Ok(bytes) = std::fs::read(path) else {
+        return String::new();
+    };
+    let digest = Sha256::digest(&bytes);
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    hex[..16].to_string()
 }
 
 /// Write `daemon.json` (0600), creating the directory if missing.
@@ -456,6 +491,7 @@ mod tests {
             version: "0.1.0".into(),
             protocol_version: 1,
             started_at: 123,
+            build_id: "0123456789abcdef".into(),
         }
     }
 
@@ -487,6 +523,42 @@ mod tests {
         let line = sample_info().startup_line(true);
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(value["existing"], true);
+    }
+
+    #[test]
+    fn build_id_is_sha256_prefix_of_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fake-starriverd");
+        std::fs::write(&path, b"starriverd build identity fixture").unwrap();
+        let id = compute_build_id_for(&path);
+        assert_eq!(id.len(), 16);
+        // Independent expectation via sha2 directly (same dep the impl uses,
+        // but a separate call site so a hashing regression still trips).
+        use sha2::{Digest, Sha256};
+        let bytes = std::fs::read(&path).unwrap();
+        let expect: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+            [..16]
+            .into();
+        assert_eq!(id, expect);
+        // Unreadable path degrades to empty (→ client treats as takeover).
+        assert_eq!(compute_build_id_for(&dir.path().join("missing")), "");
+    }
+
+    #[test]
+    fn legacy_daemon_json_without_build_id_parses() {
+        // daemon.json written by a pre-build_id upgrade — must parse with an
+        // empty build_id so the client can detect legacy → takeover.
+        let json = r#"{"port":39617,"token":"t","pid":1,"version":"0.1.0",
+                        "protocol_version":1,"started_at":0}"#;
+        let info: DaemonInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.build_id, "");
+        // And the startup line carries the field for fresh instances.
+        let line: serde_json::Value =
+            serde_json::from_str(&sample_info().startup_line(false)).unwrap();
+        assert_eq!(line["build_id"], "0123456789abcdef");
     }
 
     #[test]

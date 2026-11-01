@@ -3979,6 +3979,9 @@ interface StarriverBridge {
   openIDE?(cwd: string, command?: string): Promise<{ ok: boolean }>;
   /** Models page "open config file": open ~/.starriver/settings.yaml in the system editor. */
   openModelsConfig?(): Promise<{ ok: boolean; error?: string }>;
+  /** 设置页：退出时是否顺带停止后台服务（desktop-prefs.json，主进程持有）。 */
+  getQuitStopsDaemon?(): Promise<boolean>;
+  setQuitStopsDaemon?(value: boolean): Promise<boolean>;
 
   // MCP Servers
   listMcpServers(): Promise<McpServerInfo[]>;
@@ -12845,6 +12848,32 @@ export function SubagentDelegationSection() {
   );
 }
 
+/** 退出行为：是否顺带停止后台服务（starriverd）。存 desktop-prefs.json（主进程
+ *  userData），不走 settings.yaml —— 这是桌面应用自身的偏好，与协议后端无关。 */
+function SettingsDaemonSection() {
+  const { t } = useI18n();
+  const [stopOnQuit, setStopOnQuit] = useState<boolean | null>(null);
+  useEffect(() => {
+    Promise.resolve(window.starriver.getQuitStopsDaemon?.())
+      .then(setStopOnQuit)
+      .catch(() => setStopOnQuit(false));
+  }, []);
+  const toggle = () => {
+    const next = !(stopOnQuit ?? false);
+    setStopOnQuit(next);
+    Promise.resolve(window.starriver.setQuitStopsDaemon?.(next)).catch(() => {});
+  };
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>{t('settings.quitStopsDaemon')}</div>
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+        <input type="checkbox" checked={stopOnQuit ?? false} onChange={toggle} style={{ marginTop: 2 }} />
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>{t('settings.quitStopsDaemonHint')}</span>
+      </label>
+    </div>
+  );
+}
+
 export function SettingsDialog({ onClose }: {
   onClose: () => void;
 }) {
@@ -12894,6 +12923,7 @@ export function SettingsDialog({ onClose }: {
                   <option value="zh">{t('settings.chinese')}</option>
                 </select>
               </div>
+              <SettingsDaemonSection />
               {/* Theme picker removed (2026-10-05): Classic Gray is the only
                   supported theme for now; boot forces the default so a stale
                   saved pick can't stick with no picker to undo it. */}

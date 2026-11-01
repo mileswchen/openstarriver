@@ -161,6 +161,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         version: VERSION.into(),
         protocol_version: starriver_protocol::PROTOCOL_VERSION,
         started_at: now_unix(),
+        build_id: starriverd::compute_build_id(),
     };
     starriverd::write_info(&dir, &info)?;
 
