@@ -658,6 +658,8 @@ impl HostRuntime {
                     None,
                     None,
                     None,
+                    // Scheduled runs are host-generated — no client correlation.
+                    None,
                 )
                 .await;
             let (status, summary) = match result {

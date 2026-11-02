@@ -118,6 +118,9 @@ impl HostApi for Host {
             isolation,
             None,
             None,
+            // WI-216: the TUI is terminal-initiated with no client echo to
+            // reconcile — no correlation id.
+            None,
         )
     }
     fn approve(&self, session_id: String, allowed: bool, remember: Option<bool>) -> Result<()> {

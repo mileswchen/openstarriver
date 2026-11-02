@@ -583,7 +583,7 @@ mod tests {
             id: MessageId("m".into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text(text.to_string())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }
     }
 
@@ -917,7 +917,7 @@ mod tests {
                         },
                         ContentBlock::Text("with a broken image".into()),
                     ],
-                    source: MessageSource::User,
+                    source: MessageSource::user(),
                 }
                 .to_json()
                 .unwrap(),

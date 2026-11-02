@@ -59,7 +59,7 @@ mod tests {
             id: MessageId(id.into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text(id.into())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }
     }
 

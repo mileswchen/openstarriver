@@ -103,7 +103,7 @@ fn urlencoding(s: &str) -> String {
 }
 
 async fn exchange_and_store(name: &str, config: &OAuthConfig, code: &str) -> anyhow::Result<()> {
-    let client = reqwest::Client::new();
+    let client = super::transport::http_client();
     let resp = client
         .post(&config.token_url)
         .form(&[

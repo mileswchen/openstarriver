@@ -217,7 +217,7 @@ impl ExtractLlm for HostExtractLlm {
                     id: MessageId(format!("memory-{purpose}").into()),
                     role: MessageRole::User,
                     content: vec![KernelBlock::Text(prompt_text)],
-                    source: MessageSource::User,
+                    source: MessageSource::user(),
                 }],
                 system: None,
                 temperature: None,
@@ -321,7 +321,7 @@ mod tests {
             id: MessageId("m".into()),
             role,
             content: blocks,
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }
     }
 

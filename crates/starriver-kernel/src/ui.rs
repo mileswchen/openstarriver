@@ -36,6 +36,23 @@ pub enum UiEvent {
         #[serde(rename = "session_id")]
         session_id: String,
     },
+    /// A user prompt durably committed into the session ledger
+    /// (`user/message` with a client correlation id — WI-216). The
+    /// submitting surface retires its optimistic echo on receipt: the
+    /// carried `seq` is the ledger seq the history/archive projections use,
+    /// so stamping it onto the echo lets the archive/tail merge dedupe by
+    /// seq. `rpc_id` is the `clientRequestId` the submitter sent with
+    /// `session.execute`; host-generated turns (scheduled runs, plugins)
+    /// carry no correlation id and emit nothing.
+    UserMessageCommitted {
+        #[serde(default = "UiEvent::version")]
+        version: u32,
+        session_id: String,
+        rpc_id: String,
+        message_id: String,
+        /// Ledger seq of the committed `user/message` event.
+        seq: u64,
+    },
     AssistantText {
         #[serde(default = "UiEvent::version")]
         version: u32,

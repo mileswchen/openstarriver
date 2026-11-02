@@ -25,10 +25,10 @@ type TailScan = (Option<u64>, Vec<(String, PendingCall)>);
 /// `TOOL_NOT_STARTED`; a recorded call without a result gets
 /// `TOOL_OUTCOME_UNKNOWN`.
 pub fn closers_for(events: &[SessionEvent]) -> Vec<SessionEvent> {
-    let Some(open_turn) = last_turn_start(events) else {
+    let Some((open_turn_idx, open_turn)) = last_turn_start(events) else {
         return Vec::new();
     };
-    let Some((open_step, pending)) = scan_tail(events, open_turn) else {
+    let Some((open_step, pending)) = scan_tail(events, open_turn_idx) else {
         // Balanced final turn.
         return Vec::new();
     };
@@ -121,21 +121,40 @@ pub fn closers_for(events: &[SessionEvent]) -> Vec<SessionEvent> {
         seq,
         time,
         event_type: "turn/end".into(),
-        data: JsonValue::Object(vec![(
-            "reason".into(),
-            JsonValue::Object(vec![(
-                "kind".into(),
-                JsonValue::String("interrupted".into()),
-            )]),
-        )]),
+        data: JsonValue::Object(vec![
+            // The live turn/end emitter (agent-loop) always stamps the turn
+            // id; the closer must match or turn-id-matching consumers (UI run
+            // state, usage aggregation) never see the turn closed.
+            ("turn".into(), JsonValue::UInt(open_turn)),
+            (
+                "reason".into(),
+                JsonValue::Object(vec![(
+                    "kind".into(),
+                    JsonValue::String("interrupted".into()),
+                )]),
+            ),
+        ]),
         surface_op: None,
         source_event_seqs: Vec::new(),
     });
     closers
 }
 
-fn last_turn_start(events: &[SessionEvent]) -> Option<usize> {
-    events.iter().rposition(|e| e.event_type == "turn/start")
+fn last_turn_start(events: &[SessionEvent]) -> Option<(usize, u64)> {
+    // (event index, turn id). The index scopes the tail scan; the id is what
+    // the synthesized closers must stamp. Returning the index alone made the
+    // repair stamp the EVENT POSITION as the turn number on long sessions
+    // (session a806fe8c, 2026-11-01: a crash mid-turn-7 repaired its
+    // step/end as `"turn":71916` — the turn/start event's seq — leaving the
+    // real turn 7 without a closer, which turn-id-matching consumers read as
+    // "still running").
+    let idx = events.iter().rposition(|e| e.event_type == "turn/start")?;
+    let turn = events[idx]
+        .data
+        .get("turn")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(0);
+    Some((idx, turn))
 }
 
 /// Scan the tail turn after `open_turn`, tracking the open step and every
@@ -354,6 +373,35 @@ mod tests {
         assert_eq!(closers[0].event_type, "tool/result");
         assert_eq!(closers[1].event_type, "step/end");
         assert_eq!(closers[2].event_type, "turn/end");
+    }
+
+    #[test]
+    fn closers_stamp_the_turn_id_not_the_event_index() {
+        // Regression (session a806fe8c, 2026-11-01): last_turn_start used to
+        // return the EVENT INDEX, so on a long session the synthesized
+        // step/end was stamped `"turn":71916` — the turn/start event's seq —
+        // instead of the real turn 7, and the turn/end closer carried no turn
+        // at all. Turn-id-matching consumers read the turn as never closed.
+        let mut turn_start = event(71916, "turn/start");
+        turn_start.data = JsonValue::Object(vec![("turn".into(), JsonValue::UInt(7))]);
+        let events = vec![
+            event(0, "user/message"),
+            turn_start,
+            step_start(71917, 7, 6),
+        ];
+        let closers = closers_for(&events);
+        assert_eq!(closers.len(), 2);
+        let step_end = &closers[0];
+        assert_eq!(step_end.event_type, "step/end");
+        assert_eq!(step_end.data.get("turn").and_then(JsonValue::as_u64), Some(7));
+        assert_eq!(step_end.data.get("step").and_then(JsonValue::as_u64), Some(6));
+        let turn_end = &closers[1];
+        assert_eq!(turn_end.event_type, "turn/end");
+        assert_eq!(turn_end.data.get("turn").and_then(JsonValue::as_u64), Some(7));
+        assert_eq!(
+            turn_end.data.get("reason").and_then(|r| r.as_str_at("kind")),
+            Some("interrupted")
+        );
     }
 
     #[test]

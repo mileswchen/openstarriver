@@ -838,7 +838,7 @@ impl HostRuntime {
             id: starriver_kernel::llm::MessageId(format!("steer-{}", uuid::Uuid::new_v4())),
             role: starriver_kernel::llm::MessageRole::User,
             content: vec![starriver_kernel::llm::ContentBlock::Text(text)],
-            source: starriver_kernel::llm::MessageSource::User,
+            source: starriver_kernel::llm::MessageSource::user(),
         });
         true
     }
@@ -912,7 +912,7 @@ impl HostRuntime {
                 id: starriver_kernel::llm::MessageId(id.clone()),
                 role: starriver_kernel::llm::MessageRole::User,
                 content,
-                source: starriver_kernel::llm::MessageSource::User,
+                source: starriver_kernel::llm::MessageSource::user(),
             },
             starriver_kernel::agent::InboxTarget::NextTurn,
             false,

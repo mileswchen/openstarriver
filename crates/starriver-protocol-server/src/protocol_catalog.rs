@@ -3410,6 +3410,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         let handle = host.runtime_handle();

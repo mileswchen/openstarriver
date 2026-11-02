@@ -259,7 +259,7 @@ mod tests {
                 "user/message",
                 text_message(
                     MessageRole::User,
-                    MessageSource::User,
+                    MessageSource::user(),
                     "帮我修 sqlite 的锁问题",
                 ),
             ),
@@ -299,7 +299,7 @@ mod tests {
         let events = vec![
             msg_event(
                 "user/message",
-                text_message(MessageRole::User, MessageSource::User, "关于 rust 编译"),
+                text_message(MessageRole::User, MessageSource::user(), "关于 rust 编译"),
             ),
             msg_event(
                 "assistant/message",

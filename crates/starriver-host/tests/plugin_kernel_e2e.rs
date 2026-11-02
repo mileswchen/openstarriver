@@ -1630,6 +1630,7 @@ async fn run_sp1b(
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1855,6 +1856,7 @@ async fn sp3_instructions_full_chain_and_resync() {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1962,6 +1964,7 @@ async fn sp2_assembly_failure_reaches_the_ui_as_turn_error() {
             None,
             None,
             vec![],
+            None,
             None,
             None,
             None,
@@ -2083,6 +2086,7 @@ async fn sp4_time_context_samples_once_per_window_across_resume() {
             None,
             None,
             vec![],
+            None,
             None,
             None,
             None,

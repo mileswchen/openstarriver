@@ -363,7 +363,7 @@ async fn generate_title_inner(
             id: MessageId("title-user".into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text(user_text)],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }],
         system,
         temperature: None,

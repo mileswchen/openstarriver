@@ -611,7 +611,7 @@ impl AgentRuntime {
     /// Execute a task and relay per-run events to Electron via ThreadsafeFunction.
     /// Signature is identical to before the extraction: `(task, sessionId, callback)`.
     #[napi(
-        ts_args_type = "task: string, sessionId: string | undefined | null, callback: (err: null | Error, event: any) => void, executionMode?: string | undefined | null, agent?: string | undefined | null, isolation?: boolean | undefined | null, agentPreset?: string | undefined | null, permissionPreset?: string | undefined | null"
+        ts_args_type = "task: string, sessionId: string | undefined | null, callback: (err: null | Error, event: any) => void, executionMode?: string | undefined | null, agent?: string | undefined | null, isolation?: boolean | undefined | null, agentPreset?: string | undefined | null, permissionPreset?: string | undefined | null, clientRequestId?: string | undefined | null"
     )]
     pub fn execute(
         &self,
@@ -623,6 +623,7 @@ impl AgentRuntime {
         isolation: Option<bool>,
         agent_preset: Option<String>,
         permission_preset: Option<String>,
+        client_request_id: Option<String>,
     ) -> Result<()> {
         let mut rx = self
             .host
@@ -634,6 +635,7 @@ impl AgentRuntime {
                 isolation,
                 agent_preset,
                 permission_preset,
+                client_request_id,
             )
             .map_err(|e| Error::from_reason(format!("{e}")))?;
         // Embedded-mode bridge: NAPI execute runs in-process, its events reach
@@ -1897,7 +1899,7 @@ mod tests {
 
         fn msg_json(role: MessageRole, mid: &str, text: &str) -> JsonValue {
             let source = match role {
-                MessageRole::User => MessageSource::User,
+                MessageRole::User => MessageSource::user(),
                 _ => MessageSource::Model {
                     provider: "p".into(),
                     model: "m".into(),

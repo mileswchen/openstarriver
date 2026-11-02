@@ -12,7 +12,7 @@
 
 use starriver_kernel::llm::{
     CallId, ContentBlock, ContentBlockType, FinishReason, GenerateOptions, LlmError, MessageRole,
-    StreamChunk, TokenUsage,
+    StreamChunk, TokenUsage, ToolChoice,
 };
 
 use crate::{translate::StreamTranslator, ProviderProfile};
@@ -120,7 +120,15 @@ pub fn serialize_request(
                         ContentBlock::Custom { kind, payload } if kind == REASONING_ITEM_KIND => {
                             // The reasoning item is replayed verbatim from the
                             // captured payload (OpenAI requires it).
-                            input.push(json_to_serde(payload));
+                            // BUG-164: a capture left unclosed by a dead
+                            // stream assembles to a raw partial with no
+                            // `type` — replaying that would be an invalid
+                            // input item, so only well-formed reasoning
+                            // items ride the wire.
+                            let item = json_to_serde(payload);
+                            if item.get("type").and_then(|t| t.as_str()) == Some("reasoning") {
+                                input.push(item);
+                            }
                         }
                         _ => {}
                     }
@@ -144,6 +152,11 @@ pub fn serialize_request(
         "input": input,
         "stream": true,
         "store": false,
+        // BUG-161: `store: false` means the server never persists the rs_
+        // reasoning ids we replay — the encrypted content must ride the
+        // items themselves. Parity with OpenAI's own codex client, which
+        // always sends this include alongside `store: false`.
+        "include": ["reasoning.encrypted_content"],
     });
     let instructions = instruction_parts.join("\n");
     if !instructions.is_empty() {
@@ -151,6 +164,15 @@ pub fn serialize_request(
     }
     if !tools.is_empty() {
         body["tools"] = serde_json::json!(tools);
+        // BUG-171: the kernel tool-use policy rides the request (anthropic
+        // parity) — omitted-but-tooled stays `auto`, made explicit.
+        body["tool_choice"] = match options.tool_choice.as_ref() {
+            None | Some(ToolChoice::Auto) => serde_json::json!("auto"),
+            Some(ToolChoice::Any) => serde_json::json!("required"),
+            Some(ToolChoice::Tool { name }) => {
+                serde_json::json!({"type": "function", "name": name})
+            }
+        };
     }
     if let Some(max) = profile.max_tokens.or(options.max_tokens) {
         body["max_output_tokens"] = serde_json::json!(max);
@@ -160,7 +182,14 @@ pub fn serialize_request(
     }
     // BUG-54: the profile's reasoning effort is advertised by resolve_model —
     // the responses route must carry it, not silently drop it.
-    if let Some(effort) = options.reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
+    // BUG-165: "off" is the kernel's explicit disable marker and NOT a valid
+    // Responses `reasoning.effort` (official vocabulary is
+    // minimal/low/medium/high) — disabling means omitting the parameter.
+    if let Some(effort) = options
+        .reasoning_effort
+        .as_deref()
+        .filter(|e| !e.is_empty() && *e != "off")
+    {
         body["reasoning"] = serde_json::json!({ "effort": effort });
     }
     Ok(body)
@@ -297,8 +326,10 @@ pub struct ResponsesTranslator {
     tool_arguments: String,
     reasoning_index: Option<u64>,
     reasoning_text: String,
-    reasoning_item_index: Option<u64>,
-    reasoning_item: Option<serde_json::Value>,
+    /// BUG-164: open reasoning-item block indices in stream order. The old
+    /// single `Option<u64>` was overwritten by every `output_item.added`,
+    /// so the earlier item never closed and replayed as a garbage partial.
+    reasoning_items: std::collections::VecDeque<u64>,
     pending_usage: Option<TokenUsage>,
     finish: Option<FinishReason>,
     done: bool,
@@ -322,8 +353,7 @@ impl ResponsesTranslator {
             tool_arguments: String::new(),
             reasoning_index: None,
             reasoning_text: String::new(),
-            reasoning_item_index: None,
-            reasoning_item: None,
+            reasoning_items: std::collections::VecDeque::new(),
             pending_usage: None,
             finish: None,
             done: false,
@@ -362,7 +392,7 @@ impl ResponsesTranslator {
                     }));
                 } else if item_type == "reasoning" {
                     let index = self.allocate();
-                    self.reasoning_item_index = Some(index);
+                    self.reasoning_items.push_back(index);
                     out.push(Ok(StreamChunk::BlockStart {
                         index,
                         block_type: ContentBlockType::Custom(REASONING_ITEM_KIND.into()),
@@ -423,18 +453,36 @@ impl ResponsesTranslator {
                 name,
                 arguments,
             } => {
-                if let Some(index) = self.tool_index.take() {
-                    out.push(Ok(StreamChunk::BlockEnd {
-                        index,
-                        block: ContentBlock::ToolCall {
-                            id: CallId(call_id),
-                            name: Some(name),
-                            arguments: starriver_kernel::llm::tool_call_arguments_from_text(
-                                &arguments,
-                            ),
-                        },
-                    }));
-                }
+                // BUG-164 (BUG-53 parity): a proxy may deliver only the done
+                // item — the call must surface even without its added event,
+                // so the block is created on demand.
+                let index = match self.tool_index.take() {
+                    Some(index) => index,
+                    None => {
+                        let index = self.allocate();
+                        out.push(Ok(StreamChunk::BlockStart {
+                            index,
+                            block_type: ContentBlockType::ToolCall,
+                        }));
+                        out.push(Ok(StreamChunk::ToolCallDelta {
+                            index,
+                            id: CallId(call_id.clone()),
+                            name: Some(name.clone()),
+                            arguments_delta: String::new(),
+                        }));
+                        index
+                    }
+                };
+                out.push(Ok(StreamChunk::BlockEnd {
+                    index,
+                    block: ContentBlock::ToolCall {
+                        id: CallId(call_id),
+                        name: Some(name),
+                        arguments: starriver_kernel::llm::tool_call_arguments_from_text(
+                            &arguments,
+                        ),
+                    },
+                }));
             }
             ResponseEvent::ReasoningDelta(delta) => {
                 let index = match self.reasoning_index {
@@ -461,15 +509,27 @@ impl ResponsesTranslator {
                         block: ContentBlock::Reasoning(text),
                     }));
                 }
-                if let Some(index) = self.reasoning_item_index.take() {
-                    out.push(Ok(StreamChunk::BlockEnd {
-                        index,
-                        block: ContentBlock::Custom {
-                            kind: REASONING_ITEM_KIND.into(),
-                            payload: serde_json_to_kernel(item),
-                        },
-                    }));
-                }
+                // BUG-164: close the OLDEST open item (items stream in
+                // order), with an added-less fallback so a done-only proxy
+                // still surfaces the item (BUG-53 parity).
+                let index = match self.reasoning_items.pop_front() {
+                    Some(index) => index,
+                    None => {
+                        let index = self.allocate();
+                        out.push(Ok(StreamChunk::BlockStart {
+                            index,
+                            block_type: ContentBlockType::Custom(REASONING_ITEM_KIND.into()),
+                        }));
+                        index
+                    }
+                };
+                out.push(Ok(StreamChunk::BlockEnd {
+                    index,
+                    block: ContentBlock::Custom {
+                        kind: REASONING_ITEM_KIND.into(),
+                        payload: serde_json_to_kernel(item),
+                    },
+                }));
             }
             ResponseEvent::Completed { usage, status } => {
                 if let Some(usage) = usage {
@@ -523,17 +583,10 @@ impl ResponsesTranslator {
                 },
             }));
         }
-        if let Some(index) = self.reasoning_item_index.take() {
-            if let Some(item) = self.reasoning_item.take() {
-                out.push(Ok(StreamChunk::BlockEnd {
-                    index,
-                    block: ContentBlock::Custom {
-                        kind: REASONING_ITEM_KIND.into(),
-                        payload: serde_json_to_kernel(item),
-                    },
-                }));
-            }
-        }
+        // BUG-164: reasoning items still open at stream end have no captured
+        // payload — they stay unclosed (the kernel keeps the raw partial for
+        // display) and the serialize-side guard filters them from replay.
+        self.reasoning_items.clear();
         if let Some(usage) = self.pending_usage.take() {
             out.push(Ok(StreamChunk::Usage { usage }));
         }
@@ -700,6 +753,15 @@ mod tests {
         }
     }
 
+    fn user(message: Vec<ContentBlock>) -> Message {
+        Message {
+            id: MessageId("m0".into()),
+            role: MessageRole::User,
+            content: message,
+            source: MessageSource::user(),
+        }
+    }
+
     #[test]
     fn serializes_instructions_and_items() {
         let messages = vec![
@@ -707,7 +769,7 @@ mod tests {
                 id: MessageId("m1".into()),
                 role: MessageRole::User,
                 content: vec![ContentBlock::Text("hi".into())],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             },
             assistant(vec![ContentBlock::tool_call(
                 CallId("call_1".into()),
@@ -797,7 +859,7 @@ mod tests {
                     JsonValue::String("data:image/webp;base64,UklGRg==".into()),
                 )]),
             }],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }];
         let body = serialize_request(&options(messages), &profile()).expect("serialize");
         let content = body["input"][0]["content"]
@@ -871,7 +933,21 @@ mod tests {
 #[cfg(test)]
 mod round5_tests {
     use super::*;
-    use starriver_kernel::llm::{CallId, Message, MessageId, MessageRole};
+    use starriver_kernel::json::JsonValue;
+    use starriver_kernel::llm::{CallId, Message, MessageId, MessageRole, ToolSchema};
+
+    fn assistant(message: Vec<ContentBlock>) -> Message {
+        Message {
+            id: MessageId("m1".into()),
+            role: MessageRole::Assistant,
+            content: message,
+            source: starriver_kernel::llm::MessageSource::Model {
+                provider: "openai".into(),
+                model: "gpt-5".into(),
+                replay_state: None,
+            },
+        }
+    }
 
     fn profile() -> crate::ProviderProfile {
         crate::ProviderProfile {
@@ -913,7 +989,7 @@ mod round5_tests {
             id: MessageId("m1".into()),
             role: MessageRole::User,
             content,
-            source: starriver_kernel::llm::MessageSource::User,
+            source: starriver_kernel::llm::MessageSource::user(),
         }
     }
 
@@ -954,7 +1030,7 @@ mod round5_tests {
             id: MessageId("m1".into()),
             role: MessageRole::System,
             content: vec![ContentBlock::Text("Additional policy.".into())],
-            source: starriver_kernel::llm::MessageSource::User,
+            source: starriver_kernel::llm::MessageSource::user(),
         }];
         let body =
             serialize_request(&options(messages), &profile()).expect("serialize");
@@ -1060,5 +1136,174 @@ mod round5_tests {
         let mapped = map_usage(&usage);
         assert_eq!(mapped.input_tokens, 10);
         assert_eq!(mapped.cache_read_tokens, Some(90));
+    }
+
+    /// BUG-161: `store: false` never persists the rs_ ids we replay — the
+    /// encrypted content must be requested so it rides the items (codex-rs
+    /// parity).
+    #[test]
+    fn body_requests_encrypted_reasoning_content() {
+        let body = serialize_request(
+            &options(vec![user(vec![ContentBlock::Text("hi".into())])]),
+            &profile(),
+        )
+        .expect("serialize");
+        assert_eq!(body["store"], false);
+        assert_eq!(
+            body["include"],
+            serde_json::json!(["reasoning.encrypted_content"]),
+            "store:false must be paired with the encrypted-content include"
+        );
+    }
+
+    /// BUG-165: "off" is the kernel's disable marker and NOT a valid
+    /// Responses `reasoning.effort` — disabling means omitting the field.
+    #[test]
+    fn effort_off_omits_the_reasoning_parameter() {
+        let mut opts = options(vec![user(vec![ContentBlock::Text("hi".into())])]);
+        opts.reasoning_effort = Some("off".into());
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert!(
+            body.get("reasoning").is_none(),
+            "\"off\" must translate to omission, not an invalid effort value: {body}"
+        );
+
+        opts.reasoning_effort = Some("high".into());
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert_eq!(body["reasoning"]["effort"], "high");
+    }
+
+    /// BUG-171: the kernel tool-use policy rides the responses request.
+    #[test]
+    fn tool_choice_maps_to_the_responses_wire() {
+        let mut opts = options(vec![user(vec![ContentBlock::Text("hi".into())])]);
+        opts.tools = Some(vec![ToolSchema {
+            name: "bash".into(),
+            description: "Run a command".into(),
+            parameters: JsonValue::Object(vec![]),
+        }]);
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert_eq!(body["tool_choice"], "auto", "omitted policy → auto");
+
+        opts.tool_choice = Some(starriver_kernel::llm::ToolChoice::Any);
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert_eq!(body["tool_choice"], "required");
+
+        opts.tool_choice = Some(starriver_kernel::llm::ToolChoice::Tool {
+            name: "bash".into(),
+        });
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert_eq!(body["tool_choice"]["type"], "function");
+        assert_eq!(body["tool_choice"]["name"], "bash");
+    }
+
+    /// BUG-164: two reasoning items in one response (interleaved reasoning
+    /// models) must each close and each replay — the old single-slot index
+    /// dropped the first item's close and replayed a garbage partial.
+    #[test]
+    fn multiple_reasoning_items_each_close_and_replay() {
+        let mut t = ResponsesTranslator::new();
+        let mut chunks = Vec::new();
+        chunks.extend(t.feed(r#"{"type":"response.output_item.added","item":{"type":"reasoning","id":"rs_1"}}"#));
+        chunks.extend(t.feed(r#"{"type":"response.output_item.done","item":{"type":"reasoning","id":"rs_1","summary":[]}}"#));
+        chunks.extend(t.feed(r#"{"type":"response.output_item.added","item":{"type":"reasoning","id":"rs_2"}}"#));
+        chunks.extend(t.feed(r#"{"type":"response.output_item.done","item":{"type":"reasoning","id":"rs_2","summary":[]}}"#));
+        let items: Vec<&ContentBlock> = chunks
+            .iter()
+            .filter_map(|c| match c {
+                Ok(starriver_kernel::llm::StreamChunk::BlockEnd { block, .. }) => match block {
+                    ContentBlock::Custom { kind, payload } if kind == REASONING_ITEM_KIND => {
+                        Some(block)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(items.len(), 2, "both reasoning items must close: {chunks:#?}");
+        let ids: Vec<&str> = items
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Custom { payload, .. } => payload
+                    .get("id")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(ids, vec!["rs_1", "rs_2"], "closes pair with their own items");
+
+        // Replay side: both well-formed items ride the next request.
+        let opts = options(vec![assistant(vec![
+            ContentBlock::Custom {
+                kind: REASONING_ITEM_KIND.into(),
+                payload: JsonValue::from_json_str(
+                    r#"{"type":"reasoning","id":"rs_1","summary":[]}"#,
+                )
+                .unwrap(),
+            },
+            ContentBlock::Custom {
+                kind: REASONING_ITEM_KIND.into(),
+                payload: JsonValue::from_json_str(
+                    r#"{"type":"reasoning","id":"rs_2","summary":[]}"#,
+                )
+                .unwrap(),
+            },
+        ])]);
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        let replayed = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["type"] == "reasoning")
+            .count();
+        assert_eq!(replayed, 2, "both items must replay: {body}");
+    }
+
+    /// BUG-164 (BUG-53 parity): a proxy delivering only the done item must
+    /// still surface the call — the old code dropped it whole.
+    #[test]
+    fn function_call_done_without_added_surfaces_the_call() {
+        let mut t = ResponsesTranslator::new();
+        let chunks: Vec<_> = t
+            .feed(
+                r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_9","name":"bash","arguments":"{\"cmd\":\"ls\"}"}}"#,
+            )
+            .into_iter()
+            .chain(t.feed(r#"{"type":"response.completed","response":{"status":"completed"}}"#))
+            .collect();
+        let call = chunks.iter().find_map(|c| match c {
+            Ok(starriver_kernel::llm::StreamChunk::BlockEnd {
+                block: ContentBlock::ToolCall { id, name, .. },
+                ..
+            }) => Some((id.0.clone(), name.clone())),
+            _ => None,
+        });
+        let (id, name) = call.expect("done-only proxy must still surface the call");
+        assert_eq!(id, "call_9");
+        assert_eq!(name.as_deref(), Some("bash"));
+    }
+
+    /// BUG-164 replay guard: an unclosed capture (dead stream) assembles to
+    /// a raw partial without `type` — it must NOT ride the wire as an input
+    /// item.
+    #[test]
+    fn unclosed_reasoning_partial_is_not_replayed() {
+        let opts = options(vec![assistant(vec![ContentBlock::Custom {
+            kind: REASONING_ITEM_KIND.into(),
+            // Shape the kernel's raw_partial_payload produces: accumulated
+            // deltas, no `type`.
+            payload: JsonValue::from_json_str(r#"{"text":"partial thinking"}"#).unwrap(),
+        }])]);
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        let replayed = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.get("type").is_none() || item["type"] == "reasoning");
+        assert!(
+            !replayed,
+            "garbage partials must be filtered from replay: {body}"
+        );
     }
 }

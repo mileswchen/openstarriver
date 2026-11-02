@@ -1015,7 +1015,7 @@ mod tests {
             id: MessageId("m1".into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text("hi".into())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         };
         session
             .append_with(

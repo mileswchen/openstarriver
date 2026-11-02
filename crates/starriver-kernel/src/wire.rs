@@ -251,7 +251,15 @@ impl MessageSource {
     pub fn to_json(&self) -> Result<JsonValue, JsonValueError> {
         let mut entries = Vec::new();
         let tag = match self {
-            MessageSource::User => "user",
+            MessageSource::User { rpc_id } => {
+                // WI-216: the submitter's correlation id rides the durable
+                // message so the client can retire its optimistic echo.
+                // Old ledgers carry no rpcId — from_json tolerates absence.
+                if let Some(rpc_id) = rpc_id {
+                    entries.push(("rpcId".into(), JsonValue::String(rpc_id.clone())));
+                }
+                "user"
+            }
             MessageSource::Plugin { plugin, form } => {
                 entries.push(("plugin".into(), JsonValue::String(plugin.clone())));
                 if let Some(form) = form {
@@ -294,7 +302,12 @@ impl MessageSource {
     pub fn from_json(value: JsonValue) -> Result<MessageSource, JsonValueError> {
         let (tag, fields) = value.split_tag("kind").ok_or(JsonValueError::NotObject)?;
         match tag.as_str() {
-            "user" => Ok(MessageSource::User),
+            "user" => Ok(MessageSource::User {
+                rpc_id: fields
+                    .get("rpcId")
+                    .and_then(JsonValue::as_str)
+                    .map(str::to_string),
+            }),
             "plugin" => Ok(MessageSource::Plugin {
                 plugin: fields
                     .get("plugin")
@@ -826,7 +839,11 @@ mod tests {
     #[test]
     fn message_source_json_round_trip() {
         let cases = vec![
-            MessageSource::User,
+            MessageSource::user(),
+            // WI-216: the submitter correlation id rides the user source.
+            MessageSource::User {
+                rpc_id: Some("rpc-1".into()),
+            },
             MessageSource::Plugin {
                 plugin: "p".into(),
                 form: Some(ContextForm::Notice {
@@ -851,6 +868,54 @@ mod tests {
             let back = MessageSource::from_json(json).unwrap();
             assert_eq!(format!("{back:?}"), format!("{source:?}"));
         }
+    }
+
+    /// WI-216: legacy ledgers carry `{kind:"user"}` with no rpcId — they
+    /// parse back as `rpc_id: None`; new ledgers with a correlation id round
+    /// trip, and a correlation-less user source serializes WITHOUT the
+    /// rpcId key (wire stays identical to pre-WI-216 for host-generated
+    /// turns).
+    #[test]
+    fn user_source_rpc_id_wire_compat() {
+        // Legacy shape (no rpcId).
+        let legacy = JsonValue::Object(vec![(
+            "kind".into(),
+            JsonValue::String("user".into()),
+        )]);
+        let back = MessageSource::from_json(legacy).unwrap();
+        assert_eq!(
+            back,
+            MessageSource::User { rpc_id: None },
+            "legacy user source must parse as rpc_id: None"
+        );
+        // Correlation-less user source serializes exactly like the legacy wire.
+        let bare = MessageSource::user().to_json().unwrap();
+        match &bare {
+            JsonValue::Object(entries) => {
+                assert!(
+                    !entries.iter().any(|(k, _)| k == "rpcId"),
+                    "user source without a correlation id must not emit rpcId"
+                );
+            }
+            other => panic!("expected object, got {other:?}"),
+        }
+        // Correlated source keeps the id through a ledger round trip.
+        let message = Message {
+            id: MessageId("m-wi216".into()),
+            role: MessageRole::User,
+            content: vec![ContentBlock::Text("hello".into())],
+            source: MessageSource::User {
+                rpc_id: Some("rpc-abc".into()),
+            },
+        };
+        let json = message.to_json().unwrap();
+        let back = Message::from_json(json).unwrap();
+        assert_eq!(
+            back.source,
+            MessageSource::User {
+                rpc_id: Some("rpc-abc".into())
+            },
+        );
     }
 
     #[test]
@@ -943,7 +1008,7 @@ mod tests {
                 id: MessageId("m1".into()),
                 role: MessageRole::User,
                 content: vec![ContentBlock::Text("hello".into())],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             },
             Message {
                 id: MessageId("m2".into()),

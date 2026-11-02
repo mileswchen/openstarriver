@@ -6,12 +6,15 @@ pub mod wire;
 use std::sync::Arc;
 
 use cordis_rslite::{Context, EffectHandle, EventBus, Inject, Plugin};
+use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use starriver_kernel::llm::{
-    GenerateOptions, LlmAdapter, LlmError, LlmProviderInfo, LlmRuntime, RetryPolicy, StreamChunk,
+    GenerateOptions, LlmAdapter, LlmError, LlmModelContext, LlmProviderInfo, LlmReasoningEffortInfo,
+    LlmReasoningInfo, LlmResolvedModelInfo, LlmRuntime, RetryPolicy, StreamChunk,
 };
 use starriver_llm::InMemoryLlmRuntime;
+use tokio_util::sync::CancellationToken;
 
 pub struct AnthropicAdapter {
     provider: String,
@@ -20,6 +23,15 @@ pub struct AnthropicAdapter {
     credential_resolver: Option<CredentialResolver>,
     client: reqwest::Client,
     idle_timeout_ms: u64,
+    /// Route-level default reasoning effort (BUG-163): advertises the
+    /// {off,low,high,max} vocabulary through `resolve_model` and seeds the
+    /// thinking budget ladder when the caller leaves the effort unset.
+    reasoning_effort: Option<String>,
+    /// Route-level model defaults (BUG-168): without a model directory the
+    /// resolved info carried no context window and no output cap, leaving
+    /// compaction budgeting and `max_tokens` fallbacks blind.
+    context_window: Option<u64>,
+    max_tokens: Option<u64>,
 }
 
 /// Credential reference for one Anthropic route: a literal key, an
@@ -127,6 +139,9 @@ impl AnthropicAdapter {
             credential_resolver: None,
             client: reqwest::Client::new(),
             idle_timeout_ms: 300_000,
+            reasoning_effort: None,
+            context_window: None,
+            max_tokens: None,
         }
     }
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
@@ -139,6 +154,22 @@ impl AnthropicAdapter {
     }
     pub fn with_credential_resolver(mut self, resolver: CredentialResolver) -> Self {
         self.credential_resolver = Some(resolver);
+        self
+    }
+    /// BUG-163: route-level reasoning default; the host applies the user's
+    /// per-agent override here.
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+    /// BUG-168: route-level model defaults from provider settings.
+    pub fn with_model_defaults(
+        mut self,
+        context_window: Option<u64>,
+        max_tokens: Option<u64>,
+    ) -> Self {
+        self.context_window = context_window;
+        self.max_tokens = max_tokens;
         self
     }
 
@@ -172,6 +203,47 @@ impl LlmAdapter for AnthropicAdapter {
         None
     }
 
+    /// BUG-163/BUG-168: exact-model metadata with the route's reasoning
+    /// vocabulary and model defaults. Without this the adapter fell back to
+    /// `reasoning: None`, so (a) an explicit caller effort was rejected with
+    /// UNSUPPORTED_REASONING_EFFORT by `resolve_with_model_info`, and (b)
+    /// context-window/output-cap budgeting saw nothing.
+    fn resolve_model(
+        &self,
+        _provider: &str,
+        model: &str,
+        _cancellation: Option<CancellationToken>,
+    ) -> BoxFuture<'static, Result<LlmResolvedModelInfo, LlmError>> {
+        let provider = self.provider.clone();
+        let reasoning = self.reasoning_effort.clone();
+        let context_window = self.context_window;
+        let max_tokens = self.max_tokens;
+        let model = model.to_string();
+        Box::pin(async move {
+            Ok(LlmResolvedModelInfo {
+                provider,
+                id: model.clone(),
+                name: model,
+                description: None,
+                input_modalities: None,
+                context: context_window
+                    .map(|context_window| LlmModelContext { context_window }),
+                default_max_tokens: max_tokens,
+                reasoning: reasoning.map(|default_effort| LlmReasoningInfo {
+                    efforts: ["off", "low", "high", "max"]
+                        .into_iter()
+                        .map(|id| LlmReasoningEffortInfo {
+                            id: id.into(),
+                            name: id.into(),
+                            description: None,
+                        })
+                        .collect(),
+                    default_effort: (default_effort != "off").then(|| default_effort),
+                }),
+            })
+        })
+    }
+
     fn stream(
         &self,
         options: GenerateOptions,
@@ -193,7 +265,7 @@ impl LlmAdapter for AnthropicAdapter {
                 Ok(body) => body,
                 Err(e) => { yield Err(e); return; }
             };
-            let url = format!("{}/v1/messages", base_url);
+            let url = messages_url(&base_url);
             let response = match client.post(&url)
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01")
@@ -204,8 +276,39 @@ impl LlmAdapter for AnthropicAdapter {
             };
             let status = response.status().as_u16();
             if status >= 400 {
+                // BUG-167: the provider-advised backoff window and request id
+                // must be read off the headers BEFORE the body consumes the
+                // response (parity with the OpenAI adapter).
+                let retry_after = wire::parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+                let request_id = wire::parse_request_id(response.headers());
                 let body_text = response.text().await.unwrap_or_default();
-                yield Err(LlmError::Call { code: wire::normalize_status_body(status, &body_text).into(), message: body_text.lines().next().unwrap_or_default().to_string(), status: Some(status), provider_retry_after_ms: None, request_id: None });
+                // Undeclared (`supports_vision: null`) models let the provider
+                // arbitrate images. When the verdict is the GLM 1210 image
+                // rejection, classify it under the same UNSUPPORTED_CONTENT
+                // contract a declared text-only route enforces at assembly,
+                // with the remedy attached — a bare INVALID_REQUEST 400 gives
+                // the user nothing actionable (2026-11-01: mid-session model
+                // switch to glm-5.3 in an image-bearing session).
+                let image_rejected = wire::unsupported_image_rejection(status, &body_text);
+                yield Err(LlmError::Call {
+                    code: if image_rejected {
+                        "UNSUPPORTED_CONTENT".into()
+                    } else {
+                        wire::normalize_status_body(status, &body_text).into()
+                    },
+                    message: if image_rejected {
+                        format!(
+                            "{}\n模型 \"{}\" 的端点不接受图片输入（provider 1210：messages.content.type 仅接受 text）；请将该模型声明为纯文本（supports_vision: false）、改用支持视觉的模型（如 glm-5.3-flash），或移除会话中的图片。",
+                            body_text.lines().next().unwrap_or_default(),
+                            options.model,
+                        )
+                    } else {
+                        body_text.lines().next().unwrap_or_default().to_string()
+                    },
+                    status: Some(status),
+                    provider_retry_after_ms: retry_after,
+                    request_id,
+                });
                 return;
             }
             let mut translator = wire::SseTranslator::new();
@@ -214,11 +317,22 @@ impl LlmAdapter for AnthropicAdapter {
             // multi-byte UTF-8 char split across chunks would otherwise be
             // corrupted (frame separators are pure ASCII).
             let mut buf: Vec<u8> = Vec::new();
+            // Cancel rides the select (parity with the OpenAI adapter): the
+            // old loop-top poll only ran between chunk yields, so a Stop
+            // pressed while the endpoint had gone silent waited out the whole
+            // idle window before the abort surfaced (2026-11-01 session
+            // a806fe8c: silence from a stalled zhipu Anthropic stream, Stop
+            // at +14s, adapter still parked).
+            let mut cancel_check = std::pin::pin!(async {
+                if let Some(ref t) = cancel { t.cancelled().await; }
+                else { std::future::pending::<()>().await; }
+            });
+            let cancel_check_active = cancel.is_some();
             loop {
-                if cancel.as_ref().is_some_and(|t| t.is_cancelled()) { yield Err(aborted()); return; }
                 let next = byte_stream.next();
                 tokio::pin!(next);
                 let frame = tokio::select! {
+                    _ = &mut cancel_check, if cancel_check_active => { yield Err(aborted()); return; }
                     r = tokio::time::timeout(idle, &mut next) => match r {
                         Err(_) => { yield Err(idle_timeout(idle)); return; }
                         Ok(None) => break,
@@ -280,6 +394,20 @@ fn aborted() -> LlmError {
         request_id: None,
     }
 }
+
+/// BUG-169: build the Messages endpoint. OpenAI-family routes expect the
+/// `/v1` prefix INSIDE `base_url` while this adapter used to append
+/// `/v1/messages` unconditionally — copying an OpenAI-style base
+/// (`https://host/v1`) produced `/v1/v1/messages` 404s. A base already
+/// ending in `/v1` now only appends `/messages`.
+fn messages_url(base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    if base.ends_with("/v1") {
+        format!("{base}/messages")
+    } else {
+        format!("{base}/v1/messages")
+    }
+}
 fn idle_timeout(d: std::time::Duration) -> LlmError {
     LlmError::Call {
         code: "LLM_STREAM_IDLE_TIMEOUT".into(),
@@ -337,7 +465,7 @@ mod tests {
                         id: starriver_kernel::llm::MessageId("m1".into()),
                         role: starriver_kernel::llm::MessageRole::User,
                         content: vec![starriver_kernel::llm::ContentBlock::Text("hi".into())],
-                        source: starriver_kernel::llm::MessageSource::User,
+                        source: starriver_kernel::llm::MessageSource::user(),
                     }],
                     system: None,
                     tools: None,
@@ -367,5 +495,57 @@ mod tests {
         let plugin = AnthropicPlugin::new(Arc::new(Vec::new));
         assert_eq!(plugin.name(), "llm-anthropic");
         assert!(plugin.inject().contains("llm"));
+    }
+
+    // ── BUG-169: /v1 base normalization ───────────────────────────────
+
+    #[test]
+    fn messages_url_normalizes_v1_suffix() {
+        assert_eq!(
+            messages_url("https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            messages_url("https://relay.example.com/v1"),
+            "https://relay.example.com/v1/messages",
+            "a base already carrying /v1 must not duplicate it"
+        );
+        assert_eq!(
+            messages_url("https://relay.example.com/v1/"),
+            "https://relay.example.com/v1/messages",
+            "trailing slashes are trimmed before the check"
+        );
+    }
+
+    // ── BUG-163/BUG-168: reasoning + model defaults in resolve_model ──
+
+    #[tokio::test]
+    async fn resolve_model_advertises_reasoning_and_defaults() {
+        let adapter = AnthropicAdapter::new(
+            "claude".into(),
+            "https://api.example.com".into(),
+            Some(CredentialRef::Literal("k".into())),
+        )
+        .with_reasoning_effort(Some("high".into()))
+        .with_model_defaults(Some(200_000), Some(8_192));
+        let info = adapter.resolve_model("claude", "claude-sonnet-4", None).await.unwrap();
+        assert_eq!(info.context.unwrap().context_window, 200_000);
+        assert_eq!(info.default_max_tokens, Some(8_192));
+        let reasoning = info.reasoning.expect("reasoning capability advertised");
+        assert_eq!(reasoning.default_effort.as_deref(), Some("high"));
+        assert!(reasoning.efforts.iter().any(|e| e.id == "off"));
+        assert!(reasoning.efforts.iter().any(|e| e.id == "max"));
+    }
+
+    #[tokio::test]
+    async fn resolve_model_without_reasoning_default_advertises_none() {
+        let adapter = AnthropicAdapter::new(
+            "claude".into(),
+            "https://api.example.com".into(),
+            Some(CredentialRef::Literal("k".into())),
+        );
+        let info = adapter.resolve_model("claude", "claude-sonnet-4", None).await.unwrap();
+        assert!(info.reasoning.is_none(), "no route default → no advertised efforts");
+        assert!(info.context.is_none());
     }
 }

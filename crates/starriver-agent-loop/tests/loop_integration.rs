@@ -26,7 +26,7 @@ fn message(text: &str) -> starriver_kernel::llm::Message {
         id: starriver_kernel::llm::MessageId(text.into()),
         role: starriver_kernel::llm::MessageRole::User,
         content: vec![starriver_kernel::llm::ContentBlock::Text(text.into())],
-        source: starriver_kernel::llm::MessageSource::User,
+        source: starriver_kernel::llm::MessageSource::user(),
     }
 }
 

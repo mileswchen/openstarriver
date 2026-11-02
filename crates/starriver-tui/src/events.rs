@@ -218,6 +218,9 @@ impl EventRenderer {
             // transcript line — the app-state match re-arms the run state and
             // the follow-up's deltas render as usual.
             UiEvent::TaskStarted { .. } => {}
+            // WI-216 reconciliation receipt: internal echo bookkeeping, never
+            // a transcript line.
+            UiEvent::UserMessageCommitted { .. } => {}
             UiEvent::AssistantText { text, .. } => {
                 let line = text.clone();
                 if !line.trim().is_empty() {

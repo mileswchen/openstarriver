@@ -30,7 +30,7 @@ fn options() -> GenerateOptions {
             id: MessageId("m1".into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text("hi".into())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }],
         system: None,
         tools: None,

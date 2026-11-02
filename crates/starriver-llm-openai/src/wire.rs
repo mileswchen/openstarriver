@@ -8,7 +8,7 @@
 //! admission → inline data-URL projection).
 
 use starriver_kernel::json::JsonValue;
-use starriver_kernel::llm::{CallPurpose, ContentBlock, GenerateOptions, LlmError, MessageRole};
+use starriver_kernel::llm::{CallPurpose, ContentBlock, GenerateOptions, LlmError, MessageRole, ToolChoice};
 
 use crate::ProviderProfile;
 
@@ -141,6 +141,15 @@ pub fn serialize_request(
     });
 
     let (thinking, reasoning_effort) = resolve_thinking(options, profile)?;
+    // BUG-166: `thinking` is a zhipu/GLM dialect extension — the official
+    // OpenAI endpoint rejects unknown request arguments outright. There,
+    // `reasoning_effort` alone is the native control, so the dialect field
+    // is suppressed; every other endpoint keeps the current behavior.
+    let thinking = if is_official_openai_base(&profile.base_url) {
+        None
+    } else {
+        thinking
+    };
     if let Some(thinking) = thinking {
         body["thinking"] = serde_json::json!({"type": thinking});
     }
@@ -170,6 +179,16 @@ pub fn serialize_request(
                 })
                 .collect();
             body["tools"] = serde_json::json!(wire_tools);
+            // BUG-171: the kernel tool-use policy rides the request
+            // (anthropic parity) — omitted-but-tooled stays `auto`.
+            body["tool_choice"] = match options.tool_choice.as_ref() {
+                None | Some(ToolChoice::Auto) => serde_json::json!("auto"),
+                Some(ToolChoice::Any) => serde_json::json!("required"),
+                Some(ToolChoice::Tool { name }) => serde_json::json!({
+                    "type": "function",
+                    "function": {"name": name},
+                }),
+            };
         }
     }
     if let Some(stop) = &options.stop {
@@ -212,6 +231,16 @@ pub(crate) fn collect_image_urls(blocks: &[ContentBlock]) -> Result<Vec<String>,
         }
     }
     Ok(urls)
+}
+
+/// BUG-166: does this base URL point at the official OpenAI API host? Only
+/// the exact `api.openai.com` host counts — relays and proxies (even ones
+/// proxying OpenAI) keep the dialect extensions.
+fn is_official_openai_base(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.eq_ignore_ascii_case("api.openai.com")))
+        .unwrap_or(false)
 }
 
 /// Resolve adapter-level thinking mode and reasoning effort, mirroring
@@ -318,13 +347,36 @@ pub fn parse_retry_after(header: Option<&reqwest::header::HeaderValue>) -> Optio
 /// mirroring requestId propagation.
 pub fn parse_request_id(headers: &reqwest::header::HeaderMap) -> Option<String> {
     const NAMES: [&str; 3] = ["x-request-id", "x-amzn-requestid", "x-amz-request-id"];
+    // NB: `?` inside the loop would return on the FIRST absent header and
+    // make the fallback names dead code — check each candidate explicitly.
     for name in NAMES {
-        let value = headers.get(name)?.to_str().ok()?.trim();
-        if !value.is_empty() {
+        if let Some(value) = headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
             return Some(value.to_string());
         }
     }
     None
+}
+
+/// Zhipu/bigmodel coding relay: a request that carries image content parts to
+/// a model the endpoint serves TEXT-ONLY is answered
+/// `400 {"error":{"code":"1210","message":"messages.content.type 参数非法，取值
+/// 范围 ['text']"}}` (observed live 2026-11-01: `glm-5.3` on
+/// `/api/coding/paas/v4` rejects `image_url` parts; `glm-5.3-flash` accepts
+/// the same request). Undeclared (`supports_vision: null`) models let the
+/// provider arbitrate images — this recognizer is what its verdict looks
+/// like, so the adapter can surface the capability problem and remedy
+/// instead of a bare 400. Scoped tight to the 1210 shape to avoid
+/// reclassifying unrelated 400s.
+pub fn unsupported_image_rejection(status: u16, body: &str) -> bool {
+    status == 400
+        && body.contains("\"code\":\"1210\"")
+        && body.contains("messages.content.type")
+        && body.contains("['text']")
 }
 
 pub fn normalize_status(status: u16, body: &str) -> &'static str {
@@ -363,6 +415,23 @@ mod tests {
         CallId, CallPurpose, ContentBlock, GenerateOptions, Message, MessageId, MessageRole,
         MessageSource, ToolSchema,
     };
+
+    #[test]
+    fn glm_1210_image_rejection_is_recognized() {
+        // Exact body observed live (2026-11-01, glm-5.3 @ coding relay).
+        let body = r#"{"error":{"code":"1210","message":"messages.content.type 参数非法，取值范围 ['text']"}}"#;
+        assert!(unsupported_image_rejection(400, body));
+        // Scoped: other 400 bodies, other codes, missing markers → no match.
+        assert!(!unsupported_image_rejection(
+            400,
+            r#"{"error":{"code":"1210","message":"参数非法"}}"#
+        ));
+        assert!(!unsupported_image_rejection(429, body));
+        assert!(!unsupported_image_rejection(
+            400,
+            r#"{"error":{"code":"1301","message":"内容敏感"}}"#
+        ));
+    }
 
     /// BUG-102: a 429 announcing billing/quota exhaustion is QUOTA_EXHAUSTED
     /// (non-retryable), not RATE_LIMIT.
@@ -579,7 +648,7 @@ mod tests {
                     )]),
                 },
             ],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         };
 
         let body = serialize_request(&options(vec![message]), &profile()).expect("serialize");
@@ -607,7 +676,7 @@ mod tests {
                     JsonValue::String("sha256:abc".into()),
                 )]),
             }],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         };
         let err = serialize_request(&options(vec![message]), &profile())
             .expect_err("attachment without url must fail");
@@ -750,7 +819,7 @@ mod round5_tests {
             id: MessageId("m1".into()),
             role: MessageRole::User,
             content,
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }
     }
 
@@ -815,5 +884,81 @@ mod round5_tests {
             text.contains("note\n\ngo on") || text.contains("note\ngo on") || text.contains("note go on"),
             "text blocks must not concatenate bare (got {text:?})"
         );
+    }
+
+    /// BUG-166: `thinking` is a zhipu/GLM dialect extension — the official
+    /// OpenAI endpoint rejects unknown request arguments. On api.openai.com
+    /// the native `reasoning_effort` alone must ride the request; every
+    /// other endpoint keeps the dialect field (zhipu/deepseek rely on it).
+    #[test]
+    fn official_openai_base_suppresses_the_thinking_dialect() {
+        let mut opts = options(vec![user_message(vec![ContentBlock::Text("hi".into())])]);
+        opts.reasoning_effort = Some("high".into());
+
+        let mut official = profile();
+        official.base_url = "https://api.openai.com/v1".into();
+        let body = serialize_request(&opts, &official).expect("serialize");
+        assert!(
+            body.get("thinking").is_none(),
+            "the official endpoint must not see the dialect field: {body}"
+        );
+        assert_eq!(body["reasoning_effort"], "high");
+
+        // Case-insensitive host match, arbitrary scheme/port shapes.
+        let mut official = profile();
+        official.base_url = "https://API.OpenAI.com/v1".into();
+        let body = serialize_request(&opts, &official).expect("serialize");
+        assert!(body.get("thinking").is_none());
+
+        // Non-official bases keep the dialect (regression guard for the
+        // zhipu/deepseek chain).
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["reasoning_effort"], "high");
+    }
+
+    /// BUG-171: the kernel tool-use policy rides the completions request
+    /// (anthropic parity).
+    #[test]
+    fn tool_choice_maps_to_the_completions_wire() {
+        let mut opts = options(vec![user_message(vec![ContentBlock::Text("hi".into())])]);
+        opts.tools = Some(vec![starriver_kernel::llm::ToolSchema {
+            name: "bash".into(),
+            description: "Run a command".into(),
+            parameters: JsonValue::Object(vec![]),
+        }]);
+
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert_eq!(body["tool_choice"], "auto", "omitted policy → auto");
+
+        opts.tool_choice = Some(starriver_kernel::llm::ToolChoice::Any);
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert_eq!(body["tool_choice"], "required");
+
+        opts.tool_choice = Some(starriver_kernel::llm::ToolChoice::Tool {
+            name: "bash".into(),
+        });
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert_eq!(body["tool_choice"]["type"], "function");
+        assert_eq!(body["tool_choice"]["function"]["name"], "bash");
+
+        // Without tools the field stays absent (matching the tools branch).
+        opts.tools = None;
+        let body = serialize_request(&opts, &profile()).expect("serialize");
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    /// The request-id parser must fall through candidate names — the old
+    /// `?`-in-loop returned None on the first absent header.
+    #[test]
+    fn request_id_falls_through_candidate_names() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-amz-request-id", "amz_7".parse().unwrap());
+        assert_eq!(
+            parse_request_id(&headers).as_deref(),
+            Some("amz_7"),
+            "late candidates must still be found"
+        );
+        assert_eq!(parse_request_id(&reqwest::header::HeaderMap::new()), None);
     }
 }

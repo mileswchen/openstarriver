@@ -2641,7 +2641,7 @@ mod projection_tests {
                         ]),
                     },
                 ],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             }),
             meta: None,
         };
@@ -2660,7 +2660,7 @@ mod projection_tests {
                         JsonValue::String("data:image/png;base64,AAAA".into()),
                     )]),
                 }],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             }),
             meta: None,
         };
@@ -2687,7 +2687,7 @@ mod projection_tests {
                 id: MessageId("m".into()),
                 role: MessageRole::User,
                 content: vec![ContentBlock::Text("task".into())],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             }),
             meta: None,
         }
@@ -2746,7 +2746,7 @@ mod projection_tests {
                     content: vec![ContentBlock::Text(text.into())],
                     is_error,
                 }],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             }),
             meta: None,
         }
@@ -2780,7 +2780,7 @@ mod projection_tests {
                 id: MessageId("m".into()),
                 role: MessageRole::User,
                 content: vec![ContentBlock::Text(text.into())],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             }),
             meta: None,
         }
@@ -2987,7 +2987,7 @@ mod projection_tests {
                     content: vec![ContentBlock::Text("out".into())],
                     is_error: false,
                 }],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             }),
             meta: Some(SurfaceMeta {
                 turn: Some(1),

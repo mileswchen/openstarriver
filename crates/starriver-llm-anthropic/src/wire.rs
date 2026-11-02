@@ -15,6 +15,38 @@ use starriver_kernel::llm::{
 /// altered.
 pub const THINKING_BLOCK_KIND: &str = "anthropic.thinking_block";
 
+/// Output cap when the caller leaves `max_tokens` unset — the Messages API
+/// requires the field (BUG-168: named now that the thinking budget
+/// interacts with it).
+pub const DEFAULT_MAX_TOKENS: u64 = 4096;
+
+/// Headroom kept above the thinking budget when the cap has to be raised:
+/// the Messages API requires `max_tokens > thinking.budget_tokens`.
+const THINKING_MARGIN_TOKENS: u64 = 2048;
+
+/// Map the caller's reasoning effort to an extended-thinking budget
+/// (BUG-163): Claude extended thinking must be requested explicitly, and the
+/// capture/replay seam below already round-trips thinking blocks — but
+/// nothing ever ENABLED them, so a configured effort silently no-opped.
+/// `None`/`"off"` leave thinking to the provider default (zhipu-style
+/// anthropic-compat relays think by default and still round-trip fine).
+fn thinking_budget(effort: Option<&str>) -> Result<Option<u64>, LlmError> {
+    let invalid = |value: &str| LlmError::Call {
+        code: "UNSUPPORTED_REASONING_EFFORT".into(),
+        message: format!("Anthropic route does not support reasoning effort \"{value}\""),
+        status: None,
+        provider_retry_after_ms: None,
+        request_id: None,
+    };
+    match effort {
+        None | Some("off") | Some("") => Ok(None),
+        Some("low") => Ok(Some(2_048)),
+        Some("high") => Ok(Some(8_192)),
+        Some("max") => Ok(Some(16_384)),
+        Some(other) => Err(invalid(other)),
+    }
+}
+
 pub fn client() -> reqwest::Client {
     reqwest::Client::new()
 }
@@ -51,6 +83,28 @@ pub fn serialize_request(options: &GenerateOptions) -> Result<serde_json::Value,
             }
         }
     }
+    // BUG-170: the Messages API requires the FIRST message to carry the
+    // user role, and strict anthropic-compat gateways enforce full role
+    // alternation (the official endpoint folds consecutive same-role turns
+    // server-side; a replayed/imported session can still start on an
+    // assistant turn or carry adjacent same-role turns). Normalize here.
+    let messages = merge_consecutive_roles(messages);
+    let messages = if matches!(
+        messages
+            .first()
+            .and_then(|m| m.get("role"))
+            .and_then(|r| r.as_str()),
+        Some("assistant")
+    ) {
+        let mut seeded = vec![serde_json::json!({
+            "role": "user",
+            "content": "(session start)",
+        })];
+        seeded.extend(messages);
+        seeded
+    } else {
+        messages
+    };
     let mut tools = Vec::new();
     for schema in options.tools.iter().flatten() {
         tools.push(serde_json::json!({
@@ -59,12 +113,25 @@ pub fn serialize_request(options: &GenerateOptions) -> Result<serde_json::Value,
             "input_schema": json_to_serde(&schema.parameters),
         }));
     }
+    // BUG-163: an explicit effort enables extended thinking with a budget
+    // ladder; `max_tokens` must strictly exceed the budget, so a caller cap
+    // at/below it is raised with headroom.
+    let mut max_tokens = options.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    let thinking = thinking_budget(options.reasoning_effort.as_deref())?;
+    if let Some(budget) = thinking {
+        if max_tokens <= budget {
+            max_tokens = budget + THINKING_MARGIN_TOKENS;
+        }
+    }
     let mut body = serde_json::json!({
         "model": options.model,
         "messages": messages,
-        "max_tokens": options.max_tokens.unwrap_or(4096),
+        "max_tokens": max_tokens,
         "stream": true,
     });
+    if let Some(budget) = thinking {
+        body["thinking"] = serde_json::json!({"type": "enabled", "budget_tokens": budget});
+    }
     match system_segments.len() {
         0 => {}
         1 => {
@@ -143,11 +210,39 @@ fn user_content(blocks: &[ContentBlock]) -> Result<Option<serde_json::Value>, Ll
                 is_error,
             } => {
                 let output = text_of(content);
+                // BUG-172: tool results may carry image blocks
+                // (screenshot-class tools); tool_result accepts a content
+                // array — text-only output stays a plain string for wire
+                // compatibility.
+                let images: Vec<&JsonValue> = content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Image { attachment } => Some(attachment),
+                        _ => None,
+                    })
+                    .collect();
                 let mut part = serde_json::json!({
                     "type": "tool_result",
                     "tool_use_id": call_id.0.clone(),
                 });
-                if !output.is_empty() {
+                if !images.is_empty() {
+                    let mut tool_parts = Vec::new();
+                    if !output.is_empty() {
+                        tool_parts.push(serde_json::json!({"type": "text", "text": output}));
+                    }
+                    for attachment in images {
+                        let (media_type, data) = base64_image_source(attachment)?;
+                        tool_parts.push(serde_json::json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": data,
+                            },
+                        }));
+                    }
+                    part["content"] = serde_json::Value::Array(tool_parts);
+                } else if !output.is_empty() {
                     part["content"] = serde_json::json!(output);
                 }
                 if *is_error {
@@ -159,6 +254,40 @@ fn user_content(blocks: &[ContentBlock]) -> Result<Option<serde_json::Value>, Ll
         }
     }
     Ok(Some(serde_json::Value::Array(parts)))
+}
+
+/// BUG-170: fold adjacent same-role wire turns into one (content arrays are
+/// concatenated; a plain string content becomes a text block). Purely
+/// additive normalization — the official API merges these server-side
+/// anyway, and strict alternation gateways require it.
+fn merge_consecutive_roles(messages: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let to_blocks = |content: serde_json::Value| -> Vec<serde_json::Value> {
+        match content {
+            serde_json::Value::Array(parts) => parts,
+            serde_json::Value::String(text) => {
+                vec![serde_json::json!({"type": "text", "text": text})]
+            }
+            _ => Vec::new(),
+        }
+    };
+    let mut merged: Vec<serde_json::Value> = Vec::new();
+    for message in messages {
+        let role = message.get("role").cloned();
+        let adjacent = merged
+            .last_mut()
+            .filter(|last| last.get("role").cloned() == role);
+        match adjacent {
+            Some(last) => {
+                let mut parts = to_blocks(last.get("content").cloned().unwrap_or_default());
+                parts.extend(to_blocks(
+                    message.get("content").cloned().unwrap_or_default(),
+                ));
+                last["content"] = serde_json::Value::Array(parts);
+            }
+            None => merged.push(message),
+        }
+    }
+    merged
 }
 
 /// Split one Image block's attachment into `(media_type, base64)`. The
@@ -268,8 +397,59 @@ fn text_of(blocks: &[starriver_kernel::llm::ContentBlock]) -> String {
         .join("\n")
 }
 
+/// Zhipu/bigmodel coding relay: a request that carries image content parts to
+/// a model the endpoint serves TEXT-ONLY is answered
+/// `400 {"error":{"code":"1210","message":"messages.content.type 参数非法，取值
+/// 范围 ['text']"}}` (observed live 2026-11-01: `glm-5.3` on
+/// `/api/coding/paas/v4` rejects `image_url` parts; `glm-5.3-flash` accepts
+/// the same request). Undeclared (`supports_vision: null`) models let the
+/// provider arbitrate images — this recognizer is what its verdict looks
+/// like, so the adapter can surface the capability problem and remedy
+/// instead of a bare 400. Scoped tight to the 1210 shape to avoid
+/// reclassifying unrelated 400s.
+pub fn unsupported_image_rejection(status: u16, body: &str) -> bool {
+    status == 400
+        && body.contains("\"code\":\"1210\"")
+        && body.contains("messages.content.type")
+        && body.contains("['text']")
+}
+
 pub fn normalize_status(status: u16) -> &'static str {
     normalize_status_body(status, "")
+}
+
+/// BUG-167: parse a `Retry-After` response header (seconds → milliseconds);
+/// parity with the OpenAI adapter so a provider-advised backoff window is
+/// not discarded.
+pub fn parse_retry_after(header: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
+    let value = header?.to_str().ok()?;
+    let seconds: u64 = value.trim().parse().ok()?;
+    Some(seconds * 1_000)
+}
+
+/// BUG-167: pull the provider request id from the conventional response
+/// headers (Anthropic uses `request-id`; the AWS-style variants ride some
+/// relays) so error reports reconcile against the provider log.
+pub fn parse_request_id(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    const NAMES: [&str; 4] = [
+        "request-id",
+        "x-request-id",
+        "x-amzn-requestid",
+        "x-amz-request-id",
+    ];
+    // NB: `?` inside the loop would return on the FIRST absent header and
+    // make the fallback names dead code — check each candidate explicitly.
+    for name in NAMES {
+        if let Some(value) = headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 /// WI-9: body-aware classification so a confirmed context-window overflow
@@ -299,6 +479,21 @@ pub fn normalize_status_body(status: u16, body: &str) -> &'static str {
         }
         s if (500..600).contains(&s) => "SERVER",
         _ => "HTTP_ERROR",
+    }
+}
+
+/// Map a provider stream-error type to the kernel error-code vocabulary
+/// (BUG-162): these join the same retry classification the HTTP-status path
+/// produces, so `overloaded_error` remains retryable SERVER and quota/auth
+/// failures stay non-retryable.
+fn stream_error_code(kind: &str) -> &'static str {
+    match kind {
+        "overloaded_error" | "api_error" => "SERVER",
+        "timeout_error" => "TIMEOUT",
+        "rate_limit_error" => "RATE_LIMIT",
+        "authentication_error" | "permission_error" => "AUTH",
+        "invalid_request_error" => "INVALID_REQUEST",
+        _ => "SERVER",
     }
 }
 
@@ -567,6 +762,30 @@ impl SseTranslator {
                     });
                 }
             }
+            "error" => {
+                // BUG-162: a documented mid-stream error event
+                // (overloaded_error, api_error, …) must surface as an error
+                // carrying its provider type — the old `_ => {}` arm
+                // swallowed it and the turn ended as a bare
+                // PROVIDER_STREAM_TRUNCATED with the real cause lost.
+                let error = v.get("error").cloned().unwrap_or(serde_json::Value::Null);
+                let kind = error
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("api_error");
+                let message = error
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("stream error");
+                self.done = true;
+                out.push(Err(LlmError::Call {
+                    code: stream_error_code(kind).into(),
+                    message: format!("stream error event {kind}: {message}"),
+                    status: None,
+                    provider_retry_after_ms: None,
+                    request_id: None,
+                }));
+            }
             "message_stop" => {
                 self.done = true;
                 let reason = self
@@ -698,6 +917,23 @@ mod tests {
     use super::*;
     use starriver_kernel::llm::{GenerateOptions, Message, MessageId, MessageRole, MessageSource};
 
+    #[test]
+    fn glm_1210_image_rejection_is_recognized() {
+        // Exact body observed live (2026-11-01, glm-5.3 @ coding relay).
+        let body = r#"{"error":{"code":"1210","message":"messages.content.type 参数非法，取值范围 ['text']"}}"#;
+        assert!(unsupported_image_rejection(400, body));
+        // Scoped: other 400 bodies, other codes, missing markers → no match.
+        assert!(!unsupported_image_rejection(
+            400,
+            r#"{"error":{"code":"1210","message":"参数非法"}}"#
+        ));
+        assert!(!unsupported_image_rejection(429, body));
+        assert!(!unsupported_image_rejection(
+            400,
+            r#"{"error":{"code":"1301","message":"内容敏感"}}"#
+        ));
+    }
+
     fn options() -> GenerateOptions {
         GenerateOptions {
             provider: "anthropic".into(),
@@ -707,7 +943,7 @@ mod tests {
                 id: MessageId("m1".into()),
                 role: MessageRole::User,
                 content: vec![ContentBlock::Text("hello".into())],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             }],
             system: Some("You are helpful.".into()),
             tools: None,
@@ -1012,18 +1248,34 @@ mod tests {
     #[test]
     fn plain_assistant_text_stays_a_string() {
         let mut opts = options();
-        opts.messages = vec![Message {
-            id: MessageId("m2".into()),
-            role: MessageRole::Assistant,
-            content: vec![ContentBlock::Text("done".into())],
-            source: MessageSource::Model {
-                provider: "anthropic".into(),
-                model: "claude-sonnet-4".into(),
-                replay_state: None,
+        opts.messages = vec![
+            Message {
+                id: MessageId("m1".into()),
+                role: MessageRole::User,
+                content: vec![ContentBlock::Text("go".into())],
+                source: MessageSource::user(),
             },
-        }];
+            Message {
+                id: MessageId("m2".into()),
+                role: MessageRole::Assistant,
+                content: vec![ContentBlock::Text("done".into())],
+                source: MessageSource::Model {
+                    provider: "anthropic".into(),
+                    model: "claude-sonnet-4".into(),
+                    replay_state: None,
+                },
+            },
+        ];
         let body = serialize_request(&opts).expect("serialize");
-        assert_eq!(body["messages"][0]["content"], "done");
+        // BUG-170: an assistant-first history is seeded with a user turn, so
+        // index by role rather than position.
+        let assistant = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .expect("assistant turn present");
+        assert_eq!(assistant["content"], "done");
     }
 
     #[test]
@@ -1072,7 +1324,7 @@ mod tests {
                     )]),
                 },
             ],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }];
         let body = serialize_request(&opts).expect("serialize");
         let user = &body["messages"][0];
@@ -1093,7 +1345,7 @@ mod tests {
             id: MessageId("m1".into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Image { attachment }],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         };
         for attachment in [
             // No url at all.
@@ -1174,7 +1426,7 @@ mod tests {
                 id: MessageId("m0".into()),
                 role: MessageRole::System,
                 content: vec![ContentBlock::Text("Additional policy.".into())],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             },
         );
         let body = serialize_request(&opts).expect("serialize");
@@ -1269,8 +1521,208 @@ mod tests {
         }];
         let body = serialize_request(&opts).expect("serialize");
         let msgs = body["messages"].as_array().unwrap();
-        assert_eq!(msgs[0]["role"], "assistant");
-        let input = &msgs[0]["content"][0]["input"];
+        // BUG-170: an assistant-first history is seeded with a user turn, so
+        // index by role rather than position.
+        let assistant = msgs
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .expect("assistant turn present");
+        let input = &assistant["content"][0]["input"];
         assert_eq!(input["big"], 18_446_744_073_709_551_615u64);
+    }
+
+    // ── BUG-163: effort → thinking.budget_tokens ──────────────────────
+
+    #[test]
+    fn effort_enables_thinking_with_budget_and_raises_max_tokens() {
+        let mut opts = options();
+        opts.reasoning_effort = Some("low".into());
+        let body = serialize_request(&opts).expect("serialize");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 2_048);
+        // 4096 default cap already exceeds the low budget: untouched.
+        assert_eq!(body["max_tokens"], 4_096);
+
+        opts.reasoning_effort = Some("high".into());
+        let body = serialize_request(&opts).expect("serialize");
+        assert_eq!(body["thinking"]["budget_tokens"], 8_192);
+        // The Messages API requires max_tokens > budget_tokens — the default
+        // cap is raised with headroom instead of failing the request.
+        assert_eq!(body["max_tokens"], 8_192 + 2_048);
+    }
+
+    #[test]
+    fn no_effort_or_off_leaves_thinking_to_the_provider() {
+        let body = serialize_request(&options()).expect("serialize");
+        assert!(body.get("thinking").is_none());
+
+        let mut opts = options();
+        opts.reasoning_effort = Some("off".into());
+        let body = serialize_request(&opts).expect("serialize");
+        assert!(
+            body.get("thinking").is_none(),
+            "\"off\" must not enable thinking"
+        );
+    }
+
+    #[test]
+    fn unknown_effort_fails_loudly() {
+        let mut opts = options();
+        opts.reasoning_effort = Some("medium".into());
+        let err = serialize_request(&opts).expect_err("unknown effort must fail");
+        assert_eq!(err.code(), "UNSUPPORTED_REASONING_EFFORT");
+    }
+
+    // ── BUG-170: role normalization ───────────────────────────────────
+
+    #[test]
+    fn consecutive_same_role_turns_are_merged() {
+        let mut opts = options();
+        opts.messages = vec![
+            Message {
+                id: MessageId("m1".into()),
+                role: MessageRole::User,
+                content: vec![ContentBlock::Text("part one".into())],
+                source: MessageSource::user(),
+            },
+            Message {
+                id: MessageId("m2".into()),
+                role: MessageRole::User,
+                content: vec![ContentBlock::Text("part two".into())],
+                source: MessageSource::user(),
+            },
+        ];
+        let body = serialize_request(&opts).expect("serialize");
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 1, "adjacent same-role turns fold into one");
+        assert_eq!(msgs[0]["role"], "user");
+        let content = msgs[0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "part one");
+        assert_eq!(content[1]["text"], "part two");
+    }
+
+    #[test]
+    fn assistant_first_conversation_is_seeded_with_a_user_turn() {
+        let mut opts = options();
+        opts.messages = vec![Message {
+            id: MessageId("m1".into()),
+            role: MessageRole::Assistant,
+            content: vec![ContentBlock::Text("replayed opening".into())],
+            source: MessageSource::Model {
+                provider: "anthropic".into(),
+                model: "claude-sonnet-4-20250514".into(),
+                replay_state: None,
+            },
+        }];
+        let body = serialize_request(&opts).expect("serialize");
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "user", "first wire turn must be user");
+        assert_eq!(msgs[1]["role"], "assistant");
+    }
+
+    // ── BUG-172: tool_result images ───────────────────────────────────
+
+    #[test]
+    fn tool_result_with_image_projects_content_array() {
+        let mut opts = options();
+        let attachment = JsonValue::Object(vec![(
+            "url".into(),
+            JsonValue::String("data:image/png;base64,aGk=".into()),
+        )]);
+        opts.messages = vec![Message {
+            id: MessageId("m1".into()),
+            role: MessageRole::User,
+            content: vec![
+                ContentBlock::ToolResult {
+                    call_id: CallId("toolu_1".into()),
+                    content: vec![
+                        ContentBlock::Text("screenshot attached".into()),
+                        ContentBlock::Image { attachment },
+                    ],
+                    is_error: false,
+                },
+            ],
+            source: MessageSource::Tool {
+                call_id: CallId("toolu_1".into()),
+            },
+        }];
+        let body = serialize_request(&opts).expect("serialize");
+        let part = &body["messages"][0]["content"][0];
+        assert_eq!(part["type"], "tool_result");
+        let content = part["content"].as_array().expect("image rides an array");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[1]["source"]["data"], "aGk=");
+    }
+
+    // ── BUG-162: stream `error` event ─────────────────────────────────
+
+    #[test]
+    fn sse_error_event_surfaces_provider_error_and_stops() {
+        let mut t = SseTranslator::new();
+        let out = t.feed_frame(
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        );
+        let error = out
+            .iter()
+            .find_map(|c| match c {
+                Err(e) => Some(e.clone()),
+                _ => None,
+            })
+            .expect("error event must surface as an error chunk");
+        assert_eq!(error.code(), "SERVER");
+        assert!(
+            error.to_string().contains("overloaded_error"),
+            "the provider error type must ride the message"
+        );
+        assert!(t.is_done(), "an error event terminates the stream");
+    }
+
+    #[test]
+    fn sse_error_event_type_mapping_covers_retry_classes() {
+        let mut t = SseTranslator::new();
+        let out = t.feed_frame(r#"{"type":"error","error":{"type":"rate_limit_error"}}"#);
+        assert!(out.iter().any(|c| matches!(c, Err(e) if e.code() == "RATE_LIMIT")));
+        let mut t = SseTranslator::new();
+        let out = t.feed_frame(r#"{"type":"error","error":{"type":"authentication_error"}}"#);
+        assert!(out.iter().any(|c| matches!(c, Err(e) if e.code() == "AUTH")));
+    }
+
+    // ── BUG-167: Retry-After / request-id parsing ─────────────────────
+
+    #[test]
+    fn retry_after_parses_seconds_to_millis() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after", "7".parse().unwrap());
+        assert_eq!(parse_retry_after(headers.get("retry-after")), Some(7_000));
+        assert_eq!(parse_retry_after(None), None);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after", "soon".parse().unwrap());
+        assert_eq!(
+            parse_retry_after(headers.get("retry-after")),
+            None,
+            "non-numeric Retry-After is ignored, not fatal"
+        );
+    }
+
+    #[test]
+    fn request_id_falls_through_candidate_names() {
+        // The first candidate is absent — the loop must keep looking
+        // (the old `?`-in-loop returned None on the first miss).
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-request-id", "req_123".parse().unwrap());
+        assert_eq!(parse_request_id(&headers).as_deref(), Some("req_123"));
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-amz-request-id", "amz_9".parse().unwrap());
+        assert_eq!(
+            parse_request_id(&headers).as_deref(),
+            Some("amz_9"),
+            "late candidates must still be found"
+        );
+
+        assert_eq!(parse_request_id(&reqwest::header::HeaderMap::new()), None);
     }
 }

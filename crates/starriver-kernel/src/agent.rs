@@ -944,7 +944,7 @@ mod tests {
             id: MessageId(id.into()),
             role: crate::llm::MessageRole::User,
             content: vec![crate::llm::ContentBlock::Text("hi".into())],
-            source: crate::llm::MessageSource::User,
+            source: crate::llm::MessageSource::user(),
         }
     }
 

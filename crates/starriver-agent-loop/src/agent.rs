@@ -2583,7 +2583,7 @@ impl Agent for ReactLoopAgent {
             id: MessageId(id.to_string()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text(text.to_string())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         };
         self.inbox_lock().replace(&MessageId(id.to_string()), updated)
     }
@@ -2595,7 +2595,7 @@ impl Agent for ReactLoopAgent {
             id: MessageId(id.to_string()),
             role: MessageRole::User,
             content,
-            source: MessageSource::User,
+            source: MessageSource::user(),
         };
         self.inbox_lock().replace(&MessageId(id.to_string()), replaced)
     }
@@ -2645,7 +2645,7 @@ mod tests {
             id: MessageId(text.into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text(text.into())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }
     }
 
@@ -7876,7 +7876,7 @@ mod tests {
                     id: MessageId(format!("u-{}", agent.session.seq())),
                     role: MessageRole::User,
                     content: vec![ContentBlock::Text(text.into())],
-                    source: MessageSource::User,
+                    source: MessageSource::user(),
                 }
                 .to_json()
                 .expect("message json"),

@@ -387,7 +387,7 @@ mod tests {
                     JsonValue::String(file_id.to_string()),
                 )]),
             }],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }
     }
 
@@ -396,7 +396,7 @@ mod tests {
             id: MessageId(text.to_string()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text(text.to_string())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }
     }
 
@@ -683,13 +683,13 @@ mod tests {
                     id: MessageId("m1".into()),
                     role: MessageRole::User,
                     content: vec![inline()],
-                    source: MessageSource::User,
+                    source: MessageSource::user(),
                 },
                 Message {
                     id: MessageId("m2".into()),
                     role: MessageRole::User,
                     content: vec![inline()],
-                    source: MessageSource::User,
+                    source: MessageSource::user(),
                 },
             ]
         };
@@ -781,7 +781,7 @@ mod tests {
                     nested_image("sha256:n1"),
                     nested_image("sha256:n2"),
                 ])],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             },
             image_message("sha256:top"),
         ];
@@ -808,7 +808,7 @@ mod tests {
                     nested_image("sha256:n1"),
                     nested_image("sha256:n2"),
                 ])],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             },
             image_message("sha256:top"),
         ];
@@ -843,7 +843,7 @@ mod tests {
                         JsonValue::String("data:image/png;base64,AAAA".into()),
                     )]),
                 }],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             },
         ];
         project_images(

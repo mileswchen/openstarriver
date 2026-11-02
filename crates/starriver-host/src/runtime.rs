@@ -923,7 +923,14 @@ impl HostRuntime {
         // the per-request lookup so secrets are never frozen into routes.
         let credential = Self::credential_ref_from(&entry.api_key);
         if gen_cfg.api_format == "anthropic" {
-            self.register_anthropic_route(&entry.id, &entry.base_url, &entry.api_key);
+            self.register_anthropic_route(
+                &entry.id,
+                &entry.base_url,
+                &entry.api_key,
+                reasoning_effort.clone(),
+                entry.context_window.map(|v| v as u64),
+                entry.max_tokens.map(|v| v as u64),
+            );
             return Ok(());
         }
         match (entry.model_type.as_str(), entry.provider_type.as_str()) {
@@ -1034,7 +1041,15 @@ impl HostRuntime {
         }
     }
 
-    fn register_anthropic_route(&self, provider_id: &str, base_url: &str, api_key: &str) {
+    fn register_anthropic_route(
+        &self,
+        provider_id: &str,
+        base_url: &str,
+        api_key: &str,
+        reasoning_effort: Option<String>,
+        context_window: Option<u64>,
+        max_tokens: Option<u64>,
+    ) {
         let credential = Self::anthropic_credential_ref(api_key);
         let api_key_field = api_key.to_string();
         let resolver: starriver_llm_anthropic::CredentialResolver =
@@ -1046,7 +1061,9 @@ impl HostRuntime {
                 base_url.to_string(),
                 credential,
             )
-            .with_credential_resolver(resolver);
+            .with_credential_resolver(resolver)
+            .with_reasoning_effort(reasoning_effort)
+            .with_model_defaults(context_window, max_tokens);
             inner.agent.register_provider_adapter(Arc::new(adapter));
         }
     }
@@ -1361,6 +1378,10 @@ impl HostRuntime {
         isolation: Option<bool>,
         agent_preset: Option<String>,
         permission_preset: Option<String>,
+        // WI-216: submitter correlation id — the client's optimistic echo
+        // retires when `UserMessageCommitted` echoes it back. Optional;
+        // host-generated runs omit it.
+        client_request_id: Option<String>,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
         // Staged execution mode for a NEW session (binding: chosen at
         // creation, locked per session). Only an explicitly passed value takes
@@ -1569,7 +1590,7 @@ impl HostRuntime {
                                         id: MessageId("memory-select".into()),
                                         role: MessageRole::User,
                                         content: vec![ContentBlock::Text(prompt)],
-                                        source: MessageSource::User,
+                                        source: MessageSource::user(),
                                     }],
                                     system: None,
                                     temperature: None,
@@ -1921,6 +1942,7 @@ impl HostRuntime {
                         spawn_agent_preset.clone(),
                         permission_bundle.clone(),
                         trace_ctx.clone(),
+                        client_request_id.clone(),
                     )
                     .await
                 {

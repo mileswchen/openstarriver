@@ -479,7 +479,7 @@ mod tests {
                     )]),
                 },
             ],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }];
 
         let body = serialize_request(&options(messages)).expect("serialize");
@@ -517,7 +517,7 @@ mod tests {
                 id: MessageId("m1".into()),
                 role: MessageRole::User,
                 content: vec![ContentBlock::Image { attachment }],
-                source: MessageSource::User,
+                source: MessageSource::user(),
             }];
             let err = serialize_request(&options(messages)).expect_err("bad attachment must fail");
             assert_eq!(err.code(), "INVALID_ATTACHMENT_REF");

@@ -1166,6 +1166,10 @@ impl AppState {
                 self.run_started_at = self.run_started_at.or(Some(std::time::Instant::now()));
                 Ok(false)
             }
+            // WI-216 internal reconciliation receipt: the TUI's user echo is
+            // plain transcript text with no server identity to retire, so the
+            // receipt is a no-op here (rendered by nothing, mutates nothing).
+            UiEvent::UserMessageCommitted { .. } => Ok(false),
             UiEvent::TurnEnd {
                 session_id,
                 summary,

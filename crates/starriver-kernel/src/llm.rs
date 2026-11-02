@@ -223,9 +223,17 @@ pub enum ContextForm {
     Recall,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MessageSource {
-    User,
+    /// A human/browser-originated prompt. `rpc_id` is the submitter's
+    /// correlation id (WI-216, dsh rpcId / codex client_id parity): the
+    /// client that sent the turn echoes its id here so UIs can retire the
+    /// optimistic echo when the durable message commits. `None` on host
+    /// Generated inputs (scheduled runs, plugins, legacy callers) — those
+    /// have no client echo to reconcile.
+    User {
+        rpc_id: Option<String>,
+    },
     Plugin {
         plugin: String,
         form: Option<ContextForm>,
@@ -242,6 +250,15 @@ pub enum MessageSource {
         kind: String,
         payload: JsonValue,
     },
+}
+
+impl MessageSource {
+    /// A user message with no client correlation: host-generated input
+    /// (scheduled ticks, plugin submissions, legacy callers). The echo
+    /// retirement path keys on `rpc_id`; these never produce a receipt.
+    pub fn user() -> Self {
+        MessageSource::User { rpc_id: None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -496,13 +496,13 @@ mod tests {
             id: MessageId("m1".into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text("deferred".into())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         });
         ctx.defer_context(Message {
             id: MessageId("m2".into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text("deferred-2".into())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         });
         ctx.conclude_turn();
 

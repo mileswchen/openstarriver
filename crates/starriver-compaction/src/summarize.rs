@@ -120,7 +120,7 @@ mod tests {
                     JsonValue::String(file_id.to_string()),
                 )]),
             }],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }
     }
 
@@ -129,7 +129,7 @@ mod tests {
             id: MessageId("m-text".into()),
             role: MessageRole::User,
             content: vec![ContentBlock::Text("no images".into())],
-            source: MessageSource::User,
+            source: MessageSource::user(),
         }
     }
 

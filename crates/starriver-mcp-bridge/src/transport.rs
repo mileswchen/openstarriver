@@ -219,6 +219,25 @@ pub struct HttpConnection {
     initialized: bool,
 }
 
+/// Bound the TCP/TLS connect phase of every HTTP-MCP request. Tool calls keep
+/// their configured overall timeout (`tool_timeout_secs`, default none — a
+/// slow server is the tool's business), but CONNECTING is not the tool's
+/// work: without this bound an unreachable host (server down, LAN peer
+/// offline) parks every call on the OS TCP SYN timeout (~75s on macOS) and a
+/// live turn silently stalls minutes per attempt (host.log 2026-11-01: a dead
+/// nexplan endpoint froze turns while the health supervisor was still walking
+/// its retry ladder). 10s ≫ any legitimate LAN/WAN handshake.
+const HTTP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Shared reqwest client for MCP HTTP traffic (calls, handshake, OAuth token
+/// exchange): connect-phase bounded, overall unbounded.
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .build()
+        .expect("reqwest client with connect timeout builds")
+}
+
 impl HttpConnection {
     pub fn new(
         name: String,
@@ -226,7 +245,7 @@ impl HttpConnection {
     ) -> Self {
         Self {
             name,
-            client: reqwest::Client::new(),
+            client: http_client(),
             base_url: String::new(),
             token_provider,
             session_id: None,
@@ -494,6 +513,16 @@ mod tests {
         let conn = HttpConnection::new("remote".to_string(), Arc::new(|| None));
         assert_eq!(conn.name, "remote");
         assert!(!conn.is_launched());
+    }
+
+    #[test]
+    fn http_client_connect_phase_is_bounded() {
+        // Regression guard for the 2026-11-01 nexplan outage: the shared MCP
+        // HTTP client must carry a connect timeout so an unreachable endpoint
+        // fails the call in seconds instead of hanging for the OS TCP SYN
+        // timeout (~75s on macOS) per attempt.
+        let _ = http_client();
+        assert_eq!(HTTP_CONNECT_TIMEOUT, std::time::Duration::from_secs(10));
     }
 
     #[test]

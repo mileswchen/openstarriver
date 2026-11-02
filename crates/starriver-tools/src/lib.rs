@@ -1679,7 +1679,7 @@ mod tests {
                         id: MessageId("m1".into()),
                         role: MessageRole::User,
                         content: vec![ContentBlock::Text("deferred".into())],
-                        source: MessageSource::User,
+                        source: MessageSource::user(),
                     });
                     ctx.conclude_turn();
                     Ok(arguments)
@@ -2147,7 +2147,7 @@ mod tests {
                         id: MessageId("decision".into()),
                         role: MessageRole::User,
                         content: vec![ContentBlock::Text("decision context".into())],
-                        source: MessageSource::User,
+                        source: MessageSource::user(),
                     }],
                 })
             })
@@ -2177,7 +2177,7 @@ mod tests {
                         id: MessageId("body".into()),
                         role: MessageRole::User,
                         content: vec![ContentBlock::Text("deferred by body".into())],
-                        source: MessageSource::User,
+                        source: MessageSource::user(),
                     });
                     Ok(arguments)
                 })

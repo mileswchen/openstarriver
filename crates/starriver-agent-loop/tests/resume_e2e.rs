@@ -67,7 +67,7 @@ fn user_message(text: &str) -> Message {
         id: MessageId(text.into()),
         role: MessageRole::User,
         content: vec![ContentBlock::Text(text.into())],
-        source: MessageSource::User,
+        source: MessageSource::user(),
     }
 }
 

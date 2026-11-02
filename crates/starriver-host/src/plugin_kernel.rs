@@ -1257,7 +1257,7 @@ impl PluginKernel {
                     id: MessageId(format!("lsp-diag-{call_id}")),
                     role: MessageRole::User,
                     content: vec![ContentBlock::Text(summary)],
-                    source: MessageSource::User,
+                    source: MessageSource::user(),
                 });
                 Ok(decision)
             })
@@ -1724,6 +1724,8 @@ impl PluginKernel {
             None,
             None,
             None,
+            // Host-generated runs carry no client correlation (WI-216).
+            None,
         )
         .await
     }
@@ -1754,6 +1756,11 @@ impl PluginKernel {
         // 逐字节实时一致（开放回合快照流）：Some 时中继对结构事件计算
         // 开放回合投影并广播 TraceSnapshot；None 保持既有行为。
         trace: Option<TraceSnapContext>,
+        // WI-216: the submitter's correlation id — rides the logged user
+        // message (`MessageSource::User { rpc_id }`) so the UiEvent bridge
+        // can emit `UserMessageCommitted` and the submitting surface can
+        // retire its optimistic echo. None on host-generated runs.
+        client_request_id: Option<String>,
     ) -> anyhow::Result<KernelExecution> {
         let resume = session_id.is_some();
         let id = session_id
@@ -2140,7 +2147,9 @@ impl PluginKernel {
             id: starriver_kernel::llm::MessageId(uuid::Uuid::new_v4().to_string()),
             role: starriver_kernel::llm::MessageRole::User,
             content,
-            source: starriver_kernel::llm::MessageSource::User,
+            source: starriver_kernel::llm::MessageSource::User {
+                rpc_id: client_request_id,
+            },
         });
         Ok(KernelExecution { handle })
     }
@@ -2437,7 +2446,7 @@ impl PluginKernel {
             id: starriver_kernel::llm::MessageId(uuid::Uuid::new_v4().to_string()),
             role: starriver_kernel::llm::MessageRole::User,
             content: vec![starriver_kernel::llm::ContentBlock::Text(prompt)],
-            source: starriver_kernel::llm::MessageSource::User,
+            source: starriver_kernel::llm::MessageSource::user(),
         });
         let mut text = String::new();
         while let Some(event) = stream.recv().await {
@@ -2591,6 +2600,22 @@ pub mod bridge {
                 let Ok(message) = Message::from_json(event.data.clone()) else {
                     return Vec::new();
                 };
+                // WI-216: a prompt carrying the submitter's correlation id
+                // receipts as UserMessageCommitted — the submitting surface
+                // retires its optimistic echo by stamping the carried seq.
+                // Host-generated turns (rpc_id None) emit nothing.
+                if let starriver_kernel::llm::MessageSource::User {
+                    rpc_id: Some(rpc_id),
+                } = &message.source
+                {
+                    return vec![UiEvent::UserMessageCommitted {
+                        version: UiEvent::VERSION,
+                        session_id: session_id.into(),
+                        rpc_id: rpc_id.clone(),
+                        message_id: message.id.0.clone(),
+                        seq: event.seq,
+                    }];
+                }
                 let starriver_kernel::llm::MessageSource::Plugin { plugin, form } = &message.source
                 else {
                     return Vec::new();
@@ -2956,6 +2981,76 @@ mod tests {
             }
             other => panic!("expected ToolResult, got {other:?}"),
         }
+    }
+
+    /// WI-216: a durable user/message whose source carries the submitter's
+    /// correlation id receipts as `UserMessageCommitted` (with the ledger
+    /// seq the archive projections use). Host-generated prompts
+    /// (`rpc_id: None`) and non-user messages emit nothing — the relay's
+    /// user/message handling must stay silent for them.
+    #[test]
+    fn translate_user_message_rpc_id_receipts_commit() {
+        use starriver_kernel::llm::{ContentBlock, Message, MessageId, MessageRole, MessageSource};
+        use starriver_kernel::session::{SessionEvent, SurfaceOp};
+
+        let event = |source: MessageSource| SessionEvent {
+            seq: 42,
+            time: 0,
+            event_type: "user/message".into(),
+            data: Message {
+                id: MessageId("m-wi216".into()),
+                role: MessageRole::User,
+                content: vec![ContentBlock::Text("分析Anthropic格式".into())],
+                source,
+            }
+            .to_json()
+            .unwrap(),
+            surface_op: Some(SurfaceOp::Append),
+            source_event_seqs: Vec::new(),
+        };
+
+        // Correlated prompt → exactly one receipt carrying the ids + seq.
+        let out = bridge::translate(
+            &event(MessageSource::User {
+                rpc_id: Some("rpc-echo-1".into()),
+            }),
+            "s1",
+        );
+        assert_eq!(out.len(), 1, "correlated prompt must receipt exactly once");
+        match &out[0] {
+            UiEvent::UserMessageCommitted {
+                session_id,
+                rpc_id,
+                message_id,
+                seq,
+                ..
+            } => {
+                assert_eq!(session_id, "s1");
+                assert_eq!(rpc_id, "rpc-echo-1");
+                assert_eq!(message_id, "m-wi216");
+                assert_eq!(*seq, 42);
+            }
+            other => panic!("expected UserMessageCommitted, got {other:?}"),
+        }
+
+        // Host-generated prompt (no correlation id) → silent.
+        assert!(
+            bridge::translate(&event(MessageSource::user()), "s1").is_empty(),
+            "uncorrelated user messages must not receipt"
+        );
+        // Plugin-owned messages still take the InstructionsBudget path, not
+        // the receipt path.
+        assert!(
+            bridge::translate(
+                &event(MessageSource::Plugin {
+                    plugin: "agent-instructions".into(),
+                    form: None,
+                }),
+                "s1",
+            )
+            .is_empty(),
+            "untruncated plugin messages emit nothing"
+        );
     }
 
     /// WI-35: a truncated instructions owned-message surfaces as an

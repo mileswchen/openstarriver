@@ -402,7 +402,33 @@ impl LlmAdapter for OpenAiCompletionsAdapter {
                 let retry_after = wire::parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
                 let request_id = wire::parse_request_id(response.headers());
                 let body_text = response.text().await.unwrap_or_default();
-                yield Err(LlmError::Call { code: wire::normalize_status(status, &body_text).into(), message: body_text.lines().next().unwrap_or_default().to_string(), status: Some(status), provider_retry_after_ms: retry_after, request_id });
+                // Undeclared (`supports_vision: null`) models let the provider
+                // arbitrate images. When the verdict is the GLM 1210 image
+                // rejection, classify it under the same UNSUPPORTED_CONTENT
+                // contract a declared text-only route enforces at assembly,
+                // with the remedy attached — a bare INVALID_REQUEST 400 gives
+                // the user nothing actionable (2026-11-01: mid-session model
+                // switch to glm-5.3 in an image-bearing session).
+                let image_rejected = wire::unsupported_image_rejection(status, &body_text);
+                yield Err(LlmError::Call {
+                    code: if image_rejected {
+                        "UNSUPPORTED_CONTENT".into()
+                    } else {
+                        wire::normalize_status(status, &body_text).into()
+                    },
+                    message: if image_rejected {
+                        format!(
+                            "{}\n模型 \"{}\" 的端点不接受图片输入（provider 1210：messages.content.type 仅接受 text）；请将该模型声明为纯文本（supports_vision: false）、改用支持视觉的模型（如 glm-5.3-flash），或移除会话中的图片。",
+                            body_text.lines().next().unwrap_or_default(),
+                            options.model,
+                        )
+                    } else {
+                        body_text.lines().next().unwrap_or_default().to_string()
+                    },
+                    status: Some(status),
+                    provider_retry_after_ms: retry_after,
+                    request_id,
+                });
                 return;
             }
             let mut translator: Box<dyn translate::StreamTranslator + Send> = if is_responses {
