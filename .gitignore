@@ -44,3 +44,11 @@ desktop/electron/daemon.js
 desktop/electron/legacyBridge.js
 desktop/electron/*.js.map
 desktop/electron/renderer/bundle.js
+
+# One-shot troubleshooting probes (Playwright launch scripts + fake model
+# server used to repro the 2026-11-01/02 desktop issues; hardcoded /tmp
+# experiment paths — keep local, never ship).
+desktop/electron/boot-probe.mjs
+desktop/electron/live-probe.mjs
+desktop/electron/fake-model.mjs
+desktop/electron/repro-newtask.mjs
