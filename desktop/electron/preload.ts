@@ -46,7 +46,10 @@ contextBridge.exposeInMainWorld('starriver', {
   // permissionPreset is the BUG-113 creation-time binding: the composer's
   // pre-send pick rides execute and is stamped into the fresh session BEFORE
   // the first turn runs (the old post-TaskStarted best-effort write is gone).
-  execute: (task: string, sessionId: string | undefined, callback: (err: string | null, event: any) => void, executionMode?: string, agent?: string, isolation?: boolean, agentPreset?: string, permissionPreset?: string) => {
+  // New-task diagnostics sink (main appends to <userData>/newtask-diag.log).
+  appendDiag: (line: string) => { ipcRenderer.send('runtime:diag', line); },
+
+  execute: (task: string, sessionId: string | undefined, callback: (err: string | null, event: any) => void, executionMode?: string, agent?: string, isolation?: boolean, agentPreset?: string, permissionPreset?: string, clientRequestId?: string) => {
     // The listener deliberately OUTLIVES this execute's terminal event: the
     // agent driver auto-claims queued messages as the next turn right after
     // the previous one settles, and those events stream with no second
@@ -67,6 +70,10 @@ contextBridge.exposeInMainWorld('starriver', {
       isolation: isolation ?? undefined,
       agentPreset: agentPreset ?? undefined,
       permissionPreset: permissionPreset ?? undefined,
+      // WI-216: submitter correlation id — echoed back on the durable
+      // `user/message` (UserMessageCommitted) so the optimistic echo can
+      // retire by stamping the ledger seq.
+      clientRequestId: clientRequestId ?? undefined,
     }).catch((err: any) => {
       ipcRenderer.removeListener('runtime:event', handler);
       callback(err?.message ?? String(err), null);

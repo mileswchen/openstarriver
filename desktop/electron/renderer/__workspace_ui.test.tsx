@@ -89,10 +89,11 @@ describe('CodingView workspace model', () => {
     expect(screen.getAllByText('demo').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('empty')).toBeTruthy();
     expect(screen.getByText('grouped task')).toBeTruthy();
-    // Sessions whose workspace is gone (stale workspaceId) stay on disk and
-    // render under Ungrouped with a restore action — deliberate deviation
- // unlike the reference, which drops them from every group.
-    expect(screen.getByText('orphaned task')).toBeTruthy();
+    // Sessions whose workspace is gone (stale workspaceId) stay on disk but
+    // do NOT render — the delete dialog promises "hidden from the sidebar";
+    // re-registering the original directory re-groups them (id == canonical
+    // path).
+    expect(screen.queryByText('orphaned task')).toBeNull();
     // Chat conversations (no workspaceId) render under the Tasks section's
     // Chats folder — the Chat tab is retired.
     expect(screen.getByText('chat talk')).toBeTruthy();
@@ -150,7 +151,7 @@ describe('CodingView workspace model', () => {
     await waitFor(() => expect(screen.getAllByText('renamed demo').length).toBeGreaterThanOrEqual(1));
   });
 
-  it('deletes a workspace keeping its sessions recoverable under Ungrouped', async () => {
+  it('deletes a workspace hiding its sessions instead of filing them under Ungrouped', async () => {
     const { within } = await import('@testing-library/react');
     await renderCodingView();
     await waitFor(() => expect(screen.getAllByText('demo').length).toBeGreaterThanOrEqual(1));
@@ -160,22 +161,29 @@ describe('CodingView workspace model', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(window.starriver.deleteWorkspace).toHaveBeenCalledWith('w1'));
-    // The registry refetch no longer lists w1; its session falls to the
- // Ungrouped bucket with a restore action (matching delete.desc:
-    // "Its sessions will appear under Ungrouped").
-    await waitFor(() => expect(screen.getByText('Ungrouped')).toBeTruthy());
-    await waitFor(() => expect(screen.getByText('grouped task')).toBeTruthy());
-    expect(screen.getAllByLabelText('Restore to current workspace').length).toBeGreaterThanOrEqual(1);
+    // The registry refetch no longer lists w1; its session keeps the stale
+    // marker on disk but stops rendering (deleteBody: "hidden from the
+    // sidebar") — with no ARCHIVED orphans no Ungrouped bucket appears at all.
+    await waitFor(() => expect(screen.queryByText('grouped task')).toBeNull());
+    expect(screen.queryByText('Ungrouped')).toBeNull();
     await waitFor(() => expect(window.starriver.listWorkspaces).toHaveBeenCalledTimes(3));
   });
 
-  it('restore on an orphan re-homes into the active workspace when one exists', async () => {
+  it('restore on an archived orphan re-homes into the active workspace when one exists', async () => {
+    // Archived orphans are the only orphans that render (active ones stay
+    // hidden per the delete-workspace contract), so exercise restore there.
+    window.starriver.listSessions = vi.fn().mockResolvedValue([
+      { id: 's1', title: 'grouped task', workspaceId: 'w1', createdAt: '', messageCount: 1 },
+    ]);
+    window.starriver.listArchivedSessions = vi.fn().mockResolvedValue([
+      { id: 's-orphan', title: 'orphaned task', workspaceId: 'w-gone', createdAt: '', messageCount: 2 },
+    ]);
     window.starriver.assignSessionWorkspace = vi.fn().mockResolvedValue(undefined);
     window.starriver.unarchiveSession = vi.fn().mockResolvedValue(undefined);
     await renderCodingView();
-    await waitFor(() => expect(screen.getByText('orphaned task')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/orphaned task/)).toBeTruthy());
 
-    const row = screen.getByText('orphaned task').closest('.coding-session-row') as HTMLElement;
+    const row = screen.getByText(/orphaned task/).closest('.coding-session-row') as HTMLElement;
     fireEvent.click(row.querySelector('button[aria-label="Restore to current workspace"]') as HTMLElement);
     await waitFor(() =>
       expect(window.starriver.assignSessionWorkspace).toHaveBeenCalledWith('s-orphan', 'w1')
@@ -187,12 +195,15 @@ describe('CodingView workspace model', () => {
   it('with no workspaces, restore degrades to unarchive-only instead of a silent no-op', async () => {
     window.starriver.listWorkspaces = vi.fn().mockResolvedValue([]);
     window.starriver.getActiveWorkspace = vi.fn().mockResolvedValue(null);
+    window.starriver.listArchivedSessions = vi.fn().mockResolvedValue([
+      { id: 's-orphan', title: 'orphaned task', workspaceId: 'w-gone', createdAt: '', messageCount: 2 },
+    ]);
     window.starriver.assignSessionWorkspace = vi.fn().mockResolvedValue(undefined);
     window.starriver.unarchiveSession = vi.fn().mockResolvedValue(undefined);
     await renderCodingView();
-    await waitFor(() => expect(screen.getByText('orphaned task')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/orphaned task/)).toBeTruthy());
 
-    const row = screen.getByText('orphaned task').closest('.coding-session-row') as HTMLElement;
+    const row = screen.getByText(/orphaned task/).closest('.coding-session-row') as HTMLElement;
     fireEvent.click(row.querySelector('button[aria-label="Restore to current workspace"]') as HTMLElement);
     await waitFor(() =>
       expect(window.starriver.unarchiveSession).toHaveBeenCalledWith('s-orphan')

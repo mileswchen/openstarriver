@@ -8,6 +8,14 @@ import * as http from 'http';
 import { DaemonClient, daemonInvoke, PROTOCOL_VERSION, stopDaemonAndCleanup } from './daemon';
 import { acquireSingleInstanceLock } from './single-instance';
 
+// STARRIVER_USER_DATA: isolate a second instance BEFORE the single-instance
+// lock is taken (electron's appData follows the real macOS home, not $HOME,
+// so a HOME-overridden launch still collides with the running app's lock —
+// e2e/repro rigs need their own lock dir, DB and daemon).
+if (process.env.STARRIVER_USER_DATA) {
+  app.setPath('userData', process.env.STARRIVER_USER_DATA);
+}
+
 // Single instance (2026-10-04): without the lock, any second launch — another
 // double-click, or a different copy of the app (dist build / DMG vs the
 // installed one; they all share this lock via the shared userData dir) — ran a
@@ -178,6 +186,15 @@ app.whenReady().then(async () => {
       title: 'Select project directory',
     });
     return result.canceled ? null : result.filePaths[0] || null;
+  });
+
+  // New-task diagnostics: the renderer appends one JSON line per transition
+  // (open/close/restore/adopt/paint) so a repro can be reconstructed from
+  // <userData>/newtask-diag.log without devtools. No PII beyond session ids.
+  ipcMain.on('runtime:diag', (_e, line: string) => {
+    try {
+      fs.appendFileSync(path.join(app.getPath('userData'), 'newtask-diag.log'), String(line).slice(0, 4000) + '\n');
+    } catch { /* diagnostics must never break the app */ }
   });
 
   // Temp file storage for image attachments

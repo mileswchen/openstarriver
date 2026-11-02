@@ -3862,7 +3862,7 @@ interface StarriverBridge {
   retryInit?(): Promise<{ ok: boolean; relaunched?: boolean }>;
   startHttpServer?: StartHttpServerFn;
   httpServerInfo?: HttpServerInfoFn;
-  execute(task: string, sessionId: string | undefined, cb: (err: string | null, event: any) => void, executionMode?: string, agent?: string, isolation?: boolean, agentPreset?: string, permissionPreset?: string): void;
+  execute(task: string, sessionId: string | undefined, cb: (err: string | null, event: any) => void, executionMode?: string, agent?: string, isolation?: boolean, agentPreset?: string, permissionPreset?: string, clientRequestId?: string): void;
   approve(sessionId: string, allowed: boolean, remember?: boolean): Promise<void>;
   /** Plan fold: answer a pending exit_plan_mode review (Plan confirm card).
    *  `preset` rides the decision — the host applies it atomically with the
@@ -7684,6 +7684,28 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const [instructionsTruncated, setInstructionsTruncated] = useState(false);
   const messagesRef = useRef<Message[]>([]);
   const sessionIdRef2 = useRef<string>('');
+  // The session the user just LEFT via 新建任务/新会话. Its TaskStarted /
+  // sessionStarted events must not re-adopt it into the empty New Task view:
+  // adoption at 2026-11-01 re-opened the closed conversation whenever the
+  // still-running session (queued turn, scheduled run, external harness)
+  // emitted after the clear — the exact "新建 task 弹出旧会话" report.
+  const lastClosedSessionRef = useRef<string>('');
+  const dropDiagTsRef = useRef(0);
+  // New-task diagnostics (2026-11-01): one line per open/close/restore/adopt
+  // transition lands in <userData>/newtask-diag.log (via main), so a repro
+  // can be reconstructed exactly without devtools.
+  const diag = useCallback((what: string, extra?: Record<string, unknown>) => {
+    try {
+      window.starriver.appendDiag?.(JSON.stringify({
+        t: new Date().toISOString(), what,
+        sid: activeSessionId || null,
+        ref: sessionIdRef2.current || null,
+        sending: sendingRef.current,
+        msgs: messagesRef.current.length,
+        ...extra,
+      }));
+    } catch { /* diagnostics must never break the app */ }
+  }, [activeSessionId]);
   // Thread fork/backtrack: backtrack picker state + delete second confirmation
   const [backtrackOpen, setBacktrackOpen] = useState(false);
   const [backtrackMessages, setBacktrackMessages] = useState<SessionMessage[]>([]);
@@ -7754,11 +7776,16 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const loadSessionMessages = useCallback(async (sessionId: string) => {
     try {
       const gen = ++loadGenRef.current;
+      window.starriver.appendDiag?.(JSON.stringify({ t: new Date().toISOString(), what: 'load-start', target: sessionId, gen }));
       // WI-126: load the WHOLE history up front (user decision — no more
       // "load earlier" paging). The no-limit session.messages call keeps
       // server-stamped seqs (BUG-86 fork anchors read straight off the rows).
       const msgs = await window.starriver.getSessionMessages(sessionId);
-      if (gen !== loadGenRef.current) return;
+      if (gen !== loadGenRef.current) {
+        window.starriver.appendDiag?.(JSON.stringify({ t: new Date().toISOString(), what: 'load-aborted', target: sessionId, gen, cur: loadGenRef.current }));
+        return;
+      }
+      window.starriver.appendDiag?.(JSON.stringify({ t: new Date().toISOString(), what: 'load-done', target: sessionId, gen, n: msgs.length }));
       let loaded: Message[] = msgs.map((m: any) => ({
         id: crypto.randomUUID(), role: m.role as Message['role'], content: m.content,
         seq: m.seq ?? undefined,
@@ -7972,6 +7999,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // remounts after a tab switch.
   useEffect(() => {
     if (activeSessionId === sessionIdRef2.current) return;
+    const outgoing = sessionIdRef2.current;
+    diag('switch', { from: outgoing || null, to: activeSessionId || null });
     sessionIdRef2.current = activeSessionId;
     // The stop/approval ref must track the OPEN session too: it only filled
     // from live TaskStarted/sessionStarted events, so after a restart / tab
@@ -8003,12 +8032,32 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     setTurnSummary(null);
     stopControl.reset();
     if (!activeSessionId) {
+      // Closing the view must also invalidate any in-flight history load:
+      // loadSessionMessages' generation guard is only advanced by a NEWER
+      // load, so a pending getSessionMessages for the session being closed
+      // would resolve after this clear, pass the guard, and re-open the
+      // conversation (setMessages + setActiveSessionId) over the New Task
+      // screen — the 2026-11-01 "新建 task 弹出旧会话" report. All of that
+      // callback's continuations re-check the guard, so one bump kills them.
+      loadGenRef.current++;
+      if (outgoing) lastClosedSessionRef.current = outgoing;
+      diag('close-clear', { shield: outgoing || null });
       setMessages([]);
       messagesRef.current = [];
+      // The chat-archive projection dies with the view too: displayMessages
+      // merges `archiveMessages` under `messages`, so a surviving archive kept
+      // rendering the closed session's transcript on the New Task screen
+      // (2026-11-02 "新建任务界面还是乱的" — hero + composer + the previous
+      // conversation's markdown all stacked in one view). archiveSessionRef
+      // resets with it so re-opening the same session refetches the archive
+      // instead of skipping the load.
+      setArchiveMessages(null);
+      archiveSessionRef.current = null;
       setStaleBusy(false);
       setQueue([]);
       return;
     }
+    lastClosedSessionRef.current = '';
     // BUG-96: re-arm the busy/Stop affordance from the backend's single
     // input slot — the renderer's own run state dies on reload while the
     // turn task (and the slot) lives on. This is ALSO what keeps the
@@ -8022,6 +8071,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       setStaleBusy(Array.isArray(ids) && ids.includes(activeSessionId));
     }).catch(() => {});
     refreshQueueRef.current(activeSessionId);
+    diag('open-load', { target: activeSessionId });
     void loadSessionMessages(activeSessionId);
   }, [activeSessionId, loadSessionMessages]);
 
@@ -8032,8 +8082,20 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   useEffect(() => {
     if (newConvSeq === lastConvSeqRef.current) return;
     lastConvSeqRef.current = newConvSeq;
+    // Same two invalidations as the sync effect's close path: kill in-flight
+    // history loads and shield the just-closed session from event adoption.
+    // (requestNewConversation bumps both setActiveSessionId('') and this seq;
+    // whichever effect runs first records the shield.)
+    if (sessionIdRef2.current) lastClosedSessionRef.current = sessionIdRef2.current;
+    loadGenRef.current++;
+    diag('newconv-reset', {});
     setMessages([]);
     messagesRef.current = [];
+    // Same archive reset as the sync effect's close path (see there): a
+    // surviving archive projection re-renders the old transcript over the
+    // New Task hero screen.
+    setArchiveMessages(null);
+    archiveSessionRef.current = null;
     setTodoHideUpTo(0);
     setQueue([]);
     setSessionUsage({ in: 0, out: 0 });
@@ -8257,6 +8319,15 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
 
   const addMessage = useCallback((role: Message['role'], content: string, streaming?: boolean, toolName?: string, meta?: unknown) => {
     const msg: Message = { id: crypto.randomUUID(), role, content, streaming, toolName, ts: Date.now(), meta };
+    if (!sessionIdRef2.current) {
+      // THE smoking-gun probe: any message appended while NO session is open
+      // is what re-materializes the closed conversation over the New Task
+      // screen (messages.length>0 flips inSession). Record who did it.
+      window.starriver.appendDiag?.(JSON.stringify({
+        t: new Date().toISOString(), what: 'PAINT-ON-EMPTY',
+        role, head: content.slice(0, 80), streaming: !!streaming, toolName: toolName ?? null,
+      }));
+    }
     setMessages((prev) => [...prev, msg]);
     return msg.id;
   }, []);
@@ -8601,8 +8672,14 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // Thumbnails ride the bubble ABOVE the text: image refs first, then the
     // typed message — UserMessageContent renders refs as thumbnails.
     const userDisplay = [imageRefs, text].filter(Boolean).join('\n');
+    // WI-216: correlate the optimistic echo with its durable row. The id
+    // rides session.execute; the `userMessageCommitted` receipt stamps the
+    // echo with the ledger seq so the archive/tail merge dedupes — without
+    // it a fresh session renders the prompt twice (echo + archive row) until
+    // the session is reopened.
+    const echoRequestId = crypto.randomUUID();
     codingFollowRef.current = true; // a fresh send re-engages tail following
-    addMessage('user', userDisplay);
+    addMessage('user', userDisplay, false, undefined, { requestId: echoRequestId });
     // Invocation marker: if the task starts with a skill slash command, show it.
     // Skill `command` values are slash-less — strip the leading '/' or the
     // ⚡ marker never matches.
@@ -8947,7 +9024,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // preset here; the composer's onChange path handles mid-session switches.
     const freshPermissionPreset = sessionIdRef2.current || stagedChat ? undefined
       : (permissionPresetRef.current || undefined);
-    const send = (cb: (err: string | null, event: any) => void) => window.starriver.execute(taskText, sessionIdRef2.current || undefined, cb, freshExecutionMode, runAgent, stagedChat ? undefined : isolated, freshAgentPreset, freshPermissionPreset);
+    const send = (cb: (err: string | null, event: any) => void) => window.starriver.execute(taskText, sessionIdRef2.current || undefined, cb, freshExecutionMode, runAgent, stagedChat ? undefined : isolated, freshAgentPreset, freshPermissionPreset, echoRequestId);
     send((err, event) => {
       if (err) {
         if (/SESSION_BUSY|single input slot|active turn/i.test(String(err))) {
@@ -9031,14 +9108,36 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           && eventType !== 'TaskStarted' && eventType !== 'sessionStarted') {
         return;
       }
+      // New Task idle gate: an EMPTY open-session ref passes events only while
+      // this view has a send in flight (the pre-sessionStarted turnError case
+      // above). Otherwise the empty ref means the user CLOSED the session —
+      // and a background session's stream (a still-running turn, queued or
+      // scheduled run) must not paint over the hero screen: the first chunk
+      // sets messages.length>0 and the view flips straight back into the
+      // closed conversation (2026-11-01 "新建任务弹出错误界面" — third
+      // vector, after load-resurrection and event-adoption were shielded).
+      if (eventSid && !sessionIdRef2.current && !sendingRef.current
+          && eventType !== 'TaskStarted' && eventType !== 'sessionStarted') {
+        if (Date.now() - dropDiagTsRef.current > 500) {
+          dropDiagTsRef.current = Date.now();
+          diag('ev-drop-idle', { type: eventType, evSid: eventSid });
+        }
+        return;
+      }
 
       switch (event.type || event.eventType || '') {
         case 'TaskStarted':
           if (event.session_id) {
-            sessionIdRef.current = event.session_id;
-            if (!sessionIdRef2.current) {
-              sessionIdRef2.current = event.session_id;
-              setActiveSessionId(event.session_id);
+            // Shield: the session the user just left (新建任务) must not pull
+            // itself back into the empty view when its next queued/scheduled
+            // turn starts. Any OTHER session still adopts (the fresh session
+            // created by a send from the New Task screen arrives this way).
+            if (event.session_id !== lastClosedSessionRef.current) {
+              sessionIdRef.current = event.session_id;
+              if (!sessionIdRef2.current) {
+                sessionIdRef2.current = event.session_id;
+                diag('adopt-TaskStarted', { sid: event.session_id });
+                setActiveSessionId(event.session_id);
               // The host files the fresh session under its workspace before
               // the first execution spawns, so this refresh already sees the
               // projcache row — the new task appears under its workspace
@@ -9056,6 +9155,9 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
               // post-TaskStarted best-effort write is gone: it silently lost
               // races and left the engine on manual while the UI showed the
               // picked preset.
+              }
+            } else {
+              diag('shield-skip-TaskStarted', { sid: event.session_id });
             }
           }
           // Queue auto-claim: the agent driver opens the next turn from the
@@ -9259,15 +9361,39 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           {
           const sid = event.sessionId ?? event.session_id;
           if (sid) {
-            sessionIdRef.current = sid;
-            if (!sessionIdRef2.current) {
-              sessionIdRef2.current = sid;
-              setActiveSessionId(sid);
+            // Same shield as TaskStarted: the just-closed session's own
+            // sessionStarted must not re-open it over the New Task screen.
+            if (sid !== lastClosedSessionRef.current) {
+              sessionIdRef.current = sid;
+              if (!sessionIdRef2.current) {
+                sessionIdRef2.current = sid;
+                diag('adopt-sessionStarted', { sid });
+                setActiveSessionId(sid);
+              }
+            } else {
+              diag('shield-skip-sessionStarted', { sid });
             }
           }
           stopControl.onTaskStarted();
           break;
           }
+        case 'userMessageCommitted': {
+          // WI-216: the durable user/message landed — retire the optimistic
+          // echo by stamping the ledger seq carried in the receipt. The
+          // archive/tail merge (`seq == null || seq > maxSeq`) then hides the
+          // echo once the archive lands, killing the fresh-session double
+          // bubble; until then the echo still renders exactly once.
+          const sid = event.sessionId ?? event.session_id;
+          const rpcId = event.rpcId ?? event.rpc_id;
+          if (sid && sid === sessionIdRef2.current && rpcId) {
+            setMessages(prev => prev.map(m =>
+              (m.meta as { requestId?: string } | undefined)?.requestId === rpcId
+                ? { ...m, seq: typeof event.seq === 'number' ? event.seq : Number(event.seq) }
+                : m
+            ));
+          }
+          break;
+        }
         case 'assistantTextDelta': {
           // Typewriter: open (or reuse) the streaming assistant bubble and
           // append the delta; the final assistantText replaces the content
@@ -10298,7 +10424,10 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
             <p>{stagedChat ? t('coding.emptyChat') : t('coding.empty')}</p>
           </div>
         )}
-        {turnGroups.map((tg, gi) => {
+        {/* New Task screen: transcript rows are structurally impossible —
+            even if a stale buffer (archive projection, adoption, an in-flight
+            load) ever feeds displayMessages, the hero screen stays clean. */}
+        {!isNewTask && turnGroups.map((tg, gi) => {
           const isLast = gi === turnGroups.length - 1;
           const renderTurnItem = (item: CodingDisplay) => {
             if (item.type === 'step') {
@@ -11203,6 +11332,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   // Start a new conversation inside a workspace. If that workspace isn't the
   // active one, activate it first — otherwise the click silently no-ops.
   const requestNewConversation = useCallback(async (workspaceId: string) => {
+    try {
+      window.starriver.appendDiag?.(JSON.stringify({
+        t: new Date().toISOString(), what: 'requestNewConversation',
+        workspaceId, activeWorkspaceId, activeSessionId,
+      }));
+    } catch { /* diagnostics */ }
     if (activeWorkspaceId !== workspaceId) {
       try {
         await activateWorkspace(workspaceId);
@@ -11278,10 +11413,24 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     return () => off?.();
   }, [loadWorkspaces, loadSessions]);
 
+  // Diagnostics: route every EXTERNAL open through a stack-capturing wrapper —
+  // the 2026-11-01 flip-back (session re-opens ~2-16s after 新任务 with no
+  // adoption/shield log) must name its caller.
+  const setActiveSessionIdTraced = useCallback((id: string) => {
+    try {
+      const stack = (new Error().stack || '')
+        .split('\n').slice(2, 7).map((s) => s.trim().replace(/^at /, '')).join(' | ');
+      window.starriver.appendDiag?.(JSON.stringify({
+        t: new Date().toISOString(), what: 'setActiveSessionId', id, stack,
+      }));
+    } catch { /* diagnostics must never break the app */ }
+    setActiveSessionId(id);
+  }, []);
+
   const value: WorkspaceCtx = {
     workspaces, sessions, archivedSessions,
     activeWorkspaceId, setActiveWorkspaceId,
-    activeSessionId, setActiveSessionId,
+    activeSessionId, setActiveSessionId: setActiveSessionIdTraced,
     collapsedWorkspaces,
     archivedOpenKeys, toggleArchivedGroup,
     renamingWorkspace, setRenamingWorkspace, renameValue, setRenameValue,
@@ -11493,23 +11642,21 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
           })}
 
 
-          {/* Sessions whose workspace was deleted stay on disk and remain
-              recoverable regardless of archived state: restore re-homes into
-              the active workspace when one exists, else unarchives only (the
-              row stays visible in this group either way). */}
+          {/* Sessions whose workspace was deleted stay on disk. Per the delete
+              dialog's contract ("its sessions are hidden from the sidebar"),
+              ACTIVE sessions of a removed workspace stop rendering —
+              re-registering the original directory re-groups them again
+              (workspace id == canonical path). Archived ones stay reachable
+              here for unarchive / re-home (the modal's other promise). */}
           {(() => {
             const orphanWorkspaces = new Set(
-              [...ws.sessions, ...ws.archivedSessions]
+              ws.archivedSessions
                 .filter(s => s.workspaceId && !ws.workspaces.some(w => w.id === s.workspaceId))
                 .map(s => s.workspaceId as string),
             );
-            const archivedOrphans = ws.archivedSessions.filter(s => s.workspaceId && orphanWorkspaces.has(s.workspaceId) && !ws.sessions.some(x => x.id === s.id));
-            const orphans: { id: string; title: string; archived: boolean }[] = [
-              ...ws.sessions
-                .filter(s => s.workspaceId && !ws.workspaces.some(w => w.id === s.workspaceId))
-                .map(s => ({ id: s.id, title: s.title || 'Coding task', archived: false })),
-              ...archivedOrphans.map(s => ({ id: s.id, title: s.title || 'Coding task', archived: true })),
-            ];
+            const orphans: { id: string; title: string }[] = ws.archivedSessions
+              .filter(s => s.workspaceId && orphanWorkspaces.has(s.workspaceId))
+              .map(s => ({ id: s.id, title: s.title || 'Coding task' }));
             if (orphans.length === 0) return null;
             const candidate = ws.activeWorkspaceId ?? ws.workspaces[0]?.id;
             // The target must still exist — attaching to a stale id dies on
@@ -11536,7 +11683,9 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
                 {!foldedFolders.ungrouped && orphans.map(s => (
                   <div key={s.id} className="coding-session-row sb-ws-archived-row sb-ws-ungrouped-row" data-tip={s.title}>
                     <span className="sb-ws-session-name">
-                      {s.archived ? '📦 ' : ''}{s.title}
+                      {/* Every orphan here is archived (active ones stay hidden
+                          per the delete-workspace contract). */}
+                      📦 {s.title}
                     </span>
                     <button
                       className="sb-ws-icon-btn"
@@ -13395,7 +13544,14 @@ export function SidebarNavItems({ tab, onNavigate, group = 'agent' }: { tab: Tab
             key={item.id}
             className={`nav-item ${tab === item.id ? 'active' : ''}`}
             onClick={() => {
-              if (item.id === 'coding' && tab === 'coding') {
+              // 新任务 is the item's LABEL — every click must land on the New
+              // Task screen, including the first click from another tab. The
+              // old `tab === 'coding'` gate made the first click a bare tab
+              // switch: CodingView remounted and RESTORED the last
+              // conversation (2026-11-01 "新建 task 弹出旧会话", still
+              // reported after the resurrection fixes). Re-opening a past
+              // conversation stays available by clicking its sidebar row.
+              if (item.id === 'coding') {
                 if (ws.activeWorkspaceId) void ws.requestNewConversation(ws.activeWorkspaceId);
                 else ws.setActiveSessionId('');
               }

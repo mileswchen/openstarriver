@@ -124,12 +124,12 @@ describe('CodingView workspace error paths', () => {
     await waitFor(() => expect(window.starriver.setActiveWorkspace).toHaveBeenCalledWith(null, 'Starriver Code'));
     // Conversation state resets with the deleted group.
     await waitFor(() => expect(screen.queryByText('earlier message')).toBeNull());
-    // The deleted workspace's session stays on disk and remains recoverable:
-    // it renders under Ungrouped with a restore-into-active-workspace action
- // (a deliberate deviation — the reference drops it from every group).
-    await waitFor(() => expect(screen.getByText('Ungrouped')).toBeTruthy());
-    await waitFor(() => expect(screen.getByText('grouped task')).toBeTruthy());
-    expect(await screen.findByLabelText('Restore to current workspace')).toBeTruthy();
+    // The deleted workspace's session stays on disk but stops rendering
+    // (deleteBody: "hidden from the sidebar"); with no archived orphans the
+    // Ungrouped bucket does not appear at all.
+    await waitFor(() => expect(screen.queryByText('grouped task')).toBeNull());
+    expect(screen.queryByText('Ungrouped')).toBeNull();
+    expect(screen.queryByLabelText('Restore to current workspace')).toBeNull();
   });
 });
 
@@ -202,7 +202,8 @@ describe('CodingView workspace e2e chain', () => {
       // agentPreset (7th) rides along as undefined when nothing staged —
       // arity changed with the WI-5 creation-time binding. permissionPreset
       // (8th, BUG-113) carries the picker's current value (default manual).
-      'do the thing', undefined, expect.any(Function), 'standard', 'Starriver Code', false, undefined, 'manual',
+      // clientRequestId (9th, WI-216) is the per-send echo correlation uuid.
+      'do the thing', undefined, expect.any(Function), 'standard', 'Starriver Code', false, undefined, 'manual', expect.any(String),
     ));
 
     // TaskCompleted triggers a session refresh that now shows the grouped row.

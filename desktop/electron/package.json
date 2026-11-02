@@ -1,8 +1,8 @@
 {
   "name": "starriver-electron",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "private": true,
-  "description": "Starriver Desktop — Electron shell",
+  "description": "Starriver Desktop \u2014 Electron shell",
   "author": "Starriver <dev@starriver.example>",
   "homepage": "https://github.com/starriver/starriver",
   "main": "main.js",
