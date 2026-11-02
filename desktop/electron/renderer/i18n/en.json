@@ -300,6 +300,8 @@
     "deleteFailed": "Failed to delete session",
     "deleteConfirmTitle": "Delete this session?",
     "deleteConfirmBody": "This will permanently delete the current session. This action cannot be undone.",
+    "deleteSidebarTitle": "Delete this session?",
+    "deleteSidebarBody": "This will permanently delete “{name}” and all of its history. This action cannot be undone.",
     "renamed": "Session renamed",
     "renameFailed": "Failed to rename session",
     "nameUsage": "Usage: /name <title>",

@@ -300,6 +300,8 @@
     "deleteFailed": "删除会话失败",
     "deleteConfirmTitle": "删除该会话？",
     "deleteConfirmBody": "将永久删除当前会话，此操作不可恢复。",
+    "deleteSidebarTitle": "删除该会话？",
+    "deleteSidebarBody": "将永久删除“{name}”及其全部历史记录，此操作不可恢复。",
     "renamed": "会话已重命名",
     "renameFailed": "重命名失败",
     "nameUsage": "用法：/name <标题>",

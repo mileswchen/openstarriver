@@ -10941,6 +10941,9 @@ interface WorkspaceCtx {
   /** CodingView registers a reset for view-local per-session flags (isolation toggle). */
   registerIsolationReset: (fn: (() => void) | null) => void;
   archiveSession: (sessionId: string) => Promise<void>;
+  /** Tasks-section rows (对话 / 定时运行): hard delete after the sidebar
+   *  confirmation modal. Mirrors archiveSession's active-session contract. */
+  handleDeleteSession: (sessionId: string) => Promise<void>;
   handleUnarchive: (sessionId: string) => Promise<void>;
   handleRenameSession: (sessionId: string) => Promise<void>;
   handleRenameSubmit: (workspaceId: string) => Promise<void>;
@@ -11221,6 +11224,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     await loadSessions();
   }, [activeSessionId, setActiveSessionId, loadSessions]);
 
+  // Tasks-section delete (对话 / 定时运行 rows): hard delete after the sidebar
+  // confirmation modal. Same active-session contract as archive — deleting the
+  // open session clears the stream via CodingView's sync effect.
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
+    if (activeSessionId === sessionId) setActiveSessionId('');
+    try {
+      await window.starriver.deleteSession(sessionId);
+      notifyView(`🗑 ${t('thread.deleted')}`, 'delete');
+      await loadSessions();
+    } catch (e) { showError(t('thread.deleteFailed')); }
+  }, [activeSessionId, setActiveSessionId, loadSessions, notifyView, showError, t]);
+
   // Click an archived row (or the modal's restore) → back to the default list.
   const handleUnarchive = useCallback(async (sessionId: string) => {
     try {
@@ -11274,6 +11289,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     showNewWorkspace, setShowNewWorkspace, newWorkspacePath, setNewWorkspacePath,
     confirmDeleteWorkspace, setConfirmDeleteWorkspace,
     loadSessions, toggleWorkspace, activateWorkspace, requestNewConversation, archiveSession,
+    handleDeleteSession,
     runningSessionIds, refreshRunningSessions,
     handleUnarchive, handleRenameSession, handleRenameSubmit, handleCreateWorkspace,
     handleDeleteWorkspace, handleConfirmDelete,
@@ -11307,6 +11323,9 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
   }, [ws.sessions]);
   // Row label: real title → owning task's name → generic fallback.
   const sessionLabel = (s: SessionInfo) => s.title || taskRuns.get(s.id) || 'Chat';
+  // Tasks-section delete: the row's trash button only arms this id; the actual
+  // session.delete fires from the confirmation modal below (destructive).
+  const [confirmDeleteSession, setConfirmDeleteSession] = useState<string | null>(null);
   // Folder fold state for the Tasks / Ungrouped sections (same interaction as
   // the workspace groups above).
   const [foldedFolders, setFoldedFolders] = useState<Record<string, boolean>>({});
@@ -11569,6 +11588,18 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
                         <span className="sb-run-dot" data-tip={t('scheduled.runningTip')} aria-label={t('scheduled.runningTip')} />
                       )}
                       <span className="sb-ws-session-name">{sessionLabel(s)}</span>
+                      {/* Delete affordance for both Tasks folders (chats +
+                          scheduled runs). Disabled while a run is live — an
+                          in-flight session must not be deleted under the
+                          stream; stop the run first, then delete. */}
+                      <button
+                        className="sb-ws-icon-btn"
+                        disabled={ws.runningSessionIds.has(s.id)}
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteSession(s.id); }}
+                        aria-label={t('common.delete')}
+                        data-tip={t('common.delete')}>
+                        <span dangerouslySetInnerHTML={{ __html: ICON_TRASH }} />
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -11623,6 +11654,29 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
           onCancel={() => ws.setConfirmDeleteWorkspace(null)}
         />
       )}
+
+      {/* Tasks-row delete confirmation: names the target session, then hard
+          deletes (session.delete) — no undo. */}
+      {confirmDeleteSession && (() => {
+        const target = ws.sessions.find(s => s.id === confirmDeleteSession);
+        return (
+          <div className="modal-overlay" onClick={() => setConfirmDeleteSession(null)}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-title">{t('thread.deleteSidebarTitle')}</div>
+              <div className="modal-body">{t('thread.deleteSidebarBody', { name: target ? sessionLabel(target) : '' })}</div>
+              <div className="modal-actions">
+                <button className="modal-btn" onClick={() => setConfirmDeleteSession(null)}>{t('common.cancel')}</button>
+                <button
+                  className="modal-btn danger"
+                  data-testid="confirm-delete-session"
+                  onClick={() => { const id = confirmDeleteSession; setConfirmDeleteSession(null); if (id) void ws.handleDeleteSession(id); }}>
+                  {t('coding.delete')}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
