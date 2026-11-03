@@ -1,8 +1,7 @@
 use crate::{
-    helpers::{format_time, tool_call_label, truncate_title},
+    helpers::{format_time, tool_call_arg, tool_call_label, truncate_title},
     types, HostRuntime,
 };
-use starriver_kernel::ui::UiEvent;
 use starriver_api_macro::api_method;
 use starriver_kernel::agent::AgentRegistry;
 use starriver_kernel::json::JsonValue;
@@ -10,7 +9,9 @@ use starriver_kernel::llm::{
     ContentBlock, ContextForm, Message as KernelMessage, MessageRole, MessageSource,
 };
 use starriver_kernel::session::{AppendOptions, SessionEvent, SessionHeader, SessionId};
+use starriver_kernel::ui::UiEvent;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// The model-visible surface of a durable log as `(seq, message)` pairs,
 /// derived exactly like the kernel's `derive_messages`: only events carrying
@@ -162,6 +163,147 @@ fn llm_message_to_session(msg: starriver_kernel::llm::Message) -> starriver_kern
     }
 }
 
+/// Instrumentation inputs shared by the folded projection
+/// (`load_projection_parts`) and the raw archive projection
+/// (`load_archive_parts`): step/start times per (turn, step), first chunk
+/// time per assistant/message (via its cited chunk seqs), and the active
+/// request route (request/header carries provider/model; its key includes
+/// the system string so any change re-logs it).
+pub(crate) struct LedgerAux {
+    step_starts: HashMap<(u32, u32), u64>,
+    route_by_seq: std::collections::BTreeMap<u64, (String, String)>,
+    event_time: HashMap<u64, u64>,
+}
+
+impl LedgerAux {
+    pub(crate) fn new(events: &[starriver_kernel::session::SessionEvent]) -> Self {
+        let mut step_starts: HashMap<(u32, u32), u64> = HashMap::new();
+        let mut route_by_seq: std::collections::BTreeMap<u64, (String, String)> =
+            Default::default();
+        let event_time: HashMap<u64, u64> = events.iter().map(|e| (e.seq, e.time)).collect();
+        for event in events.iter() {
+            match event.event_type.as_str() {
+                "step/start" => {
+                    if let (Some(t), Some(st)) = (
+                        event.data.get("turn").and_then(JsonValue::as_u64),
+                        event.data.get("step").and_then(JsonValue::as_u64),
+                    ) {
+                        step_starts
+                            .entry((t as u32, st as u32))
+                            .or_insert(event.time);
+                    }
+                }
+                "assistant/message" => {
+                    // First-chunk timing is derived per entry in aux_meta.
+                }
+                "request/header" => {
+                    let config = event.data.get("config");
+                    if let (Some(provider), Some(model)) = (
+                        config
+                            .and_then(|c| c.get("provider"))
+                            .and_then(JsonValue::as_str),
+                        config
+                            .and_then(|c| c.get("model"))
+                            .and_then(JsonValue::as_str),
+                    ) {
+                        route_by_seq.insert(event.seq, (provider.to_string(), model.to_string()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Self {
+            step_starts,
+            route_by_seq,
+            event_time,
+        }
+    }
+
+    fn meta(
+        &self,
+        seq: u64,
+        event_type: &str,
+        data: &JsonValue,
+        source_seqs: &[u64],
+    ) -> Option<SurfaceMeta> {
+        let mut meta = SurfaceMeta::default();
+        if matches!(event_type, "assistant/message" | "tool/result") {
+            meta.turn = data
+                .get("turn")
+                .and_then(JsonValue::as_u64)
+                .map(|v| v as u32);
+            meta.step = data
+                .get("step")
+                .and_then(JsonValue::as_u64)
+                .map(|v| v as u32);
+        }
+        if event_type == "assistant/message" {
+            if let (Some(turn), Some(step)) = (meta.turn, meta.step) {
+                meta.step_start_ms = self.step_starts.get(&(turn, step)).copied();
+            }
+            meta.first_chunk_ms = source_seqs
+                .iter()
+                .filter_map(|sq| self.event_time.get(sq))
+                .min()
+                .copied();
+            let route_here = self
+                .route_by_seq
+                .range(..=seq)
+                .next_back()
+                .map(|(_, v)| v.clone());
+            if let Some((provider, model)) = route_here {
+                meta.provider = Some(provider.clone());
+                meta.model = Some(model.clone());
+            }
+        }
+        if event_type == "request/header" {
+            meta.header_reason = Some(
+                data.get("reason")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("initial")
+                    .to_string(),
+            );
+            meta.system = data
+                .get("system")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string);
+        }
+        let populated = event_type == "assistant/message"
+            || event_type == "request/header"
+            || meta.turn.is_some();
+        populated.then_some(meta)
+    }
+}
+
+/// Display projection order (2026-10-26): the kernel surface fold shadows the
+/// range a compaction checkpoint replaced, which is right for the model
+/// window but wrong for the UI transcript — the contract is "no rendered row
+/// is ever removed" (compaction affects the model window, not the Desktop
+/// transcript). Re-include the seqs a **user/message** replacement shadowed
+/// (that shape is only ever the compaction checkpoint; its own row is
+/// Plugin-sourced and skipped by the chat projection, while the trace shows
+/// it as a one-line CONTEXT marker). Replacements of any other type — the
+/// tool-result prune stubs — keep shadowing their original, else the stub and
+/// the original would render twice.
+fn display_seq_order(
+    session: &starriver_kernel::session::Session,
+    by_seq: &HashMap<u64, &SessionEvent>,
+) -> Vec<u64> {
+    let fold = session.surface();
+    let mut seqs = fold.nodes.clone();
+    for replacement in &fold.replacements {
+        let Some(event) = by_seq.get(&replacement.seq) else {
+            continue;
+        };
+        if event.event_type == "user/message" {
+            seqs.extend(replacement.shadowed_seqs.iter().copied());
+        }
+    }
+    seqs.sort_unstable();
+    seqs.dedup();
+    seqs
+}
+
 pub(crate) async fn load_projection_parts(
     runtime: &crate::RuntimeInner,
     session_id: &str,
@@ -199,96 +341,8 @@ pub(crate) async fn load_projection_parts(
             }
         }
     }
-    // Instrumentation inputs: step/start times per (turn, step), first chunk
-    // time per assistant/message (via its cited chunk seqs), and the active
-    // request route (request/header carries provider/model; its key includes
-    // the system string so any change re-logs it).
-    let mut step_starts: HashMap<(u32, u32), u64> = HashMap::new();
-    let mut route_by_seq: std::collections::BTreeMap<u64, (String, String)> = Default::default();
-    let event_time: HashMap<u64, u64> = inspection.events.iter().map(|e| (e.seq, e.time)).collect();
-    for event in inspection.events.iter() {
-        match event.event_type.as_str() {
-            "step/start" => {
-                if let (Some(t), Some(st)) = (
-                    event.data.get("turn").and_then(JsonValue::as_u64),
-                    event.data.get("step").and_then(JsonValue::as_u64),
-                ) {
-                    step_starts
-                        .entry((t as u32, st as u32))
-                        .or_insert(event.time);
-                }
-            }
-            "assistant/message" => {
-                // First-chunk timing is derived per entry in aux_meta.
-            }
-            "request/header" => {
-                let config = event.data.get("config");
-                if let (Some(provider), Some(model)) = (
-                    config
-                        .and_then(|c| c.get("provider"))
-                        .and_then(JsonValue::as_str),
-                    config
-                        .and_then(|c| c.get("model"))
-                        .and_then(JsonValue::as_str),
-                ) {
-                    route_by_seq.insert(event.seq, (provider.to_string(), model.to_string()));
-                }
-            }
-            _ => {}
-        }
-    }
-    let aux_meta = |seq: u64,
-                    event_type: &str,
-                    data: &JsonValue,
-                    source_seqs: &[u64]|
-     -> Option<SurfaceMeta> {
-        let mut meta = SurfaceMeta::default();
-        if matches!(event_type, "assistant/message" | "tool/result") {
-            meta.turn = data
-                .get("turn")
-                .and_then(JsonValue::as_u64)
-                .map(|v| v as u32);
-            meta.step = data
-                .get("step")
-                .and_then(JsonValue::as_u64)
-                .map(|v| v as u32);
-        }
-        if event_type == "assistant/message" {
-            if let (Some(turn), Some(step)) = (meta.turn, meta.step) {
-                meta.step_start_ms = step_starts.get(&(turn, step)).copied();
-            }
-            meta.first_chunk_ms = source_seqs
-                .iter()
-                .filter_map(|sq| event_time.get(sq))
-                .min()
-                .copied();
-            let route_here = route_by_seq
-                .range(..=seq)
-                .next_back()
-                .map(|(_, v)| v.clone());
-            if let Some((provider, model)) = route_here {
-                meta.provider = Some(provider.clone());
-                meta.model = Some(model.clone());
-            }
-        }
-        if event_type == "request/header" {
-            meta.header_reason = Some(
-                data.get("reason")
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or("initial")
-                    .to_string(),
-            );
-            meta.system = data
-                .get("system")
-                .and_then(JsonValue::as_str)
-                .map(str::to_string);
-        }
-        let populated = event_type == "assistant/message"
-            || event_type == "request/header"
-            || meta.turn.is_some();
-        populated.then_some(meta)
-    };
-    for seq in session.surface().nodes {
+    let aux = LedgerAux::new(&inspection.events);
+    for seq in display_seq_order(&session, &by_seq) {
         let Some(event) = by_seq.get(&seq) else {
             continue;
         };
@@ -338,7 +392,7 @@ pub(crate) async fn load_projection_parts(
             usage,
             message: decoded.clone(),
             data: event.data.clone(),
-            meta: aux_meta(
+            meta: aux.meta(
                 seq,
                 &event.event_type,
                 &event.data,
@@ -394,6 +448,26 @@ pub(crate) async fn load_projection_parts(
         .collect::<Vec<_>>();
     let mut aux = turn_ends;
     aux.extend(headers);
+    // Context compaction checkpoints: log-only events (no surface op) that
+    // used to be dropped here — the live stream shows the fold row via
+    // UiEvent::Compaction, but a reload rebuilt the transcript WITHOUT it and
+    // the checkpoint vanished from the Desktop UI (2026-10-26). Merge them in
+    // at their seq position; the projections decide how to render them.
+    aux.extend(
+        inspection
+            .events
+            .iter()
+            .filter(|event| event.event_type == "compaction/summary")
+            .map(|event| SurfaceEntry {
+                seq: event.seq,
+                time: event.time,
+                event_type: "compaction/summary".into(),
+                usage: None,
+                message: None,
+                data: event.data.clone(),
+                meta: None,
+            }),
+    );
     if aux.is_empty() {
         return Ok((pairs, tool_names));
     }
@@ -416,6 +490,241 @@ pub(crate) async fn load_projection_parts(
         }
     }
     Ok((merged, tool_names))
+}
+
+/// Full-history archive projection (`session.archive`): identical decode to
+/// `load_projection_parts`, but driven directly by the persisted ledger in
+/// seq order — the kernel surface fold (compaction/summary shadowing) is
+/// NEVER applied, so entries shadowed by a context compaction still project.
+/// Compaction checkpoints come back as their own SurfaceEntry rows
+/// (`compaction/summary`, message None) for `project_archive_trace` to label.
+/// Returns `(entries, compaction_count, tool_names)`.
+pub(crate) async fn load_archive_parts(
+    runtime: &crate::RuntimeInner,
+    session_id: &str,
+) -> anyhow::Result<(Vec<SurfaceEntry>, u32, HashMap<String, String>)> {
+    ensure_durable(runtime).await?;
+    let inspection = runtime
+        .persistence
+        .coordinator()
+        .load(SessionId(session_id.to_string()))
+        .map_err(|error| anyhow::anyhow!("load {session_id}: {error}"))?;
+    let aux = LedgerAux::new(&inspection.events);
+    let mut tool_names: HashMap<String, String> = HashMap::new();
+    for event in inspection.events.iter() {
+        if event.event_type == "tool/call" {
+            if let (Some(call_id), Some(name)) = (
+                event.data.get("callId").and_then(JsonValue::as_str),
+                event.data.get("name").and_then(JsonValue::as_str),
+            ) {
+                tool_names.insert(call_id.to_string(), name.to_string());
+            }
+        }
+    }
+    let mut out: Vec<SurfaceEntry> = Vec::new();
+    let mut compactions: u32 = 0;
+    for event in inspection.events.iter() {
+        let seq = event.seq;
+        match event.event_type.as_str() {
+            "user/message" => match KernelMessage::from_json(event.data.clone()) {
+                Ok(message) => out.push(SurfaceEntry {
+                    seq,
+                    time: event.time,
+                    event_type: event.event_type.clone(),
+                    usage: None,
+                    message: Some(message),
+                    data: event.data.clone(),
+                    meta: None,
+                }),
+                Err(error) => {
+                    tracing::warn!(session = %session_id, seq, %error, "archive: undecodable user entry skipped");
+                }
+            },
+            "assistant/message" | "tool/result" => {
+                let usage = event.data.get("usage").and_then(|u| {
+                    Some((
+                        u.get("inputTokens").and_then(JsonValue::as_u64)?,
+                        u.get("outputTokens").and_then(JsonValue::as_u64)?,
+                    ))
+                });
+                let inner = event
+                    .data
+                    .get("message")
+                    .cloned()
+                    .unwrap_or(JsonValue::Null);
+                let decoded: Option<KernelMessage> = match KernelMessage::from_json(inner) {
+                    Ok(message) if message.content.is_empty() => None,
+                    Ok(message) => Some(message),
+                    Err(error) => {
+                        tracing::warn!(session = %session_id, seq, %error, "archive: undecodable log entry skipped");
+                        continue;
+                    }
+                };
+                out.push(SurfaceEntry {
+                    seq,
+                    time: event.time,
+                    event_type: event.event_type.clone(),
+                    usage,
+                    message: decoded,
+                    data: event.data.clone(),
+                    meta: aux.meta(
+                        seq,
+                        &event.event_type,
+                        &event.data,
+                        &event.source_event_seqs,
+                    ),
+                });
+            }
+            "turn/end" => out.push(SurfaceEntry {
+                seq,
+                time: event.time,
+                event_type: "turn/end".into(),
+                usage: None,
+                message: None,
+                data: event.data.clone(),
+                meta: None,
+            }),
+            "request/header" => {
+                let system = event.data.get("system").and_then(JsonValue::as_str);
+                let reason = event
+                    .data
+                    .get("reason")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("initial");
+                out.push(SurfaceEntry {
+                    seq,
+                    time: event.time,
+                    event_type: "request/header".into(),
+                    usage: None,
+                    message: None,
+                    data: JsonValue::Null,
+                    meta: Some(SurfaceMeta {
+                        header_reason: Some(reason.to_string()),
+                        system: system.map(str::to_string),
+                        ..Default::default()
+                    }),
+                });
+            }
+            "compaction/summary" => {
+                compactions += 1;
+                out.push(SurfaceEntry {
+                    seq,
+                    time: event.time,
+                    event_type: "compaction/summary".into(),
+                    usage: None,
+                    message: None,
+                    data: event.data.clone(),
+                    meta: None,
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok((out, compactions, tool_names))
+}
+
+/// Trace projection for the archive: the folded projection plus labeled
+/// CONTEXT rows for every compaction checkpoint, merged in seq order.
+pub(crate) fn project_archive_trace(
+    entries: Vec<SurfaceEntry>,
+    tool_names: &HashMap<String, String>,
+) -> (Vec<types::SessionTraceEntry>, u32) {
+    let mut compactions: u32 = 0;
+    let mut marks: Vec<types::SessionTraceEntry> = Vec::new();
+    for entry in &entries {
+        if entry.event_type != "compaction/summary" {
+            continue;
+        }
+        compactions += 1;
+        let summary = entry
+            .data
+            .get("summary")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let shadowed = |key: &str| entry.data.get(key).and_then(JsonValue::as_u64);
+        let mut text = String::from("[context compaction]\n\n");
+        if summary.trim().is_empty() {
+            text.push_str("(no summary text recorded)");
+        } else {
+            text.push_str(&summary);
+        }
+        if let (Some(start), Some(end)) = (shadowed("shadowedStart"), shadowed("shadowedEnd")) {
+            text.push_str(&format!("\n\n(entries {start}–{end} folded out of the live context; they remain in the ledger and are shown around this row.)"));
+        }
+        marks.push(types::SessionTraceEntry {
+            kind: "compaction".to_string(),
+            text,
+            tool_name: None,
+            tool_input: None,
+            tool_output: None,
+            tool_ok: None,
+            seq: entry.seq as f64,
+            time_ms: entry.time as f64,
+            turn: None,
+            step: None,
+            input_tokens: None,
+            output_tokens: None,
+            provider: None,
+            model: None,
+            duration_ms: None,
+            ttft_ms: None,
+        });
+    }
+    let mut rows = project_trace_entries(entries, tool_names);
+    if !marks.is_empty() {
+        rows.extend(marks);
+        rows.sort_by(|a, b| {
+            a.seq
+                .partial_cmp(&b.seq)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    (rows, compactions)
+}
+
+/// Chat-view archive projection (`session.archiveMessages`): the folded
+/// projection plus a `compaction`-role row per checkpoint — the same shape
+/// the live stream emits (UiEvent::Compaction → role "compaction"), so the
+/// UI renders archive markers identically to live ones.
+pub(crate) fn project_archive_chat_messages(
+    entries: Vec<SurfaceEntry>,
+    tool_names: &HashMap<String, String>,
+) -> Vec<types::ChatMessage> {
+    let mut marks: Vec<(u64, u64, String)> = Vec::new();
+    for entry in &entries {
+        if entry.event_type != "compaction/summary" {
+            continue;
+        }
+        let summary = entry
+            .data
+            .get("summary")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string();
+        marks.push((entry.seq, entry.time, summary));
+    }
+    let mut rows = project_chat_messages(entries, tool_names);
+    for (seq, time, summary) in marks {
+        let pos = rows
+            .iter()
+            .position(|r| matches!(r.seq, Some(rs) if rs > seq))
+            .unwrap_or(rows.len());
+        rows.insert(
+            pos,
+            types::ChatMessage {
+                role: "compaction".to_string(),
+                content: summary,
+                seq: Some(seq),
+                ts: Some(time),
+                usage: None,
+                duration_ms: None,
+                done_ts: None,
+                file_changes: None,
+            },
+        );
+    }
+    rows
 }
 
 fn role_str(role: &MessageRole) -> &'static str {
@@ -442,18 +751,10 @@ pub(crate) fn flatten_blocks(blocks: &[ContentBlock]) -> String {
             } => {
                 let name = name.clone().unwrap_or_default();
                 // WI-47 Phase B: lossless conversion (a String argument —
-                // malformed ingress — yields no keys, as before).
+                // malformed ingress — shows verbatim via tool_call_arg).
                 let parsed: Option<serde_json::Value> = arguments.to_serde_json().ok();
-                let arg = ["file", "path", "command"]
-                    .iter()
-                    .find_map(|key| {
-                        parsed
-                            .as_ref()
-                            .and_then(|value| value.get(*key))
-                            .and_then(|value| value.as_str())
-                    })
-                    .unwrap_or("");
-                Some(tool_call_label(&name, arg))
+                let arg = tool_call_arg(parsed.as_ref());
+                Some(tool_call_label(&name, &arg))
             }
             ContentBlock::ToolResult {
                 call_id: _,
@@ -530,20 +831,12 @@ pub(crate) fn display_pieces(
             } => {
                 let name = name.clone().unwrap_or_default();
                 // WI-47 Phase B: lossless conversion (a String argument —
-                // malformed ingress — yields no keys, as before).
+                // malformed ingress — shows verbatim via tool_call_arg).
                 let parsed: Option<serde_json::Value> = arguments.to_serde_json().ok();
-                let arg = ["file", "path", "command"]
-                    .iter()
-                    .find_map(|key| {
-                        parsed
-                            .as_ref()
-                            .and_then(|value| value.get(*key))
-                            .and_then(|value| value.as_str())
-                    })
-                    .unwrap_or("");
+                let arg = tool_call_arg(parsed.as_ref());
                 out.push(types::ChatMessage {
                     role: "tool".to_string(),
-                    content: tool_call_label(&name, arg),
+                    content: tool_call_label(&name, &arg),
                     ts: Some(ts),
                     usage: None,
                     duration_ms: None,
@@ -625,7 +918,11 @@ pub(crate) fn project_chat_messages(
                 }
                 if let Some(message) = entry.message {
                     let role = role_str(&message.role);
-                    stamp_seq(&mut out, display_pieces(&role, &message.content, entry.time), entry.seq);
+                    stamp_seq(
+                        &mut out,
+                        display_pieces(&role, &message.content, entry.time),
+                        entry.seq,
+                    );
                 }
             }
             "assistant/message" => {
@@ -648,7 +945,11 @@ pub(crate) fn project_chat_messages(
             "tool/result" => {
                 if let Some(message) = &entry.message {
                     let role = role_str(&message.role);
-                    stamp_seq(&mut out, display_pieces(&role, &message.content, entry.time), entry.seq);
+                    stamp_seq(
+                        &mut out,
+                        display_pieces(&role, &message.content, entry.time),
+                        entry.seq,
+                    );
                     for block in &message.content {
                         let ContentBlock::ToolResult {
                             call_id,
@@ -730,10 +1031,42 @@ pub(crate) fn project_chat_messages(
                     );
                 }
             }
+            "compaction/summary" => {
+                // Context compaction checkpoint: re-emit the fold row on
+                // history reload (parity with the live UiEvent::Compaction
+                // path) — the renderer renders role "compaction" as a
+                // CompactionRow disclosure. Empty-summary checkpoints
+                // (start/end bookkeeping) stay silent.
+                let summary = entry
+                    .data
+                    .get("summary")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default();
+                if !summary.trim().is_empty() {
+                    stamp_seq(
+                        &mut out,
+                        vec![types::ChatMessage {
+                            role: "compaction".to_string(),
+                            content: summary.to_string(),
+                            ts: Some(entry.time),
+                            usage: None,
+                            duration_ms: None,
+                            done_ts: None,
+                            file_changes: None,
+                            seq: None,
+                        }],
+                        entry.seq,
+                    );
+                }
+            }
             _ => {
                 if let Some(message) = entry.message {
                     let role = role_str(&message.role);
-                    stamp_seq(&mut out, display_pieces(&role, &message.content, entry.time), entry.seq);
+                    stamp_seq(
+                        &mut out,
+                        display_pieces(&role, &message.content, entry.time),
+                        entry.seq,
+                    );
                 }
             }
         }
@@ -747,10 +1080,10 @@ pub(crate) fn project_chat_messages(
 /// 区间内，全量投影在该区间上与切片投影逐条一致。返回 `(turn_index, 切片)`；
 /// turn_index 为切片之前的 user/message 条数（0-based 回合序号）。
 /// 无 user 条目（回合尚未开始）→ None。
-pub(crate) fn open_turn_slice(
-    mut entries: Vec<SurfaceEntry>,
-) -> Option<(u32, Vec<SurfaceEntry>)> {
-    let last_user = entries.iter().rposition(|e| e.event_type == "user/message")?;
+pub(crate) fn open_turn_slice(mut entries: Vec<SurfaceEntry>) -> Option<(u32, Vec<SurfaceEntry>)> {
+    let last_user = entries
+        .iter()
+        .rposition(|e| e.event_type == "user/message")?;
     let turn_index = entries[..=last_user]
         .iter()
         .filter(|e| e.event_type == "user/message")
@@ -840,6 +1173,37 @@ pub(crate) fn project_trace_entries(
                 duration_ms: None,
                 ttft_ms: None,
             });
+            continue;
+        }
+        if entry.event_type == "compaction/summary" {
+            // Context compaction checkpoint: a CONTEXT row so the ledger shows
+            // where the model window was folded (chat re-renders the same
+            // checkpoint as its CompactionRow fold).
+            let summary = entry
+                .data
+                .get("summary")
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default();
+            if !summary.trim().is_empty() {
+                out.push(types::SessionTraceEntry {
+                    kind: "context".to_string(),
+                    text: format!("[context compaction]\n\n{summary}"),
+                    tool_name: None,
+                    tool_input: None,
+                    tool_output: None,
+                    tool_ok: None,
+                    seq: entry.seq as f64,
+                    time_ms: entry.time as f64,
+                    turn: None,
+                    step: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    provider: None,
+                    model: None,
+                    duration_ms: None,
+                    ttft_ms: None,
+                });
+            }
             continue;
         }
         let entry_seq = entry.seq;
@@ -975,7 +1339,7 @@ pub(crate) fn project_trace_entries(
             }
         }
     }
- // The initial system prompt belongs to the session preamble (pins
+    // The initial system prompt belongs to the session preamble (pins
     // "Initial System Prompt" to the top), but the ledger logs it at
     // first-request time — AFTER turn 1's user message. Hoist the first
     // `reason: "initial"` header row to the front; later "(changed)" headers
@@ -1261,8 +1625,10 @@ async fn reconcile_missing_projections(runtime: &crate::RuntimeInner) {
                             let applies = match source.as_str() {
                                 "user" => true,
                                 "provider" => title_source.as_deref() != Some("user"),
-                                _ => title_source.is_none()
-                                    || title_source.as_deref() == Some("fallback"),
+                                _ => {
+                                    title_source.is_none()
+                                        || title_source.as_deref() == Some("fallback")
+                                }
                             };
                             if applies {
                                 title = Some(new_title);
@@ -1426,11 +1792,7 @@ impl HostRuntime {
     /// WI-107: full-text search across persisted session payloads.
     /// Backend-agnostic (list + load traversal in the persistence query
     /// layer); newest sessions first, at most `limit` hits.
-    pub fn search_session_content(
-        &self,
-        query: String,
-        limit: usize,
-    ) -> Vec<serde_json::Value> {
+    pub fn search_session_content(&self, query: String, limit: usize) -> Vec<serde_json::Value> {
         let inner = self.inner.clone();
         let handle = self.runtime_handle.clone();
         std::thread::spawn(move || {
@@ -1439,10 +1801,7 @@ impl HostRuntime {
                 let Some(ref runtime) = *l else { return vec![] };
                 let store = runtime.persistence.as_ref();
                 match starriver_session_persistence::query::search_sessions(
-                    store,
-                    &query,
-                    limit,
-                    None,
+                    store, &query, limit, None,
                 )
                 .await
                 {
@@ -1543,6 +1902,31 @@ impl HostRuntime {
                     Ok((entries, tool_names)) => project_chat_messages(entries, &tool_names),
                     Err(error) => {
                         tracing::warn!(session = %session_id, %error, "session history unavailable");
+                        vec![]
+                    }
+                }
+            })
+        })
+        .join()
+        .unwrap_or_default()
+    }
+
+    /// Full-history chat archive (session.archiveMessages): the raw ledger
+    /// transcript INCLUDING compaction-shadowed turns, with `compaction`
+    /// marker rows at their checkpoint positions.
+    pub fn get_session_archive_messages(&self, session_id: String) -> Vec<types::ChatMessage> {
+        let inner = self.inner.clone();
+        let handle = self.runtime_handle.clone();
+        std::thread::spawn(move || {
+            handle.block_on(async {
+                let l = inner.lock().await;
+                let Some(ref runtime) = *l else { return vec![] };
+                match load_archive_parts(runtime, &session_id).await {
+                    Ok((entries, _compactions, tool_names)) => {
+                        project_archive_chat_messages(entries, &tool_names)
+                    }
+                    Err(error) => {
+                        tracing::warn!(session = %session_id, %error, "session archive unavailable");
                         vec![]
                     }
                 }
@@ -1699,26 +2083,41 @@ impl HostRuntime {
         // NotFound stays Ok (deleting an unknown id is idempotent).
         let outcome: anyhow::Result<()> = std::thread::spawn(move || {
             handle.block_on(async {
-                let l = inner.lock().await;
-                let Some(ref runtime) = *l else {
-                    return Ok(());
+                // Terminal teardown runs AFTER the lock is released: kill is
+                // bounded-quiescent (up to ~1.5s per terminal) and must not
+                // stall every other API call behind the runtime lock.
+                let terminal_service = {
+                    let l = inner.lock().await;
+                    let Some(ref runtime) = *l else {
+                        return Ok(());
+                    };
+                    if let Err(e) = runtime
+                        .persistence
+                        .coordinator()
+                        .remove(SessionId(sid.clone()))
+                    {
+                        match e {
+                            starriver_session_persistence::coordinator::CoordinatorError::Persistence(
+                                starriver_kernel::persistence::PersistenceError::NotFound(_),
+                            ) => {}
+                            other => return Err(anyhow::anyhow!("remove session log: {other}")),
+                        }
+                    }
+                    runtime
+                        .host_store
+                        .delete_session(&sid)
+                        .map_err(|e| anyhow::anyhow!("remove session metadata: {e}"))?;
+                    Some(Arc::clone(&runtime.agent.terminal_service))
                 };
-                if let Err(e) = runtime
-                    .persistence
-                    .coordinator()
-                    .remove(SessionId(sid.clone()))
-                {
-                    match e {
-                        starriver_session_persistence::coordinator::CoordinatorError::Persistence(
-                            starriver_kernel::persistence::PersistenceError::NotFound(_),
-                        ) => {}
-                        other => return Err(anyhow::anyhow!("remove session log: {other}")),
+                // 会话已删，其后台终端没有存在理由了（dsh 语义：owner 销毁
+                // ⇒ 终端回收）。fail-open：回收失败不回滚删除。
+                if let Some(terminals) = terminal_service {
+                    let killed = terminals.kill_owner(&sid);
+                    if killed > 0 {
+                        tracing::info!(session = %sid, killed, "background terminals reaped on session delete");
                     }
                 }
-                runtime
-                    .host_store
-                    .delete_session(&sid)
-                    .map_err(|e| anyhow::anyhow!("remove session metadata: {e}"))
+                Ok(())
             })
         })
         .join()
@@ -1813,24 +2212,50 @@ impl HostRuntime {
     fn set_session_archived(&self, session_id: String, archived: bool) -> anyhow::Result<()> {
         let inner = self.inner.clone();
         let handle = self.runtime_handle.clone();
-        std::thread::spawn(move || {
+        let sid = session_id.clone();
+        let outcome: anyhow::Result<()> = std::thread::spawn(move || {
             handle.block_on(async {
-                let l = inner.lock().await;
-                match l.as_ref() {
-                    Some(runtime) => append_session_event(
-                        runtime,
-                        &session_id,
-                        "session/archived",
-                        JsonValue::Object(vec![("archived".into(), JsonValue::Bool(archived))]),
-                    )
-                    .await
-                    .map_err(|e| anyhow::anyhow!("archive event failed: {e}")),
-                    None => Err(anyhow::anyhow!("runtime not loaded")),
+                // Kill 走锁外：kill_owner 是 bounded-quiescent 的，不能占着
+                // runtime 锁等子进程退出。
+                let (result, terminal_service) = {
+                    let l = inner.lock().await;
+                    match l.as_ref() {
+                        Some(runtime) => {
+                            let result = append_session_event(
+                                runtime,
+                                &session_id,
+                                "session/archived",
+                                JsonValue::Object(vec![
+                                    ("archived".into(), JsonValue::Bool(archived)),
+                                ]),
+                            )
+                            .await
+                            .map_err(|e| anyhow::anyhow!("archive event failed: {e}"));
+                            // 归档 = 用户主动结束会话：后台终端一并回收
+                            // （终端状态本就不持久化，无可丢失）。unarchive
+                            // 不复活终端。
+                            let terminals = if archived && result.is_ok() {
+                                Some(Arc::clone(&runtime.agent.terminal_service))
+                            } else {
+                                None
+                            };
+                            (result, terminals)
+                        }
+                        None => (Err(anyhow::anyhow!("runtime not loaded")), None),
+                    }
+                };
+                if let Some(terminals) = terminal_service {
+                    let killed = terminals.kill_owner(&sid);
+                    if killed > 0 {
+                        tracing::info!(session = %sid, killed, "background terminals reaped on session archive");
+                    }
                 }
+                result
             })
         })
         .join()
-        .map_err(|_| anyhow::anyhow!("thread panicked"))?
+        .map_err(|_| anyhow::anyhow!("thread panicked"))?;
+        outcome
     }
 
     /// Data source for the /unarchive picker: archived sessions only.
@@ -2009,10 +2434,13 @@ mod projection_tests {
         // otherwise failures vanish on history reload and consecutive failed inputs get mis-merged into one bubble.
         let failure = JsonValue::Object(vec![
             ("kind".into(), JsonValue::String("error".into())),
-            ("failure".into(), JsonValue::Object(vec![(
-                "message".into(),
-                JsonValue::String("Insufficient balance (code 1113)".into()),
-            )])),
+            (
+                "failure".into(),
+                JsonValue::Object(vec![(
+                    "message".into(),
+                    JsonValue::String("Insufficient balance (code 1113)".into()),
+                )]),
+            ),
         ]);
         let entries = vec![
             user_entry(1),
@@ -2053,6 +2481,100 @@ mod projection_tests {
             ok.iter().all(|m| m.role != "system"),
             "completed turn must not add a system row: {ok:?}"
         );
+    }
+
+    // ── Compaction checkpoints in the projections (2026-10-26) ──
+
+    #[test]
+    fn compacted_turns_stay_in_display_projection() {
+        // 压缩检查点用 user/message Replace 落盘，内核 surface 折叠会把被替换
+        // 的整个区间从 nodes 里剔掉——那是模型窗口语义；Desktop 的 transcript
+        // 契约是"永不删行"。display_seq_order 必须复活该区间的 seq，而工具结果
+        // prune 的单条 tool/result 替身继续遮蔽原件（否则替身+原件渲染两遍）。
+        use starriver_kernel::session::{AppendOptions, Session as KernelSession, SurfaceOp};
+        let session = KernelSession::new(
+            starriver_kernel::session::SessionId("s".into()),
+            cordis_rslite::EventBus::new(),
+        );
+        let append = |session: &KernelSession, kind: &str, op: Option<SurfaceOp>| {
+            session
+                .append_with(
+                    kind,
+                    JsonValue::Object(Vec::new()),
+                    AppendOptions {
+                        surface_op: op,
+                        source_event_seqs: Vec::new(),
+                    },
+                )
+                .expect("append");
+        };
+        append(&session, "user/message", Some(SurfaceOp::Append)); // 0 — 被压缩
+        append(&session, "assistant/message", Some(SurfaceOp::Append)); // 1 — 被压缩
+        append(&session, "tool/result", Some(SurfaceOp::Append)); // 2 — 被压缩
+        append(&session, "tool/result", Some(SurfaceOp::Append)); // 3 — 被 prune 替身遮蔽
+        append(
+            &session,
+            "tool/result",
+            Some(SurfaceOp::Replace { start: 3, end: 3 }),
+        ); // 4 替身
+        append(
+            &session,
+            "user/message",
+            Some(SurfaceOp::Replace { start: 0, end: 2 }),
+        ); // 5 检查点
+        let events = session.events();
+        let by_seq: HashMap<u64, &SessionEvent> = events.iter().map(|e| (e.seq, e)).collect();
+        assert_eq!(display_seq_order(&session, &by_seq), vec![0, 1, 2, 4, 5]);
+    }
+
+    fn compaction_entry(seq: u64, summary: &str) -> SurfaceEntry {
+        SurfaceEntry {
+            seq,
+            time: 100,
+            event_type: "compaction/summary".into(),
+            data: JsonValue::Object(vec![("summary".into(), JsonValue::String(summary.into()))]),
+            usage: None,
+            message: None,
+            meta: None,
+        }
+    }
+
+    #[test]
+    fn compaction_checkpoint_surfaces_as_fold_row_after_reload() {
+        // The live stream adds the fold row via UiEvent::Compaction; history
+        // reload must re-emit it (role "compaction") or the checkpoint
+        // vanishes from the chat transcript once the session is re-opened.
+        let out = project(vec![
+            user_entry(1),
+            compaction_entry(5, "## Primary Request and Intent\n\n压缩摘要"),
+            assistant_entry(6, "压缩后的回答", None),
+        ]);
+        let row = out
+            .iter()
+            .find(|m| m.role == "compaction")
+            .expect("compaction checkpoint must project into a fold row");
+        assert!(row.content.contains("Primary Request and Intent"));
+        // Prose after the checkpoint still renders.
+        assert!(out
+            .iter()
+            .any(|m| m.role == "assistant" && m.content == "压缩后的回答"));
+        // Empty-summary bookkeeping checkpoints stay silent.
+        let quiet = project(vec![compaction_entry(5, "  ")]);
+        assert!(quiet.iter().all(|m| m.role != "compaction"));
+    }
+
+    #[test]
+    fn compaction_checkpoint_shows_in_trajectory() {
+        let entries = project_trace(vec![
+            trace_user(1, "继续"),
+            compaction_entry(5, "## Primary Request and Intent\n\n压缩摘要"),
+        ]);
+        let row = entries
+            .iter()
+            .find(|e| e.text.contains("context compaction"))
+            .expect("trace must show the compaction checkpoint");
+        assert_eq!(row.kind, "context");
+        assert!(row.text.contains("压缩摘要"));
     }
 
     fn project_with(
@@ -2735,7 +3257,7 @@ mod projection_tests {
                     },
                 }),
                 meta: None,
-            data: JsonValue::Null,
+                data: JsonValue::Null,
             }
         }
 
@@ -2772,7 +3294,7 @@ mod projection_tests {
                 },
             }),
             meta: None,
-        data: JsonValue::Null,
+            data: JsonValue::Null,
         }];
         let out = project(entries);
         assert_eq!(out.len(), 2);
@@ -2981,7 +3503,7 @@ mod projection_tests {
                 usage: Some((10, 5)),
                 message: tool_call_message(),
                 meta: None,
-            data: JsonValue::Null,
+                data: JsonValue::Null,
             },
             end_entry(1_500),
         ];
@@ -3018,14 +3540,27 @@ impl HostRuntime {
                         )]),
                     )
                     .await;
+                    // Sandbox release: respect a folded danger-full-access (a
+                    // review-card preset that landed before this legacy
+                    // confirm) — Plan's allowed set covers it; otherwise the
+                    // conservative workspace-write release.
+                    let sandbox = if let Some(agent) =
+                        runtime.agent.registry().get(&SessionId(session_id.clone()))
+                    {
+                        match starriver_kernel::sandbox::effective_sandbox_mode(agent.session()) {
+                            Some(starriver_kernel::sandbox::SandboxMode::DangerFullAccess) => {
+                                "danger-full-access"
+                            }
+                            _ => "workspace-write",
+                        }
+                    } else {
+                        "workspace-write"
+                    };
                     let _ = append_session_event(
                         runtime,
                         &session_id,
                         "sandbox/mode",
-                        JsonValue::Object(vec![(
-                            "mode".into(),
-                            JsonValue::String("workspace-write".into()),
-                        )]),
+                        JsonValue::Object(vec![("mode".into(), JsonValue::String(sandbox.into()))]),
                     )
                     .await;
                 }
@@ -3081,7 +3616,7 @@ impl HostRuntime {
         result
     }
 
- /// Permission preset switch (permission-presets parity): append BOTH
+    /// Permission preset switch (permission-presets parity): append BOTH
     /// knob events — `sandbox/mode` and `approval/policy` — for the preset's
     /// (sandbox, approval) bundle. Presets are the only sanctioned way to
     /// select DangerFullAccess from a client; the high-risk confirmation gate
@@ -3306,10 +3841,7 @@ impl crate::HostRuntime {
     /// compaction/fork/回滚后递增（手动 compact 路径；运行中自动压缩由
     /// 中继在见到 Compaction 事件时递增）。
     pub fn bump_trace_epoch(&self, session_id: &str) {
-        let mut map = self
-            .trace_epochs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut map = self.trace_epochs.lock().unwrap_or_else(|e| e.into_inner());
         let next = map.get(session_id).copied().unwrap_or(0) + 1;
         map.insert(session_id.to_string(), next);
     }

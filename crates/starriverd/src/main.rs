@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use starriver_protocol_server::{http_server, protocol_catalog};
+use starriver_protocol_server::{http_server, lan_chat, protocol_catalog};
 use starriverd::{self, data_dir, info_path, now_unix, Acquire, ControlSocket, DaemonInfo};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -161,8 +161,23 @@ fn run(args: Args) -> anyhow::Result<()> {
         version: VERSION.into(),
         protocol_version: starriver_protocol::PROTOCOL_VERSION,
         started_at: now_unix(),
+        build_id: starriverd::compute_build_id(),
     };
     starriverd::write_info(&dir, &info)?;
+
+    // LAN chat rides the daemon lifecycle: discovery beacon + peer message
+    // endpoint on the LAN, events tee'd into the protocol event bus.
+    // STARRIVER_LAN_CHAT=0 disables it; a failed start never breaks the daemon.
+    let mut chat: Option<std::sync::Arc<lan_chat::ChatService>> = None;
+    if !lan_chat::disabled_by_env() {
+        match runtime.block_on(lan_chat::ChatService::start(
+            lan_chat::ChatOptions { emit: Some(server.emit_handle()), ..Default::default() },
+            runtime.clone(),
+        )) {
+            Ok(service) => chat = Some(service),
+            Err(error) => eprintln!("starriverd: lan chat start failed (disabled): {error}"),
+        }
+    }
 
     socket.serve(info.clone(), runtime.clone())?;
     let shutdown = socket.shutdown_token();
@@ -211,6 +226,9 @@ fn run(args: Args) -> anyhow::Result<()> {
     runtime.block_on(async move { shutdown.cancelled().await });
 
     server.shutdown();
+    if let Some(chat) = chat {
+        chat.stop();
+    }
     socket.cleanup();
     let _ = std::fs::remove_file(info_path(&dir));
     eprintln!("starriverd: shutdown complete");

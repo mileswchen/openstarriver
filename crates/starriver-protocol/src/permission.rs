@@ -44,6 +44,8 @@ pub const PERM_ATTACHMENTS_WRITE: &str = "attachments:write";
 pub const PERM_UI_CONTRIB: &str = "ui:contrib";
 /// Full shell replacement (elevated permission, not granted by default).
 pub const PERM_SHELL_REPLACE: &str = "shell:replace";
+/// WI-LAN chat: read peers/history, send messages, resolve chat images.
+pub const PERM_LAN_CHAT: &str = "lan:chat";
 
 /// Caller identity and permissions: the main client holds everything;
 /// plugin frames hold a subset per their manifest allowlist.

@@ -56,20 +56,18 @@ pub fn normalize_image(
             ),
         )
     })?;
- // Declared media type must match the decoded bytes (IMAGE_TYPE_MISMATCH).
+    // Declared media type must match the decoded bytes (IMAGE_TYPE_MISMATCH).
     // BUG-122: the dimension caps are checked BEFORE the full decode — a
     // small compressed payload claiming huge dimensions (decompression
     // bomb) must be rejected off the header, not after the whole bitmap
     // has been allocated.
     let mut reader = ImageReader::with_format(std::io::Cursor::new(data), format);
-    let (header_w, header_h) = reader
-        .into_dimensions()
-        .map_err(|_| {
-            AttachmentError::new(
-                AttachmentErrorCode::ImageTypeMismatch,
-                "declared image type does not match its bytes",
-            )
-        })?;
+    let (header_w, header_h) = reader.into_dimensions().map_err(|_| {
+        AttachmentError::new(
+            AttachmentErrorCode::ImageTypeMismatch,
+            "declared image type does not match its bytes",
+        )
+    })?;
     let header_pixels = u64::from(header_w) * u64::from(header_h);
     if header_pixels > admission.max_image_pixels
         || header_w.max(header_h) > admission.max_image_dimension
@@ -103,7 +101,7 @@ pub fn normalize_image(
     }
 
     // Aspect-preserving target under the normalized pixel budget, then the
- // long-edge cap (initialDimensions).
+    // long-edge cap (initialDimensions).
     let (mut w, mut h) = request_image_dimensions(src_w, src_h, policy.max_pixels);
     let long_edge = w.max(h);
     if long_edge > policy.max_dimension {
@@ -144,7 +142,7 @@ pub fn normalize_image(
             smallest = Some(bytes);
         }
     }
- // No ladder rung fit: keep the smallest output (isExhaustedEncoding).
+    // No ladder rung fit: keep the smallest output (isExhaustedEncoding).
     let bytes = smallest.unwrap_or_default();
     Ok(NormalizedImage {
         data: bytes,
@@ -191,7 +189,11 @@ mod tests {
         for (i, entry) in table.iter_mut().enumerate() {
             let mut c = i as u32;
             for _ in 0..8 {
-                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+                c = if c & 1 != 0 {
+                    0xEDB8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
             }
             *entry = c;
         }

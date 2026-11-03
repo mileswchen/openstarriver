@@ -36,8 +36,12 @@ mod tests {
 
     #[test]
     fn detects_bare_and_pathed_and_compound_segments() {
-        assert!(command_needs_system_services("hdiutil create -format UDRW x.dmg"));
-        assert!(command_needs_system_services("/usr/bin/hdiutil attach x.dmg"));
+        assert!(command_needs_system_services(
+            "hdiutil create -format UDRW x.dmg"
+        ));
+        assert!(command_needs_system_services(
+            "/usr/bin/hdiutil attach x.dmg"
+        ));
         assert!(command_needs_system_services(
             "cd /repo && export PATH=/x && hdiutil create x"
         ));

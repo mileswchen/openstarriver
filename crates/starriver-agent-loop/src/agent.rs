@@ -1893,6 +1893,32 @@ impl ReactLoopAgent {
                 provider_retry_after_ms: None,
                 request_id: None,
             })?;
+        // dsh-pattern declaration enforcement: a variant declared text-only
+        // (`supports_vision: false` in settings) refuses any image block at
+        // request assembly — user message, history after a mid-session model
+        // switch, or tool output. The declaration is a claim about the
+        // endpoint; this surfaces it as a loud, model-naming error instead
+        // of a doomed request or a silent strip.
+        if self
+            .options
+            .image_projection
+            .as_ref()
+            .is_some_and(|cfg| cfg.reject_images)
+            && messages
+                .iter()
+                .any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::Image { .. })))
+        {
+            return Err(LlmError::Call {
+                code: "UNSUPPORTED_CONTENT".into(),
+                message: format!(
+                    "模型 \"{}\" 已声明为纯文本，不支持图片输入；请改用支持视觉的模型或移除图片",
+                    config.model
+                ),
+                status: None,
+                provider_retry_after_ms: None,
+                request_id: None,
+            });
+        }
         // WI-1/WI-159: cold/hot image projection — budgeted images resolve
         // to data URLs; the rest ship as placeholder text. Per-step
         // re-projection is what makes a reload take effect on the very next

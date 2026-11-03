@@ -364,6 +364,7 @@ mod tests {
             max_images,
             max_request_bytes,
             allow_reload: true,
+            reject_images: false,
         }
     }
 
@@ -372,6 +373,7 @@ mod tests {
             max_images,
             max_request_bytes,
             allow_reload: false,
+            reject_images: false,
         }
     }
 

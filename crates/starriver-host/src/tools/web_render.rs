@@ -92,15 +92,15 @@ pub fn sniff_meta_charset(prefix: &[u8]) -> Option<String> {
     let re_meta = regex_lite::Regex::new(r"(?is)<meta\b[^>]*>").expect("static regex");
     let re_charset = regex_lite::Regex::new(r#"(?i)charset\s*=\s*["']?\s*([a-z0-9_.:\-]+)"#)
         .expect("static regex");
-    let re_equiv = regex_lite::Regex::new(r#"(?i)http-equiv\s*=\s*["']?content-type"#)
-        .expect("static regex");
+    let re_equiv =
+        regex_lite::Regex::new(r#"(?i)http-equiv\s*=\s*["']?content-type"#).expect("static regex");
     // charset as a standalone ATTRIBUTE: the match must sit OUTSIDE any
     // quoted attribute value — `content="0; charset=gbk"` (or a refresh URL
     // carrying `charset=`) also satisfies `\scharset\s*=` and hijacked the
     // decoder. Scan quotes before the match: an even count means we are
     // between attributes, odd means inside a value.
-    let re_plain = regex_lite::Regex::new(r#"(?i)^<meta\b[^>]*?(\s)charset\s*="#)
-        .expect("static regex");
+    let re_plain =
+        regex_lite::Regex::new(r#"(?i)^<meta\b[^>]*?(\s)charset\s*="#).expect("static regex");
     for tag in re_meta.captures_iter(&text) {
         // BUG-95: only the two sanctioned declarations count — matching
         // `charset=` anywhere in ANY meta tag let a refresh URL like
@@ -666,7 +666,6 @@ mod tests {
     }
 }
 
-
 // ── BUG-95 regression (round 6) ──
 #[cfg(test)]
 mod round6_tests {
@@ -685,7 +684,9 @@ mod round6_tests {
             Some("utf-8".into())
         );
         assert_eq!(
-            sniff_meta_charset(b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=gbk\">"),
+            sniff_meta_charset(
+                b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=gbk\">"
+            ),
             Some("gbk".into())
         );
     }

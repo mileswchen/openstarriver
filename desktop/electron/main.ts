@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as https from 'https';
 import * as http from 'http';
-import { DaemonClient, daemonInvoke, PROTOCOL_VERSION } from './daemon';
+import { DaemonClient, daemonInvoke, PROTOCOL_VERSION, stopDaemonAndCleanup } from './daemon';
 import { acquireSingleInstanceLock } from './single-instance';
 
 // Single instance (2026-10-04): without the lock, any second launch — another
@@ -21,8 +21,21 @@ let mainWindow: BrowserWindow | null = null;
 let runtime: any = null;
 // FPM P4b: with `STARRIVER_MODE=daemon` (or STARRIVER_DAEMON=1) Electron acts as a
 // launcher + client: spawn/connect starriverd, protocol requests proxied over HTTP+SSE;
-// app exit does not kill the daemon (shared service). Default embedded (in-process NAPI), unchanged.
-const DAEMON_MODE = process.env.STARRIVER_MODE === 'daemon' || process.env.STARRIVER_DAEMON === '1';
+// app exit does not kill the daemon (shared service).
+// BUG-158 mitigation: packaged builds DEFAULT to daemon mode. The embedded NAPI
+// runtime runs protocol.dispatch synchronously on the Electron main thread — long
+// agent operations freeze the window (GNOME "not responding") — and keep all
+// HostRuntime memory inside the Electron process (anon-rss 5.8G → kernel OOM,
+// 2026-10-29). starriverd ships in resources/; `STARRIVER_MODE=embedded` opts back
+// into the in-process mode (debugging the NAPI bridge itself).
+const DAEMON_MODE =
+  process.env.STARRIVER_MODE === 'daemon' ||
+  process.env.STARRIVER_DAEMON === '1' ||
+  (process.env.STARRIVER_MODE !== 'embedded' &&
+    app.isPackaged &&
+    fs.existsSync(
+      path.join(process.resourcesPath, process.platform === 'win32' ? 'starriverd.exe' : 'starriverd'),
+    ));
 let daemon: DaemonClient | null = null;
 // Set when the NAPI module load or AgentRuntime construction fails. Surfaced to
 // the renderer via `runtime:backendHealth` so a dead backend shows an error
@@ -551,6 +564,143 @@ app.whenReady().then(async () => {
     error: runtimeError,
   }));
   ipcMain.handle('runtime:quitApp', () => app.quit());
+
+  // ── Daemon lifecycle：显式停服 + 应用内卸载 ──
+  // 默认：应用退出不杀守护进程（shared service，手机配对/远程 UI 仍在线）。
+  // 用户显式通道：菜单"停止后台服务并退出"、设置项 quitStopsDaemon（退出即停服）、
+  // macOS 应用内卸载（对齐 Docker Desktop 的 in-app uninstall：先停服务清数据，
+  // 退出后指引用户把 .app 拖入废纸篓——平台无拖废纸篓钩子，这是主流做法）。
+  const desktopPrefsPath = () => path.join(app.getPath('userData'), 'desktop-prefs.json');
+  const readQuitStopsDaemon = (): boolean => {
+    try {
+      return JSON.parse(fs.readFileSync(desktopPrefsPath(), 'utf8')).quitStopsDaemon === true;
+    } catch {
+      return false;
+    }
+  };
+  ipcMain.handle('prefs:getQuitStopsDaemon', () => readQuitStopsDaemon());
+  ipcMain.handle('prefs:setQuitStopsDaemon', (_e, value: boolean) => {
+    const prefsPath = desktopPrefsPath();
+    let prefs: Record<string, unknown> = {};
+    try {
+      prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
+    } catch {
+      // fresh prefs file
+    }
+    prefs.quitStopsDaemon = value === true;
+    fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+    fs.writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+    return prefs.quitStopsDaemon;
+  });
+
+  let quitting = false;
+  const showBox = (opts: Electron.MessageBoxOptions) =>
+    mainWindow ? dialog.showMessageBox(mainWindow, opts) : dialog.showMessageBox(opts);
+  const surfaceStopHint = async (hint: string | undefined): Promise<void> => {
+    if (!hint) return;
+    await showBox({
+      type: 'warning',
+      title: 'Starriver 后台服务',
+      message: '后台服务未能退出',
+      detail: `可手动执行：${hint}`,
+    });
+  };
+
+  async function quitStoppingDaemon(): Promise<void> {
+    quitting = true;
+    try {
+      const result = await stopDaemonAndCleanup();
+      await surfaceStopHint(result.hint);
+    } catch (error) {
+      console.error('[main] stop-daemon-and-quit failed:', error);
+    } finally {
+      app.quit();
+    }
+  }
+
+  app.on('before-quit', (event) => {
+    if (quitting || !readQuitStopsDaemon()) return;
+    quitting = true;
+    event.preventDefault();
+    void stopDaemonAndCleanup()
+      .then((result) => surfaceStopHint(result.hint))
+      .catch((error) => console.error('[main] quit daemon-stop failed:', error))
+      .finally(() => app.quit());
+  });
+
+  async function runInAppUninstall(): Promise<void> {
+    const { response, checkboxChecked } = await showBox({
+      type: 'question',
+      title: '卸载 Starriver',
+      message: '卸载 Starriver？',
+      detail:
+        '将停止后台服务（starriverd）并清理运行时文件，然后退出应用。完成后请手动把 Starriver.app 拖入废纸篓。',
+      checkboxLabel: '同时删除会话数据（~/.starriver，不可恢复）',
+      checkboxChecked: false,
+      buttons: ['取消', '卸载'],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (response !== 1) return;
+    const result = await stopDaemonAndCleanup();
+    if (checkboxChecked) {
+      try {
+        fs.rmSync(path.join(os.homedir(), '.starriver'), { recursive: true, force: true });
+      } catch (error) {
+        console.error('[main] uninstall data cleanup failed:', error);
+      }
+    }
+    await showBox({
+      type: result.confirmed ? 'info' : 'warning',
+      title: '卸载 Starriver',
+      message: '卸载完成',
+      detail: result.confirmed
+        ? '后台服务已停止。现在可以将 Starriver.app 拖入废纸篓。'
+        : `后台服务未能退出，可手动执行：${result.hint ?? 'pkill -f starriverd'}。之后再将 Starriver.app 拖入废纸篓。`,
+      buttons: ['好'],
+    });
+    quitting = true;
+    app.quit();
+  }
+
+  function buildAppMenu(): void {
+    const isMac = process.platform === 'darwin';
+    const stopItem: Electron.MenuItemConstructorOptions = {
+      label: '停止后台服务并退出',
+      accelerator: isMac ? 'Cmd+Q' : 'Ctrl+Q',
+      click: () => void quitStoppingDaemon(),
+    };
+    const template: Electron.MenuItemConstructorOptions[] = isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              { label: '卸载 Starriver…', click: () => void runInAppUninstall() },
+              { type: 'separator' },
+              { role: 'services' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              stopItem,
+            ],
+          },
+          { role: 'editMenu' },
+          { role: 'viewMenu' },
+          { role: 'windowMenu' },
+        ]
+      : [
+          { label: '文件', submenu: [stopItem] },
+          { role: 'editMenu' },
+          { role: 'viewMenu' },
+          { role: 'windowMenu' },
+        ];
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  }
+  buildAppMenu();
 
   createWindow();
 });

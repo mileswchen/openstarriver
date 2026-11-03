@@ -142,7 +142,12 @@ impl FileSink {
             .hits
             .lock()
             .expect("grep hits poisoned")
-            .push((self.path.display().to_string(), line_number, separator, text.to_string()));
+            .push((
+                self.path.display().to_string(),
+                line_number,
+                separator,
+                text.to_string(),
+            ));
         self.collector.budget.load(Ordering::Relaxed) > 0
     }
 }
@@ -254,7 +259,9 @@ impl ToolExecutor for Grep {
                 "no matches".to_string()
             } else {
                 hits.iter()
-                    .map(|(path, line, separator, text)| format!("{path}{separator}{line}{separator}{text}"))
+                    .map(|(path, line, separator, text)| {
+                        format!("{path}{separator}{line}{separator}{text}")
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             };

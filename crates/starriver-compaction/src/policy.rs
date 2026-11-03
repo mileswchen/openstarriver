@@ -4,6 +4,13 @@
 pub const DEFAULT_THRESHOLD_RATIO: f64 = 0.8;
 /// Fraction of recent messages preserved verbatim (retainRatio).
 pub const DEFAULT_RETAIN_RATIO: f64 = 0.16;
+/// 2026-10-26 (WI-201 follow-up): absolute pressure-trigger ceiling. The
+/// builtin window table states true capacity (glm-5.3 = 1M), so without this
+/// cap a 0.8 ratio would let context bloat to 800k tokens before condensing —
+/// the exact failure the 200k-declared windows used to prevent (see the
+/// settings.rs table doc for the 2026-10-14 incident). min(ratio × window,
+/// cap); bypassed with the ratio for overflow/manual/escalated triggers.
+pub const DEFAULT_COMPACTION_CONTEXT_CAP: u64 = 200_000;
 
 /// Why the engine is being asked to condense. Confirmed overflow condenses
 /// unconditionally (the threshold comparison is bypassed), while ordinary
@@ -60,6 +67,10 @@ pub struct CompactionPolicy {
     /// Extra condensation attempts when pressure remains above the threshold
  /// after a condense (compactionRetries).
     pub compaction_retries: usize,
+    /// 2026-10-26: absolute ceiling on the pressure trigger — the engine
+    /// compares against min(threshold_ratio × window, this). See
+    /// [`DEFAULT_COMPACTION_CONTEXT_CAP`].
+    pub context_cap: u64,
 }
 
 impl CompactionPolicy {
@@ -83,11 +94,15 @@ impl CompactionPolicy {
             ),
             None => (Some(default), 1),
         };
+        let context_cap = tuning
+            .and_then(|t| t.compaction_context_cap)
+            .unwrap_or(DEFAULT_COMPACTION_CONTEXT_CAP);
         Self {
             threshold_ratio,
             retain_ratio,
             prune,
             compaction_retries,
+            context_cap,
         }
     }
 }

@@ -100,7 +100,8 @@ fn parse_patch(diff: &str) -> Result<Vec<Hunk>, String> {
                 // A context line is exactly ONE marker space + the original
                 // text (which may itself be indented) — stripping ALL leading
                 // spaces made every indented-context diff unappliable.
-                h.lines.push((' ', line.strip_prefix(' ').unwrap_or(line).to_string()));
+                h.lines
+                    .push((' ', line.strip_prefix(' ').unwrap_or(line).to_string()));
             }
         }
     }
@@ -940,7 +941,6 @@ mod tests {
         );
     }
 }
-
 
 // ── BUG-92 regression (round 6) ──
 #[cfg(test)]

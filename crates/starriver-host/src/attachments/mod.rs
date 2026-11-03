@@ -263,12 +263,16 @@ mod tests {
         assert_eq!(text, "look at  and describe");
         // Position-faithful: the image sits BETWEEN its surrounding text.
         assert_eq!(blocks.len(), 3);
-        let ContentBlock::Text(t0) = &blocks[0] else { panic!("leading text") };
+        let ContentBlock::Text(t0) = &blocks[0] else {
+            panic!("leading text")
+        };
         assert_eq!(t0, "look at");
         let ContentBlock::Image { attachment } = &blocks[1] else {
             panic!("expected image block");
         };
-        let ContentBlock::Text(t2) = &blocks[2] else { panic!("trailing text") };
+        let ContentBlock::Text(t2) = &blocks[2] else {
+            panic!("trailing text")
+        };
         assert_eq!(t2, "and describe");
         // WI-1: stored refs become reference blocks — no base64 in the log.
         // WI-152 S3: identity + metadata only, no summary field.
@@ -315,13 +319,13 @@ mod tests {
         );
         let spaced = dir.path().join("my screenshot.png");
         std::fs::write(&spaced, vec![0x89, b'P', b'N', b'G', 1, 2, 3, 4]).unwrap();
-        let (text, blocks) = extract_image_blocks(
-            &format!("see ![shot]({})", spaced.display()),
-            &store,
-        );
+        let (text, blocks) =
+            extract_image_blocks(&format!("see ![shot]({})", spaced.display()), &store);
         assert_eq!(blocks.len(), 2, "spaced path resolves: {text}");
         assert!(matches!(blocks[1], ContentBlock::Image { .. }));
-        let ContentBlock::Text(lead) = &blocks[0] else { panic!("lead text") };
+        let ContentBlock::Text(lead) = &blocks[0] else {
+            panic!("lead text")
+        };
         assert_eq!(lead, "see");
         assert!(!text.contains("![shot]"), "consumed reference: {text}");
     }
@@ -349,8 +353,7 @@ mod tests {
         );
 
         let small = "data:image/png;base64,AAAA".to_string();
-        let (text, blocks) =
-            extract_image_blocks(&format!("![ok]({small})"), &store);
+        let (text, blocks) = extract_image_blocks(&format!("![ok]({small})"), &store);
         assert_eq!(blocks.len(), 1, "in-cap inline URL rides: {text}");
     }
 
@@ -396,8 +399,13 @@ mod tests {
         );
         assert!(text.contains("big.png"), "oversized stays verbatim: {text}");
         assert_eq!(blocks.len(), 2, "only the in-cap file rides");
-        let ContentBlock::Text(kept) = &blocks[0] else { panic!("verbatim lead") };
-        assert!(kept.contains("big.png"), "oversized ref stays in its segment");
+        let ContentBlock::Text(kept) = &blocks[0] else {
+            panic!("verbatim lead")
+        };
+        assert!(
+            kept.contains("big.png"),
+            "oversized ref stays in its segment"
+        );
     }
 }
 

@@ -52,7 +52,7 @@ impl HostRuntime {
             .save()
             .map_err(|e| anyhow::anyhow!("settings: {e}"))?;
         drop(settings);
- // schema-layer parity: the tool description names the enabled
+        // schema-layer parity: the tool description names the enabled
         // templates, so an enable/disable must re-register the definition.
         self.reinstall_subagent_tool();
         Ok(())

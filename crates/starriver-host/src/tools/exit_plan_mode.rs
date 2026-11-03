@@ -52,7 +52,7 @@ impl ToolExecutor for ExitPlanMode {
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| invalid_input("exit_plan_mode", "missing plan".into()))?
                 .to_string();
- //: a complete markdown plan starts with a `#` heading.
+            //: a complete markdown plan starts with a `#` heading.
             if !plan.starts_with('#') {
                 return Err(invalid_input(
                     "exit_plan_mode",

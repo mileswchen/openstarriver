@@ -12,7 +12,9 @@ use std::path::PathBuf;
 /// Extracted so tests can exercise the exact production write path against
 /// a directory they own (the global appender's location depends on which
 /// thread wins the init race, and sibling tests swap `HOME`).
-fn build_file_subscriber(dir: &std::path::Path) -> impl tracing::Subscriber + Send + Sync + 'static {
+fn build_file_subscriber(
+    dir: &std::path::Path,
+) -> impl tracing::Subscriber + Send + Sync + 'static {
     let appender = tracing_appender::rolling::daily(dir, "host.log");
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -111,10 +113,11 @@ mod tests {
         let subscriber = build_file_subscriber(dir.path());
         let marker = format!(
             "wi164-warn-reaches-file-{}",
-            std::process::id() as u64 + std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as u64
+            std::process::id() as u64
+                + std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as u64
         );
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!(marker = %marker, "smoke");

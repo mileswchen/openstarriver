@@ -33,6 +33,10 @@ win:
   target:
     - nsis
   icon: assets/icon.ico
+nsis:
+  # Starriver: 卸载前停掉后台 starriverd（Windows 锁定运行中 exe，不停则
+  # resources/starriverd.exe 删不掉）。customUnInstall 宏见该文件。
+  include: build/installer.nsh
 linux:
   target:
     - AppImage

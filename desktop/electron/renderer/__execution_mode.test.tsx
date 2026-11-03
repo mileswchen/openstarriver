@@ -262,15 +262,16 @@ describe('CodingView — Plan review card (plan 收拢, review-driven)', () => {
     expect(screen.getByTestId('plan-review-card')).toBeTruthy();
   });
 
-  it('approve applies the preset then answers plan.reviewDecision; decided closes the card', async () => {
+  it('approve rides the preset on plan.reviewDecision; decided closes the card', async () => {
     await runTurnAndRequestReview();
-    // Two-step approval: approve-plan opens the mode step, start-implementation (Manual
-    // preselected) applies the preset and then the decision.
+    // Two-step approval: approve-plan opens the mode step, start-implementation
+    // (Manual preselected) sends the preset as part of the decision — no
+    // separate setPermissionPreset write (the host applies it atomically).
     fireEvent.click(screen.getByText('Approve plan →'));
     fireEvent.click(screen.getByText('Start implementing'));
     await waitFor(() => {
-      expect(window.starriver.setPermissionPreset).toHaveBeenCalledWith('s1', 'manual');
-      expect(window.starriver.planReviewDecision).toHaveBeenCalledWith('s1', 'pr-1', true);
+      expect(window.starriver.setPermissionPreset).not.toHaveBeenCalled();
+      expect(window.starriver.planReviewDecision).toHaveBeenCalledWith('s1', 'pr-1', true, undefined, 'manual');
     });
     // The host's audit trail lands as planReviewDecided on every surface.
     executeCb!(null, {

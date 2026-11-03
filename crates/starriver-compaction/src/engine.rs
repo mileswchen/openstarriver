@@ -158,7 +158,13 @@ pub async fn compact(
         .iter()
         .map(|(_, message)| estimate_message_tokens(message))
         .sum();
-    let threshold_tokens = (policy.threshold_ratio * route.context_window as f64) as u64;
+    // 2026-10-26 (WI-201 follow-up): the pressure trigger is capped by
+    // policy.context_cap — the builtin table states true capacity now
+    // (glm-5.3 = 1M), so min(ratio × window, cap) keeps big-window models
+    // condensing early. Only the Pressure comparison below consults it;
+    // overflow/manual/escalated bypasses are untouched.
+    let threshold_tokens = ((policy.threshold_ratio * route.context_window as f64) as u64)
+        .min(policy.context_cap);
     // WI-209 (BUG-150): the char-based estimate misses the real tokenizer,
     // the system prompt, and the tool schemas. The provider's last real
     // input count floors the pressure comparison — erring high compacts a
@@ -533,6 +539,44 @@ mod tests {
         session
     }
 
+    /// Like [`seeded_session`], but with caller-controlled text length per
+    /// message — lets tests land the estimate between the cap and the ratio
+    /// line (~4 chars/token in the char-based estimator).
+    fn seeded_session_with_text(turns: usize, text_len: usize) -> Session {
+        let bus = cordis_free_bus();
+        let session = Session::new(SessionId("s1".into()), bus);
+        for i in 0..turns {
+            session
+                .append_with(
+                    "user/message",
+                    user_message(&format!("{} {i}", "q".repeat(text_len)))
+                        .to_json()
+                        .unwrap(),
+                    AppendOptions {
+                        surface_op: Some(SurfaceOp::Append),
+                        ..AppendOptions::default()
+                    },
+                )
+                .unwrap();
+            session
+                .append_with(
+                    "assistant/message",
+                    JsonValue::Object(vec![(
+                        "message".into(),
+                        assistant_message(&format!("{} {i}", "a".repeat(text_len)))
+                            .to_json()
+                            .unwrap(),
+                    )]),
+                    AppendOptions {
+                        surface_op: Some(SurfaceOp::Append),
+                        ..AppendOptions::default()
+                    },
+                )
+                .unwrap();
+        }
+        session
+    }
+
     // Session events for user/assistant messages ride `Message::to_json`.
     fn user_message(text: &str) -> starriver_kernel::llm::Message {
         starriver_kernel::llm::Message {
@@ -625,6 +669,7 @@ mod tests {
             retain_ratio: 0.16,
             prune: Some(PrunePolicy::default()),
             compaction_retries: 0,
+            context_cap: u64::MAX,
         };
         let outcome = futures::executor::block_on(compact(
             &session,
@@ -665,6 +710,7 @@ mod tests {
             retain_ratio: 0.16,
             prune: None,
             compaction_retries: 0,
+            context_cap: u64::MAX,
         };
         let outcome = futures::executor::block_on(compact(
             &session,
@@ -681,6 +727,63 @@ mod tests {
             llm.calls.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "exactly one summarize call"
+        );
+    }
+
+    /// 2026-10-26 (WI-201 follow-up): the pressure trigger is
+    /// min(threshold_ratio × window, context_cap). This session estimates
+    /// between the 1_000-token cap and the 0.8 × 8_000 = 6_400 ratio line, so
+    /// a capped policy must condense where the uncapped one would skip — that
+    /// contrast is what lets big-window models (builtin table now states 1M)
+    /// keep condensing early.
+    #[test]
+    fn context_cap_condenses_below_the_ratio_line() {
+        let session = seeded_session_with_text(5, 1_200);
+        let llm = StaticSummary::new("## Current Work\nresumed");
+        let policy = CompactionPolicy {
+            threshold_ratio: 0.8,
+            retain_ratio: 0.16,
+            prune: None,
+            compaction_retries: 0,
+            context_cap: 1_000,
+        };
+        let outcome = futures::executor::block_on(compact(
+            &session,
+            &llm,
+            route(),
+            policy,
+            CompactionTrigger::Pressure,
+        ));
+        assert!(
+            matches!(outcome, CompactionOutcome::Condensed { pruned_only: false, .. }),
+            "cap must force condensation below the ratio line, got {outcome:?}"
+        );
+    }
+
+    /// Control for `context_cap_condenses_below_the_ratio_line`: the same
+    /// input with the cap disabled skips as BelowPressure — proving that
+    /// test's condensation came from the cap, not the estimate.
+    #[test]
+    fn without_the_cap_the_same_session_skips_below_pressure() {
+        let session = seeded_session_with_text(5, 1_200);
+        let llm = StaticSummary::new("unused");
+        let policy = CompactionPolicy {
+            threshold_ratio: 0.8,
+            retain_ratio: 0.16,
+            prune: None,
+            compaction_retries: 0,
+            context_cap: u64::MAX,
+        };
+        let outcome = futures::executor::block_on(compact(
+            &session,
+            &llm,
+            route(),
+            policy,
+            CompactionTrigger::Pressure,
+        ));
+        assert!(
+            matches!(outcome, CompactionOutcome::Skipped(CompactionSkip::BelowPressure)),
+            "uncapped must skip below the ratio line, got {outcome:?}"
         );
     }
 
@@ -703,6 +806,7 @@ mod tests {
             retain_ratio: 0.16,
             prune: None,
             compaction_retries: 0,
+            context_cap: u64::MAX,
         };
         let outcome = futures::executor::block_on(compact(
             &session,
@@ -749,6 +853,7 @@ mod tests {
             retain_ratio: 0.16,
             prune: None,
             compaction_retries: 0,
+            context_cap: u64::MAX,
         };
         let mut route = route();
         route.summarize_reasoning_effort = Some("off".into());
@@ -827,6 +932,7 @@ mod tests {
             retain_ratio: 0.16,
             prune: None,
             compaction_retries: 0,
+            context_cap: u64::MAX,
         };
         let outcome = futures::executor::block_on(compact(
             &session,

@@ -677,7 +677,7 @@ mod tests {
         let mut entry = ModelEntry::default();
         entry.id = "glm".into();
         entry.default_model = "glm-5.3-flash".into();
-        assert_eq!(entry.generation_config().context_window, 200_000);
+        assert_eq!(entry.generation_config().context_window, 1_000_000);
         entry.context_window = Some(4096);
         assert_eq!(entry.generation_config().context_window, 4096);
     }

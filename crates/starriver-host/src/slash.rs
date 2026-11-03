@@ -446,9 +446,20 @@ mod diff_stat_tests {
         git_at(&sub, &["init", "-q", "--initial-branch=main"]);
         std::fs::write(sub.join("inner.txt"), "one\ntwo\n").unwrap();
         git_at(&sub, &["add", "-A"]);
-        assert!(git_at(&sub, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"])
-            .status
-            .success());
+        assert!(git_at(
+            &sub,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "init"
+            ]
+        )
+        .status
+        .success());
 
         // Superproject: base commit + register the submodule (pointer pinned
         // at the sub's init commit).
@@ -457,19 +468,52 @@ mod diff_stat_tests {
         git_at(&sup, &["init", "-q", "--initial-branch=main"]);
         std::fs::write(sup.join("readme.md"), "r\n").unwrap();
         git_at(&sup, &["add", "-A"]);
-        assert!(git_at(&sup, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"])
-            .status
-            .success());
+        assert!(git_at(
+            &sup,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "init"
+            ]
+        )
+        .status
+        .success());
         let sub_url = format!("{}", sub.display());
-        let added = git_at(&sup, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", &sub_url, "sub"]);
+        let added = git_at(
+            &sup,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &sub_url,
+                "sub",
+            ],
+        );
         assert!(
             added.status.success(),
             "submodule add must succeed: {}",
             String::from_utf8_lossy(&added.stderr)
         );
-        assert!(git_at(&sup, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "add sub"])
-            .status
-            .success());
+        assert!(git_at(
+            &sup,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "add sub"
+            ]
+        )
+        .status
+        .success());
         // The actual work: an UNCOMMITTED edit inside the checked-out clone,
         // with the superproject's pointer left unmoved — invisible to plain
         // numstat, exactly the pill-never-updates shape.
@@ -482,7 +526,10 @@ mod diff_stat_tests {
             .find(|f| f.path == "sub/inner.txt")
             .expect("dirty submodule's inner file merged into the stat");
         assert_eq!((inner.additions, inner.deletions), (3, 1));
-        assert!(stat.files.iter().all(|f| f.path != "sub"), "no pointer noise");
+        assert!(
+            stat.files.iter().all(|f| f.path != "sub"),
+            "no pointer noise"
+        );
         assert_eq!(stat.total_additions, 3);
         assert_eq!(stat.total_deletions, 1);
     }

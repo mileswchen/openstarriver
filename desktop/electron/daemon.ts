@@ -3,8 +3,16 @@
 // Responsibilities: discover/spawn the daemon, HTTP invoke, SSE event stream, graceful shutdown.
 // Design constraint: Electron exit does NOT kill the daemon (shared service); connection info is
 // read from ~/.starriver/daemon.json first, falling back to spawn and the first stdout line for {port,token}.
+// Upgrade takeover: before reusing a reachable daemon the client compares the daemon's reported
+// `build_id` (sha256 prefix of the running executable) with the bundled binary's — a mismatch or
+// an absent id (legacy daemon.json) means the running daemon predates this app build, so the
+// client gracefully shuts it down (`--shutdown`, control-socket protocol is version-stable) and
+// spawns the bundled binary instead. A daemon that refuses to die fails LOUDLY: silently talking
+// to the wrong build hides new features behind misleading UI (seen: lan.state METHOD_NOT_FOUND
+// surfacing as "消息服务未启用").
 
 import { spawn, execFile, type ChildProcess } from 'child_process';
+import { createHash } from 'crypto';
 import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -21,6 +29,8 @@ export interface DaemonInfo {
   pid: number;
   version?: string;
   protocolVersion?: number;
+  /** sha256 prefix (16 hex) of the daemon's own executable; absent on legacy daemon.json. */
+  build_id?: string;
   existing?: boolean;
 }
 
@@ -51,6 +61,13 @@ export interface DaemonClientOptions {
   ) => ChildProcess;
   /** Test injection: /health readiness probe. */
   reachable?: (info: DaemonInfo) => Promise<boolean>;
+  /** Test injection: control-channel exec (`--shutdown` during takeover). */
+  execFn?: ExecFileFn;
+  /** Test injection: process kill (SIGTERM/SIGKILL escalation during takeover). */
+  killFn?: KillFn;
+  /** Test tuning: takeover waits (defaults TAKEOVER_GRACE_MS / 2s per signal). */
+  takeOverGraceMs?: number;
+  takeOverEscalationMs?: number;
   dataDir?: string;
   infoPath?: string;
   backoffBaseMs?: number;
@@ -81,6 +98,243 @@ export function daemonBinaryPath(): string | null {
     path.join(repoRoot, 'target', 'release', name),
   ];
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
+}
+
+/** Injected control-channel exec (`--shutdown`); callback-style for easy fakes. */
+export type ExecFileFn = (
+  file: string,
+  args: string[],
+  opts: { cwd: string },
+  cb: (error: Error | null) => void,
+) => void;
+/** Injected process killer (SIGTERM/SIGKILL escalation). */
+export type KillFn = (pid: number, signal: NodeJS.Signals) => void;
+
+const defaultExecFile: ExecFileFn = (file, args, opts, cb) => {
+  execFile(file, args, opts, (error) => cb(error));
+};
+const defaultKill: KillFn = (pid, signal) => {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // ESRCH: the recorded pid is long dead — nothing to escalate.
+  }
+};
+
+const buildIdCache = new Map<string, string>();
+
+/**
+ * sha256 prefix (16 hex) of the bundled binary — the identity a reused daemon
+ * must match. Empty string when the binary is missing/unreadable, which makes
+ * callers SKIP the identity check (graceful degradation: the reuse path keeps
+ * working; a spawn would fail anyway).
+ */
+export function bundledDaemonBuildId(binary: string | null): string {
+  if (!binary) return '';
+  const cached = buildIdCache.get(binary);
+  if (cached !== undefined) return cached;
+  let id = '';
+  try {
+    id = createHash('sha256')
+      .update(fs.readFileSync(binary))
+      .digest('hex')
+      .slice(0, 16);
+  } catch {
+    // Unreadable → '' → caller skips the check.
+  }
+  buildIdCache.set(binary, id);
+  return id;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Graceful-shutdown window before SIGTERM/SIGKILL escalation. */
+export const TAKEOVER_GRACE_MS = 6_000;
+const ESCALATION_STEP_MS = 2_000;
+
+export interface TakeOverOptions {
+  /** The bundled binary (its `--shutdown` dials the old daemon's control socket). */
+  binary: string;
+  info: DaemonInfo;
+  dataDir: string;
+  infoPath: string;
+  execFn: ExecFileFn;
+  killFn: KillFn;
+  reachable: (info: DaemonInfo) => Promise<boolean>;
+  /** Graceful-shutdown wait; tests shrink this. */
+  waitClosedMs?: number;
+  /** Per-signal escalation wait; tests shrink this. */
+  escalationMs?: number;
+}
+
+/**
+ * Replace a running daemon of a different build:
+ * 1. `--shutdown` over the control socket — the one-line JSON protocol is
+ *    version-stable, so the NEW binary can politely stop the OLD daemon;
+ * 2. poll /health until the port is actually closed (spawning immediately
+ *    would hit "address already in use" or yield to the dying instance);
+ * 3. escalate SIGTERM → SIGKILL on the recorded pid (may be stale — ESRCH is
+ *    harmless), then finally clean a leftover daemon.json.
+ * Throws (with a manual-fix hint) when the old daemon refuses to die: the
+ * caller must NOT fall through to spawn, where single-instance would just
+ * yield the old daemon back and silently reuse the wrong build.
+ */
+export async function takeOverStaleDaemon(opts: TakeOverOptions): Promise<void> {
+  const describe = () =>
+    `stale daemon on port ${opts.info.port} (build ${opts.info.build_id || 'legacy/unknown'})`;
+  const cleanupInfoFile = () => {
+    try {
+      fs.rmSync(opts.infoPath, { force: true });
+    } catch {
+      // Best effort — spawn overwrites it anyway.
+    }
+  };
+  const waitClosed = async (timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!(await opts.reachable(opts.info))) {
+        cleanupInfoFile();
+        return true;
+      }
+      await sleep(250);
+    }
+    return false;
+  };
+
+  // 1) Graceful. Errors are expected when no control socket exists (crashed
+  // daemon left none) — escalation covers it.
+  try {
+    await new Promise<void>((resolve, reject) => {
+      opts.execFn(opts.binary, ['--shutdown'], { cwd: opts.dataDir }, (error) =>
+        error ? reject(error) : resolve(),
+      );
+    });
+  } catch {
+    // Fall through to the liveness wait / escalation.
+  }
+  // 2) + 3) Port must actually close; escalate if it does not.
+  if (await waitClosed(opts.waitClosedMs ?? TAKEOVER_GRACE_MS)) return;
+  for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+    opts.killFn(opts.info.pid, signal);
+    if (await waitClosed(opts.escalationMs ?? ESCALATION_STEP_MS)) return;
+  }
+  throw new Error(
+    `${describe()} did not exit after a shutdown request and escalation — ` +
+      'kill it manually (`pkill -f starriverd`) and start the app again',
+  );
+}
+
+export interface StopDaemonOptions {
+  dataDir?: string;
+  infoPath?: string;
+  binaryPath?: string | null;
+  execFn?: ExecFileFn;
+  killFn?: KillFn;
+  reachable?: (info: DaemonInfo) => Promise<boolean>;
+  /** Graceful-shutdown wait; tests shrink this. */
+  waitClosedMs?: number;
+  /** Per-signal escalation wait; tests shrink this. */
+  escalationMs?: number;
+}
+
+export interface StopDaemonResult {
+  /** A reachable daemon was found and asked to stop. */
+  stopped: boolean;
+  /** The port actually went down (or nothing was running). */
+  confirmed: boolean;
+  /** Set when the daemon refused to die — surface with the manual hint. */
+  hint?: string;
+}
+
+/**
+ * Explicit user action ("停止后台服务并退出" / macOS 卸载): gracefully stop the
+ * shared daemon and clean runtime handoff files. Unlike the upgrade takeover
+ * there is NO build-identity check — the user asked the daemon to stop,
+ * regardless of which build is running.
+ */
+export async function stopDaemonAndCleanup(opts: StopDaemonOptions = {}): Promise<StopDaemonResult> {
+  const dataDir = opts.dataDir ?? daemonDataDir();
+  const infoPath = opts.infoPath ?? daemonInfoPath();
+  const execFn = opts.execFn ?? defaultExecFile;
+  const killFn = opts.killFn ?? defaultKill;
+  const reachable = opts.reachable ?? daemonReachable;
+  const waitClosedMs = opts.waitClosedMs ?? TAKEOVER_GRACE_MS;
+  const escalationMs = opts.escalationMs ?? ESCALATION_STEP_MS;
+  const cleanupInfoFile = () => {
+    try {
+      fs.rmSync(infoPath, { force: true });
+    } catch {
+      // Best effort — a leftover daemon.json only causes one failed reuse probe.
+    }
+  };
+  const waitClosed = async (timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!(await reachable(info))) {
+        cleanupInfoFile();
+        return true;
+      }
+      await sleep(250);
+    }
+    return false;
+  };
+
+  // Nothing running (no info file, or the recorded port is already closed)?
+  let info: DaemonInfo;
+  try {
+    info = JSON.parse(fs.readFileSync(infoPath, 'utf8')) as DaemonInfo;
+    if (typeof info.port !== 'number' || typeof info.token !== 'string') throw new Error('bad info');
+    if (!(await reachable(info))) {
+      cleanupInfoFile();
+      return { stopped: false, confirmed: true };
+    }
+  } catch {
+    return { stopped: false, confirmed: true };
+  }
+
+  const binary = opts.binaryPath !== undefined ? opts.binaryPath : daemonBinaryPath();
+  if (!binary) {
+    // No bundled binary to speak to the control socket with — try pid escalation only.
+    const down = await escalate(info, killFn, reachable, escalationMs, cleanupInfoFile);
+    return {
+      stopped: true,
+      confirmed: down,
+      hint: down ? undefined : 'pkill -f starriverd',
+    };
+  }
+  try {
+    await new Promise<void>((resolve) => {
+      execFn(binary, ['--shutdown'], { cwd: dataDir }, () => resolve());
+    });
+  } catch {
+    // No control socket / refused → escalation covers it.
+  }
+  if (await waitClosed(waitClosedMs)) return { stopped: true, confirmed: true };
+  const down = await escalate(info, killFn, reachable, escalationMs, cleanupInfoFile);
+  return { stopped: true, confirmed: down, hint: down ? undefined : 'pkill -f starriverd' };
+}
+
+async function escalate(
+  info: DaemonInfo,
+  killFn: KillFn,
+  reachable: (info: DaemonInfo) => Promise<boolean>,
+  escalationMs: number,
+  cleanupInfoFile: () => void,
+): Promise<boolean> {
+  for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+    killFn(info.pid, signal);
+    const deadline = Date.now() + escalationMs;
+    while (Date.now() < deadline) {
+      if (!(await reachable(info))) {
+        cleanupInfoFile();
+        return true;
+      }
+      await sleep(250);
+    }
+  }
+  return false;
 }
 
 /** /health readiness probe (the daemon.json reuse path). */
@@ -156,15 +410,33 @@ function readStartupLine(child: ChildProcess, timeoutMs: number): Promise<Daemon
 
 /** Connect to an existing daemon or spawn a new instance; both paths return usable connection info. */
 export async function connectOrSpawnDaemon(): Promise<DaemonHandle> {
-  // 1) Existing daemon.json → /health reachable → reuse (Electron reopen/crash-restart case).
+  // 1) Existing daemon.json → /health reachable → reuse — same build-identity
+  // takeover semantics as DaemonClient.obtainInfo (see that method's comment).
+  let stale: { info: DaemonInfo; binary: string } | null = null;
   try {
     const raw = fs.readFileSync(daemonInfoPath(), 'utf8');
     const info = JSON.parse(raw) as DaemonInfo;
     if (typeof info.port === 'number' && typeof info.token === 'string' && (await daemonReachable(info))) {
-      return { info, child: null, spawned: false };
+      const binary = daemonBinaryPath();
+      const bundled = bundledDaemonBuildId(binary);
+      if (!bundled || info.build_id === bundled) {
+        return { info, child: null, spawned: false };
+      }
+      stale = { info, binary: binary! };
     }
   } catch {
     // File missing/corrupt → spawn.
+  }
+  if (stale) {
+    await takeOverStaleDaemon({
+      binary: stale.binary,
+      info: stale.info,
+      dataDir: daemonDataDir(),
+      infoPath: daemonInfoPath(),
+      execFn: defaultExecFile,
+      killFn: defaultKill,
+      reachable: daemonReachable,
+    });
   }
 
   // 2) Spawn; the daemon runs with ~/.starriver as cwd (without --config the session db lands there too).
@@ -363,6 +635,9 @@ export function requestDaemonShutdown(): Promise<void> {
 /**
  * Self-healing daemon client (FPM P4b crash-restart):
  * - connect/reuse: read `daemon.json` + `/health` first, fall back to spawn (first stdout line);
+ *   the reuse additionally requires a matching `build_id` — mismatch/absent (legacy) triggers
+ *   a graceful takeover (`--shutdown` → wait port close → SIGTERM/SIGKILL escalation → spawn bundled);
+ *   a daemon that refuses to die fails the connect loudly instead of silently reusing the wrong build;
  * - process watch: an abnormally exited child we spawned → backoff auto-restart (1s→2s→…→15s);
  *   rapid crashes past the cap enter `failed` (no infinite restart);
  * - connection faults: an invoke connection error (not a protocol error) probes first, restarts if unreachable;
@@ -392,6 +667,10 @@ export class DaemonClient {
       binaryPath: opts.binaryPath ?? daemonBinaryPath,
       spawnFn: opts.spawnFn ?? spawn,
       reachable: opts.reachable ?? daemonReachable,
+      execFn: opts.execFn ?? defaultExecFile,
+      killFn: opts.killFn ?? defaultKill,
+      takeOverGraceMs: opts.takeOverGraceMs ?? TAKEOVER_GRACE_MS,
+      takeOverEscalationMs: opts.takeOverEscalationMs ?? ESCALATION_STEP_MS,
       dataDir: opts.dataDir ?? daemonDataDir(),
       infoPath: opts.infoPath ?? daemonInfoPath(),
       backoffBaseMs: opts.backoffBaseMs ?? 1000,
@@ -482,7 +761,13 @@ export class DaemonClient {
   }
 
   private async obtainInfo(): Promise<DaemonInfo> {
-    // 1) Existing daemon.json → /health reachable → reuse.
+    // 1) Existing daemon.json → /health reachable → reuse — but only when the
+    // running daemon IS this app's build. Otherwise (upgrade in place, or a
+    // legacy daemon.json predating build_id) the client takes the daemon over:
+    // a graceful `--shutdown`, then fall through to spawning the bundled
+    // binary. Reuse-by-reachability alone silently pinned the app to whatever
+    // old daemon happened to be running (missing features, misleading UI).
+    let stale: { info: DaemonInfo; binary: string } | null = null;
     try {
       const raw = fs.readFileSync(this.opts.infoPath, 'utf8');
       const parsed = JSON.parse(raw) as DaemonInfo;
@@ -491,12 +776,37 @@ export class DaemonClient {
         typeof parsed.token === 'string' &&
         (await this.opts.reachable(parsed))
       ) {
-        this.owned = false;
-        this.child = null;
-        return parsed;
+        const binary = this.opts.binaryPath();
+        const bundled = bundledDaemonBuildId(binary);
+        if (!bundled || parsed.build_id === bundled) {
+          this.owned = false;
+          this.child = null;
+          return parsed;
+        }
+        stale = { info: parsed, binary: binary! };
       }
     } catch {
       // File missing/corrupt → spawn.
+    }
+    if (stale) {
+      this.setStatus({
+        state: 'restarting',
+        attempt: 1,
+        error: `daemon build mismatch (running ${stale.info.build_id || 'legacy/unknown'}, bundled ${bundledDaemonBuildId(stale.binary)}) — taking over`,
+      });
+      // Throws on refusal-to-die: must propagate, NOT fall through to spawn
+      // (single-instance would yield the old daemon right back).
+      await takeOverStaleDaemon({
+        binary: stale.binary,
+        info: stale.info,
+        dataDir: this.opts.dataDir,
+        infoPath: this.opts.infoPath,
+        execFn: this.opts.execFn,
+        killFn: this.opts.killFn,
+        reachable: this.opts.reachable,
+        waitClosedMs: this.opts.takeOverGraceMs,
+        escalationMs: this.opts.takeOverEscalationMs,
+      });
     }
 
     // 2) Spawn; the daemon runs with the data dir as cwd (without --config the session db lands there too).

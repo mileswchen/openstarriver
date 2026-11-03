@@ -403,7 +403,6 @@ pub(crate) mod tests {
     }
 }
 
-
 // ── BUG-96 regression (round 6) ──
 #[cfg(test)]
 mod round6_tests {

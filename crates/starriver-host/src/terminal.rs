@@ -251,6 +251,10 @@ struct TerminalSession {
     /// Last output-or-input activity (ms since epoch) — the idle projection
     /// reads Running sessions as Idle once this ages past `IDLE_AFTER_MS`.
     last_activity_ms: Arc<AtomicU64>,
+    /// Owning conversation session id (`None` = host-spawned/legacy tests).
+    owner: Option<String>,
+    /// Session workspace root at spawn time (workspace-scoped panel).
+    workspace: Option<String>,
     _master: Box<dyn MasterPty + Send>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     scrollback: Arc<Mutex<Scrollback>>,
@@ -271,6 +275,27 @@ pub struct CommandRun {
     pub started_ms: u64,
     pub finished_ms: Option<u64>,
     pub exit_code: Option<i64>,
+    /// 触发本次命令的文本（wrap 发送时的 input，截断保留）——面板「这个
+    /// 终端在跑什么」的直接答案。None = 未用标记发送过命令。
+    pub cmd: Option<String>,
+    /// 2026-10-26: 本命令的结束标记前缀（\x1b]633;D;{marker}:）。命令可能
+    /// 在没有任何 send 在扫描时完成（比如后续 terminal_wait 的静默窗间隙），
+    /// 把标记存进记录里，wait-only 发送也能认领它的完成。
+    pub end_prefix: String,
+}
+
+/// One background terminal as published to UIs and model tools.
+#[derive(Debug, Clone)]
+pub struct TerminalInfo {
+    pub id: String,
+    pub status: String,
+    pub started_at_ms: u64,
+    /// Owning conversation (session id) — dsh 式归属：spawn 时从执行上下文
+    /// 注入，工具层按此校验 kill/list 权限，宿主按此在会话结束时回收。
+    pub owner: Option<String>,
+    /// Session workspace root at spawn time (panel workspace filter).
+    pub workspace: Option<String>,
+    pub command: Option<CommandRun>,
 }
 
 #[derive(Default)]
@@ -344,8 +369,21 @@ impl TerminalService {
     }
 
     /// Start an interactive PTY session. `shell` defaults to `bash` on Unix
-    /// and `pwsh` on Windows.
+    /// and `pwsh` on Windows. Host/test entry: no owner, host cwd.
     pub fn start(&self, shell: Option<String>) -> Result<String, String> {
+        self.start_owned(None, None, shell)
+    }
+
+    /// Start an interactive PTY session owned by `owner` (conversation
+    /// session id) in `cwd` (session workspace root). dsh 式归属：owner 从
+    /// 工具执行上下文注入而非模型参数，kill/list 权限与会话结束回收都以
+    /// 它为键。`cwd` 同时修正 spawn 目录（此前落在宿主进程 cwd 上）。
+    pub fn start_owned(
+        &self,
+        owner: Option<String>,
+        cwd: Option<String>,
+        shell: Option<String>,
+    ) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -380,7 +418,12 @@ impl TerminalService {
         #[cfg(windows)]
         let shell = resolve_windows_shell(&shell).unwrap_or_else(|| format!("{shell}.exe"));
         let mut cmd = CommandBuilder::new(shell);
-        cmd.cwd(std::env::current_dir().unwrap_or_default());
+        // 会话工作区优先；None（host 入口/旧测试）保持宿主进程 cwd。
+        cmd.cwd(
+            cwd.clone()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
+        );
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);
 
@@ -443,6 +486,8 @@ impl TerminalService {
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0),
             last_activity_ms,
+            owner,
+            workspace: cwd,
             _master: pair.master,
             writer,
             scrollback,
@@ -511,7 +556,9 @@ impl TerminalService {
                     // Alive but silent past the window: a parked prompt, not
                     // work. Any output or written input refreshes the stamp
                     // and flips this back to Running.
-                    Some(a) if now_ms().saturating_sub(a.load(Ordering::SeqCst)) >= IDLE_AFTER_MS => {
+                    Some(a)
+                        if now_ms().saturating_sub(a.load(Ordering::SeqCst)) >= IDLE_AFTER_MS =>
+                    {
                         SessionStatus::Idle
                     }
                     _ => SessionStatus::Running,
@@ -536,7 +583,7 @@ impl TerminalService {
     /// One interactive send: optionally write `input`, then wait for
     /// readiness — quiet window (`inferred_idle` / echo-only `stdin_read`),
     /// budget exhaustion (`timeout`), or top-level shell exit
- /// (`session_exit`) — and return the produced delta (
+    /// (`session_exit`) — and return the produced delta (
     /// `TerminalSendResult` parity). Advances the session's consume cursor;
     /// paging reads are unaffected.
     pub fn send(
@@ -560,7 +607,8 @@ impl TerminalService {
         idle_ms: u64,
         wrap: bool,
     ) -> Result<SendOutcome, String> {
-        let (writer, scrollback, child, _killer, consume, closed, last_activity) = self.session_parts(id)?;
+        let (writer, scrollback, child, _killer, consume, closed, last_activity) =
+            self.session_parts(id)?;
         // 每次发送的唯一标记 id：防历史/回显中的同形标记误匹配。
         let marker_id = format!(
             "{}{}",
@@ -568,15 +616,43 @@ impl TerminalService {
             &uuid::Uuid::new_v4().simple().to_string()[..8]
         );
         let end_prefix = format!("\x1b]633;D;{marker_id}:");
-        if wrap {
+        // 2026-10-26 修复：只有真正写入命令（input.is_some()）才创建/覆盖
+        // 命令记录。terminal_wait 这类 wait-only 发送此前会把进行中的记录
+        // 整个重置（started_ms 归零、cmd 丢失）——构建命令被后续 wait 打回
+        // 原形，面板只剩 "PTY · id" 回退文案和错误的首发时间。
+        if wrap && input.is_some() {
             if let Some(run) = self.command_of(id) {
+                // 面板显示用：保留触发命令的文本（截断，防超长行拖垮协议负载）。
+                const CMD_SNIPPET_MAX: usize = 500;
+                let mut snippet: String = input
+                    .unwrap_or_default()
+                    .chars()
+                    .take(CMD_SNIPPET_MAX)
+                    .collect();
+                if input.unwrap_or_default().chars().count() > CMD_SNIPPET_MAX {
+                    snippet.push('…');
+                }
                 *run.lock().unwrap_or_else(|e| e.into_inner()) = Some(CommandRun {
                     started_ms: now_ms(),
                     finished_ms: None,
                     exit_code: None,
+                    cmd: Some(snippet),
+                    end_prefix: end_prefix.clone(),
                 });
             }
         }
+        // 结束标记认领：优先认当前记录里存的标记（wait-only 发送没有自己的
+        // 包裹，却仍能认领在跑命令的完成）。
+        let active_end_prefix = if wrap {
+            self.command_of(id).and_then(|run| {
+                run.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .map(|c| c.end_prefix.clone())
+            })
+        } else {
+            None
+        };
         if let Some(input) = input {
             let payload = if wrap {
                 // 单引号转义保多行语义；eval 在当前 shell 执行（cd/exit 保留）。
@@ -618,19 +694,21 @@ impl TerminalService {
             }
             // 标记扫描：结束标记一出现即记录命令完成与退出码（不等静默窗）。
             if wrap {
-                if let Some(end_at) = delta.rfind(&end_prefix) {
-                    let digits_start = end_at + end_prefix.len();
-                    let digits: String = delta[digits_start..]
-                        .chars()
-                        .take_while(|c| c.is_ascii_digit())
-                        .collect();
-                    if !digits.is_empty() {
-                        if let Some(run) = self.command_of(id) {
-                            let mut g = run.lock().unwrap_or_else(|e| e.into_inner());
-                            if let Some(cmd) = g.as_mut() {
-                                if cmd.finished_ms.is_none() {
-                                    cmd.finished_ms = Some(now_ms());
-                                    cmd.exit_code = digits.parse::<i64>().ok();
+                if let Some(prefix) = active_end_prefix.as_deref() {
+                    if let Some(end_at) = delta.rfind(prefix) {
+                        let digits_start = end_at + prefix.len();
+                        let digits: String = delta[digits_start..]
+                            .chars()
+                            .take_while(|c| c.is_ascii_digit())
+                            .collect();
+                        if !digits.is_empty() {
+                            if let Some(run) = self.command_of(id) {
+                                let mut g = run.lock().unwrap_or_else(|e| e.into_inner());
+                                if let Some(cmd) = g.as_mut() {
+                                    if cmd.finished_ms.is_none() {
+                                        cmd.finished_ms = Some(now_ms());
+                                        cmd.exit_code = digits.parse::<i64>().ok();
+                                    }
                                 }
                             }
                         }
@@ -654,7 +732,11 @@ impl TerminalService {
             }
             if let SessionStatus::Exited { .. } = status {
                 *consume.lock().unwrap_or_else(|e| e.into_inner()) = cursor;
-                let delta = if wrap { strip_markers(&delta, &marker_id, &end_prefix) } else { delta };
+                let delta = if wrap {
+                    strip_markers(&delta, &marker_id, &end_prefix)
+                } else {
+                    delta
+                };
                 return Ok(SendOutcome {
                     output: delta,
                     wait_reason: WaitReason::SessionExit,
@@ -669,7 +751,11 @@ impl TerminalService {
                     Some(written) if delta_is_echo_only(&delta, written) => WaitReason::StdinRead,
                     _ => WaitReason::InferredIdle,
                 };
-                let delta = if wrap { strip_markers(&delta, &marker_id, &end_prefix) } else { delta };
+                let delta = if wrap {
+                    strip_markers(&delta, &marker_id, &end_prefix)
+                } else {
+                    delta
+                };
                 return Ok(SendOutcome {
                     output: delta,
                     wait_reason,
@@ -679,7 +765,11 @@ impl TerminalService {
             }
             if now.saturating_duration_since(started) >= wait_budget {
                 *consume.lock().unwrap_or_else(|e| e.into_inner()) = cursor;
-                let delta = if wrap { strip_markers(&delta, &marker_id, &end_prefix) } else { delta };
+                let delta = if wrap {
+                    strip_markers(&delta, &marker_id, &end_prefix)
+                } else {
+                    delta
+                };
                 return Ok(SendOutcome {
                     output: delta,
                     wait_reason: WaitReason::Timeout,
@@ -695,7 +785,8 @@ impl TerminalService {
     /// PTY line discipline to the foreground process group; SIGTERM/SIGKILL
     /// terminate the top-level shell itself. Returns what was delivered.
     pub fn signal(&self, id: &str, signal: &str) -> Result<String, String> {
-        let (writer, _scrollback, _child, killer, _consume, closed, _last_activity) = self.session_parts(id)?;
+        let (writer, _scrollback, _child, killer, _consume, closed, _last_activity) =
+            self.session_parts(id)?;
         if closed.load(Ordering::SeqCst) {
             return Err(format!("terminal {id} closed"));
         }
@@ -724,7 +815,8 @@ impl TerminalService {
 
     /// Top-level process status of a session (independent of any send).
     pub fn status(&self, id: &str) -> Result<SessionStatus, String> {
-        let (_writer, _scrollback, child, _killer, _consume, _closed, last_activity) = self.session_parts(id)?;
+        let (_writer, _scrollback, child, _killer, _consume, _closed, last_activity) =
+            self.session_parts(id)?;
         Ok(Self::poll_status(&child, Some(&last_activity)))
     }
 
@@ -738,23 +830,35 @@ impl TerminalService {
         offset_from_end: usize,
         max_lines: usize,
     ) -> Result<(String, u64, bool), String> {
-        let (_writer, scrollback, _child, _killer, _consume, _closed, _last_activity) = self.session_parts(id)?;
+        let (_writer, scrollback, _child, _killer, _consume, _closed, _last_activity) =
+            self.session_parts(id)?;
         let sb = scrollback.lock().unwrap_or_else(|e| e.into_inner());
         let (lines, total, older) = sb.page(offset_from_end, max_lines.max(1));
         Ok((lines.join(""), total, older))
     }
 
+    /// 2026-10-26: in-flight wrapped command overrides the idle heuristic —
+    /// a build that redirects all output to a file keeps the PTY silent, and
+    /// the five-minute idle window would mask genuinely running work as
+    /// "idle". Exited stays truthful (the shell is gone, whatever the record
+    /// says); Running needs no promotion.
+    fn display_status(polled: SessionStatus, command_in_flight: bool) -> SessionStatus {
+        match (polled, command_in_flight) {
+            (SessionStatus::Idle, true) => SessionStatus::Running,
+            (other, _) => other,
+        }
+    }
+
     /// Fresh snapshots (id + top-level status) in publication order.
     /// 会话的标记命令状态（None = 会话不存在或未用标记发过命令）。
-    fn command_of(
-        &self,
-        id: &str,
-    ) -> Option<std::sync::Arc<Mutex<Option<CommandRun>>>> {
+    fn command_of(&self, id: &str) -> Option<std::sync::Arc<Mutex<Option<CommandRun>>>> {
         let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.get(id).map(|s| std::sync::Arc::clone(&s.command))
     }
 
-    pub fn list(&self) -> Vec<(String, String, u64, Option<CommandRun>)> {
+    /// Full snapshots in publication order — UIs (workspace-scoped panel)
+    /// and model tools (owner-filtered) both consume these.
+    pub fn list(&self) -> Vec<TerminalInfo> {
         let sessions = self.sessions.lock().unwrap();
         // HashMap iteration order is unspecified (and re-randomized per
         // process) — sort by each session's publication sequence so the
@@ -765,30 +869,98 @@ impl TerminalService {
         entries
             .into_iter()
             .map(|(id, session)| {
-                let status = Self::poll_status(&session.child, Some(&session.last_activity_ms));
+                let polled = Self::poll_status(&session.child, Some(&session.last_activity_ms));
                 let command = session
                     .command
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .clone();
-                (id.clone(), status.as_str().to_string(), session.started_at_ms, command)
+                let status = Self::display_status(
+                    polled,
+                    command
+                        .as_ref()
+                        .map(|c| c.finished_ms.is_none())
+                        .unwrap_or(false),
+                )
+                .as_str()
+                .to_string();
+                TerminalInfo {
+                    id: id.clone(),
+                    status,
+                    started_at_ms: session.started_at_ms,
+                    owner: session.owner.clone(),
+                    workspace: session.workspace.clone(),
+                    command,
+                }
             })
             .collect()
     }
 
+    /// Kill every terminal owned by `owner` (conversation session id).
+    /// Session delete/archive 的回收入口；返回杀掉的个数。
+    pub fn kill_owner(&self, owner: &str) -> usize {
+        let ids: Vec<String> = {
+            let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            sessions
+                .iter()
+                .filter(|(_, s)| s.owner.as_deref() == Some(owner))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        ids.iter().filter_map(|id| self.kill(id, None).ok()).count()
+    }
+
+    /// Kill every live terminal — host shutdown 的最后防线。
+    pub fn kill_all(&self) -> usize {
+        let ids: Vec<String> = {
+            let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            sessions.keys().cloned().collect()
+        };
+        ids.iter().filter_map(|id| self.kill(id, None).ok()).count()
+    }
+
     /// Close a session: flag it (unblocking in-flight sends), kill the
-    /// top-level shell, then drop it.
-    pub fn kill(&self, id: &str) -> Result<(), String> {
+    /// top-level shell, then remove it. `owner = None` is host-privileged
+    /// (UI ✕ / protocol / shutdown)；Some(session) 必须匹配归属，否则拒绝 —
+    /// dsh 式授权：模型工具只能杀自己会话的终端。
+    /// Removal happens only after the child actually exits (bounded) so a
+    /// just-killed terminal never lingers half-dead in the registry.
+    pub fn kill(&self, id: &str, owner: Option<&str>) -> Result<(), String> {
         let mut sessions = self.sessions.lock().unwrap();
         let session = sessions
             .remove(id)
             .ok_or_else(|| format!("terminal {id} not found"))?;
+        if let Some(owner) = owner {
+            if session.owner.as_deref() != Some(owner) {
+                // Not ours: put it back untouched — a foreign kill must
+                // leave the terminal exactly as it was.
+                sessions.insert(id.to_string(), session);
+                return Err(format!("terminal {id} is not owned by session {owner}"));
+            }
+        }
         session.closed.store(true, Ordering::SeqCst);
         let _ = session
             .killer
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .kill();
+        // Quiescent removal (dsh parity): wait for the child to actually
+        // exit so the registry never shows a killed-but-alive session. The
+        // killer is a hard kill, so this is usually one poll.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1_500);
+        loop {
+            let exited = {
+                let mut guard = session.child.lock().unwrap_or_else(|e| e.into_inner());
+                match guard.as_mut() {
+                    None => true,
+                    Some(child) => matches!(child.try_wait(), Ok(Some(_))),
+                }
+            };
+            if exited || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(POLL_MS));
+        }
         Ok(())
     }
 
@@ -823,8 +995,8 @@ mod tests {
             service
                 .list()
                 .into_iter()
-                .find(|(sid, _, _, _)| sid == id)
-                .map(|(_, status, _, _)| status)
+                .find(|row| row.id == id)
+                .map(|row| row.status)
                 .expect("session listed")
         };
         // A freshly started session is alive and active → running.
@@ -839,7 +1011,7 @@ mod tests {
         service.write(&id, ":\n").expect("write");
         assert_eq!(service.status(&id), Ok(SessionStatus::Running));
         assert_eq!(status_of(&id), "running");
-        service.kill(&id).expect("kill");
+        service.kill(&id, None).expect("kill");
     }
 
     #[test]
@@ -858,7 +1030,7 @@ mod tests {
         assert_eq!(outcome.session_status, SessionStatus::Running);
         assert!(!outcome.truncated);
         assert_eq!(service.status(&id), Ok(SessionStatus::Running));
-        service.kill(&id).expect("kill");
+        service.kill(&id, None).expect("kill");
         assert!(service.list().is_empty());
     }
 
@@ -891,7 +1063,7 @@ mod tests {
             "got: {finish:?}"
         );
         assert!(finish.output.contains("hi"), "got: {finish:?}");
-        service.kill(&id).expect("kill");
+        service.kill(&id, None).expect("kill");
     }
 
     #[test]
@@ -912,7 +1084,7 @@ mod tests {
             .expect("send");
         assert_eq!(outcome.wait_reason, WaitReason::Timeout, "got: {outcome:?}");
         assert_eq!(outcome.session_status, SessionStatus::Running);
-        service.kill(&id).expect("kill");
+        service.kill(&id, None).expect("kill");
     }
 
     #[test]
@@ -930,7 +1102,7 @@ mod tests {
                 signal: None
             }
         );
-        service.kill(&id).ok();
+        service.kill(&id, None).ok();
     }
 
     #[test]
@@ -955,7 +1127,7 @@ mod tests {
         let (again, _, _) = service.read_page(&id, 0, 100).expect("page");
         assert_eq!(all, again, "reads are non-destructive");
         let _ = older;
-        service.kill(&id).expect("kill");
+        service.kill(&id, None).expect("kill");
     }
 
     #[test]
@@ -993,7 +1165,7 @@ mod tests {
         );
         let err = service.signal(&id, "SIGUSR1").unwrap_err();
         assert!(err.contains("unsupported"), "{err}");
-        service.kill(&id).ok();
+        service.kill(&id, None).ok();
     }
 
     #[test]
@@ -1004,7 +1176,7 @@ mod tests {
         assert!(service.read_page("missing", 0, 10).is_err());
         assert!(service.status("missing").is_err());
         assert!(service.signal("missing", "SIGINT").is_err());
-        assert!(service.kill("missing").is_err());
+        assert!(service.kill("missing", None).is_err());
     }
 
     #[test]
@@ -1246,7 +1418,9 @@ fn strip_markers(text: &str, marker_id: &str, end_prefix: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     loop {
-        let Some(end_at) = rest.find(end_prefix) else { break };
+        let Some(end_at) = rest.find(end_prefix) else {
+            break;
+        };
         let digits_start = end_at + end_prefix.len();
         let digits_end = rest[digits_start..]
             .find('\x07')
@@ -1266,35 +1440,216 @@ fn strip_markers(text: &str, marker_id: &str, end_prefix: &str) -> String {
     out.replace(&start_marker, "")
 }
 
-    /// dsh 式标记契约：send_ex 包裹的命令在输出流出现结束标记即记 done 与
-    /// 退出码，无需等 5 分钟静默；list() 携带该状态。
-    #[test]
-    fn wrapped_send_records_command_completion() {
-        let service = TerminalService::new();
-        let id = service.start(Some("sh".into())).expect("start");
-        let outcome = service
-            .send_ex(&id, Some("true\n"), 5_000, 300, true)
-            .expect("send");
-        let _ = outcome;
-        let rows = service.list();
-        let Some((_, _, _, Some(cmd))) = rows.iter().find(|(rid, ..)| rid == &id) else {
-            panic!("no command state for {id}; output={:?}", outcome.output);
-        };
-        assert_eq!(
-            cmd.finished_ms.map(|_| ()), Some(()),
-            "end marker must mark the command finished; captured output: {:?}",
-            outcome.output
-        );
-        assert_eq!(cmd.exit_code, Some(0), "`true` exits 0");
-    }
+/// dsh 式标记契约：send_ex 包裹的命令在输出流出现结束标记即记 done 与
+/// 退出码，无需等 5 分钟静默；list() 携带该状态。
+#[test]
+fn wrapped_send_records_command_completion() {
+    let service = TerminalService::new();
+    let id = service.start(Some("sh".into())).expect("start");
+    let outcome = service
+        .send_ex(&id, Some("true\n"), 5_000, 300, true)
+        .expect("send");
+    let _ = outcome;
+    let rows = service.list();
+    let Some(info) = rows.iter().find(|r| r.id == id) else {
+        panic!("no row for {id}; output={:?}", outcome.output);
+    };
+    let Some(cmd) = info.command.as_ref() else {
+        panic!("no command state for {id}; output={:?}", outcome.output);
+    };
+    assert_eq!(
+        cmd.finished_ms.map(|_| ()),
+        Some(()),
+        "end marker must mark the command finished; captured output: {:?}",
+        outcome.output
+    );
+    assert_eq!(cmd.exit_code, Some(0), "`true` exits 0");
+    assert_eq!(
+        cmd.cmd.as_deref(),
+        Some("true\n"),
+        "command text is captured for the panel"
+    );
+}
 
-    /// 无标记路径保持旧行为：write() 裸写不产生命令状态。
-    #[test]
-    fn raw_write_keeps_legacy_semantics() {
-        let service = TerminalService::new();
-        let id = service.start(Some("sh".into())).expect("start");
-        service.write(&id, "true\n").expect("write");
-        let rows = service.list();
-        let (_, _, _, cmd) = rows.iter().find(|(rid, ..)| rid == &id).expect("row");
-        assert!(cmd.is_none(), "raw writes stay marker-free");
-    }
+/// 2026-10-26 修复回归：wait-only 发送（terminal_wait，input None）不得
+/// 重置进行中的命令记录——此前它会把 started_ms 归零、cmd 清空，面板上
+/// 正在跑的构建只剩 "PTY · id" 回退文案和错误的首发时间。
+#[test]
+fn wait_only_send_preserves_the_running_command() {
+    let service = TerminalService::new();
+    let id = service.start(Some("sh".into())).expect("start");
+    let _ = service
+        .send_ex(&id, Some("sleep 2\n"), 300, 100, true)
+        .expect("send");
+    let before = service
+        .list()
+        .into_iter()
+        .find(|r| r.id == id)
+        .expect("row")
+        .command
+        .expect("wrapped send records the command");
+    assert_eq!(before.finished_ms, None, "sleep 2 outlives the 300ms wait");
+    assert_eq!(before.cmd.as_deref(), Some("sleep 2\n"));
+    // wait-only 发送：不覆盖、不清空、不重置时间。
+    let _ = service.send_ex(&id, None, 300, 100, true).expect("wait");
+    let after = service
+        .list()
+        .into_iter()
+        .find(|r| r.id == id)
+        .expect("row")
+        .command
+        .expect("record must survive a wait-only send");
+    assert_eq!(
+        after.started_ms, before.started_ms,
+        "started_ms must not reset"
+    );
+    assert_eq!(after.cmd, before.cmd, "cmd text must not drop");
+    assert_eq!(after.finished_ms, None);
+    assert_eq!(after.end_prefix, before.end_prefix);
+}
+
+/// 2026-10-26 修复回归：命令在没有任何 send 扫描的间隙里完成时，后续
+/// wait-only 发送通过记录里存的结束标记认领完成（此前只扫本次发送自己
+/// 的新标记，而 wait-only 没有包裹 → 完成永远无人认领）。
+#[test]
+fn wait_only_send_finalizes_on_the_stored_marker() {
+    let service = TerminalService::new();
+    let id = service.start(Some("sh".into())).expect("start");
+    let _ = service
+        .send_ex(&id, Some("sleep 1\n"), 200, 100, true)
+        .expect("send");
+    // sleep 在无人扫描的间隙里结束，结束标记落进 scrollback。
+    std::thread::sleep(Duration::from_millis(1_400));
+    let _ = service.send_ex(&id, None, 1_500, 200, true).expect("wait");
+    let cmd = service
+        .list()
+        .into_iter()
+        .find(|r| r.id == id)
+        .expect("row")
+        .command
+        .expect("command record");
+    assert_eq!(
+        cmd.finished_ms.map(|_| ()),
+        Some(()),
+        "the stored end marker must finalize the command"
+    );
+    assert_eq!(cmd.exit_code, Some(0), "`sleep` exits 0");
+}
+
+/// display_status：在跑命令只把 Idle 提升为 Running；Exited 保持真实，
+/// Running 原样。
+#[test]
+fn display_status_promotes_only_idle() {
+    use SessionStatus::{Exited, Idle, Running};
+    assert_eq!(
+        TerminalService::display_status(Idle, true),
+        Running,
+        "in-flight command beats the idle heuristic"
+    );
+    assert_eq!(TerminalService::display_status(Running, true), Running);
+    assert_eq!(
+        TerminalService::display_status(
+            Exited {
+                exit_code: None,
+                signal: None
+            },
+            true
+        ),
+        Exited {
+            exit_code: None,
+            signal: None
+        },
+        "a dead shell stays dead whatever the record says"
+    );
+    assert_eq!(TerminalService::display_status(Idle, false), Idle);
+}
+
+/// 无标记路径保持旧行为：write() 裸写不产生命令状态。
+#[test]
+fn raw_write_keeps_legacy_semantics() {
+    let service = TerminalService::new();
+    let id = service.start(Some("sh".into())).expect("start");
+    service.write(&id, "true\n").expect("write");
+    let rows = service.list();
+    let cmd = rows
+        .iter()
+        .find(|r| r.id == id)
+        .expect("row")
+        .command
+        .as_ref();
+    assert!(cmd.is_none(), "raw writes stay marker-free");
+}
+
+/// dsh 式归属：spawn 记录 owner/workspace，list 原样发布。
+#[test]
+fn start_owned_publishes_owner_and_workspace() {
+    let service = TerminalService::new();
+    let id = service
+        .start_owned(
+            Some("WI-session-a".into()),
+            Some("/tmp/wkspa".into()),
+            Some("sh".into()),
+        )
+        .expect("start");
+    let row = service
+        .list()
+        .into_iter()
+        .find(|r| r.id == id)
+        .expect("row");
+    assert_eq!(row.owner.as_deref(), Some("WI-session-a"));
+    assert_eq!(row.workspace.as_deref(), Some("/tmp/wkspa"));
+    service.kill(&id, None).expect("kill");
+}
+
+/// dsh 式授权：B 会话杀 A 会话的终端被拒，且终端原样存活（先移出、
+/// 校验失败再放回——不能留半死状态也不能误杀）。
+#[test]
+fn foreign_session_kill_is_rejected_and_terminal_survives() {
+    let service = TerminalService::new();
+    let id = service
+        .start_owned(Some("sess-a".into()), None, Some("sh".into()))
+        .expect("start");
+    let err = service.kill(&id, Some("sess-b")).expect_err("must reject");
+    assert!(err.contains("not owned"), "got: {err}");
+    // 终端还在，归属未变。
+    let row = service
+        .list()
+        .into_iter()
+        .find(|r| r.id == id)
+        .expect("row");
+    assert_eq!(row.owner.as_deref(), Some("sess-a"));
+    // 本主可以杀。
+    service.kill(&id, Some("sess-a")).expect("owner kill");
+    assert!(service.list().is_empty());
+}
+
+/// kill_owner：按归属批量回收，别人的终端不受波及。
+#[test]
+fn kill_owner_reaps_only_owned_terminals() {
+    let service = TerminalService::new();
+    let a = service
+        .start_owned(Some("sess-a".into()), None, Some("sh".into()))
+        .expect("start a");
+    let b = service
+        .start_owned(Some("sess-b".into()), None, Some("sh".into()))
+        .expect("start b");
+    assert_eq!(service.kill_owner("sess-a"), 1);
+    let ids: Vec<_> = service.list().into_iter().map(|r| r.id).collect();
+    assert_eq!(ids, vec![b.clone()], "only the foreign terminal survives");
+    assert_eq!(service.kill_owner("sess-a"), 0, "already reaped");
+    service.kill(&b, None).expect("cleanup");
+}
+
+/// kill_all：宿主 shutdown 最后防线，全量清空。
+#[test]
+fn kill_all_clears_every_terminal() {
+    let service = TerminalService::new();
+    service
+        .start_owned(None, None, Some("sh".into()))
+        .expect("a");
+    service
+        .start_owned(None, None, Some("sh".into()))
+        .expect("b");
+    assert_eq!(service.kill_all(), 2);
+    assert!(service.list().is_empty());
+}

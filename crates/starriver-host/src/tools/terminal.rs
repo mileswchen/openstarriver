@@ -36,9 +36,11 @@ async fn run_send(
     idle_ms: u64,
 ) -> Result<crate::terminal::SendOutcome, String> {
     if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::task::spawn_blocking(move || service.send_ex(&id, input.as_deref(), wait_ms, idle_ms, true))
-            .await
-            .map_err(|e| format!("send join: {e}"))?
+        tokio::task::spawn_blocking(move || {
+            service.send_ex(&id, input.as_deref(), wait_ms, idle_ms, true)
+        })
+        .await
+        .map_err(|e| format!("send join: {e}"))?
     } else {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -56,7 +58,7 @@ impl ToolExecutor for TerminalStart {
     fn execute(
         &self,
         arguments: Value,
-        _ctx: ToolRunContext,
+        ctx: ToolRunContext,
     ) -> cordis_rslite::BoxFuture<Result<Value, ToolError>> {
         let service = Arc::clone(&self.service);
         Box::pin(async move {
@@ -65,8 +67,16 @@ impl ToolExecutor for TerminalStart {
                 .get("shell")
                 .and_then(|s| s.as_str())
                 .map(str::to_string);
+            // dsh 式归属：owner/cwd 来自执行上下文（agent_id 即 session id，
+            // cwd 即会话工作区根），模型无法伪造。
+            let owner = ctx.execution.agent_id.clone();
+            let cwd = ctx
+                .execution
+                .cwd
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned());
             let id = service
-                .start(shell)
+                .start_owned(owner, cwd, shell)
                 .map_err(|e| terminal_failure("START_FAILED", e))?;
             Ok(Value::new(serde_json::json!({
                 "output": format!("terminal started: {id}")
@@ -94,7 +104,7 @@ impl ToolExecutor for TerminalWrite {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| invalid_input("terminal_write", "missing input".into()))?;
             match json.get("waitMs").and_then(|v| v.as_u64()) {
- // send semantics: write + readiness wait + wait reason.
+                // send semantics: write + readiness wait + wait reason.
                 Some(wait_ms) => {
                     let idle_ms = json
                         .get("idleMs")
@@ -191,7 +201,7 @@ impl ToolExecutor for TerminalWait {
                 .get("timeoutMs")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(DEFAULT_WAIT_MS);
- // timeout is a wait reason reported to the model, not
+            // timeout is a wait reason reported to the model, not
             // a tool error — silence may simply mean a long-running command.
             let outcome = run_send(
                 Arc::clone(&service),
@@ -246,17 +256,35 @@ impl ToolExecutor for TerminalList {
     fn execute(
         &self,
         _arguments: Value,
-        _ctx: ToolRunContext,
+        ctx: ToolRunContext,
     ) -> cordis_rslite::BoxFuture<Result<Value, ToolError>> {
         let service = Arc::clone(&self.service);
         Box::pin(async move {
-            let sessions = service.list();
+            // dsh 授权语义：模型只看到本会话的终端——别的会话的 id 连出现
+            // 都不出现，kill 也就无从伪造。
+            let owner = ctx.execution.agent_id.clone();
+            let sessions: Vec<_> = service
+                .list()
+                .into_iter()
+                .filter(|t| {
+                    owner
+                        .as_deref()
+                        .is_none_or(|o| t.owner.as_deref() == Some(o))
+                })
+                .collect();
             let output = if sessions.is_empty() {
                 "no terminals".into()
             } else {
                 sessions
                     .iter()
-                    .map(|(id, status, _started, _command)| format!("{id} ({status})"))
+                    .map(
+                        |t| match t.command.as_ref().and_then(|c| c.cmd.as_deref()) {
+                            Some(cmd) => {
+                                format!("{} ({}) — {}", t.id, t.status, cmd.replace('\n', " "))
+                            }
+                            None => format!("{} ({})", t.id, t.status),
+                        },
+                    )
                     .collect::<Vec<_>>()
                     .join("\n")
             };
@@ -273,14 +301,14 @@ impl ToolExecutor for TerminalKill {
     fn execute(
         &self,
         arguments: Value,
-        _ctx: ToolRunContext,
+        ctx: ToolRunContext,
     ) -> cordis_rslite::BoxFuture<Result<Value, ToolError>> {
         let service = Arc::clone(&self.service);
         Box::pin(async move {
             let json = json_args(&arguments)?;
             let id = required_id(&json)?;
             service
-                .kill(&id)
+                .kill(&id, ctx.execution.agent_id.as_deref())
                 .map_err(|e| terminal_failure("KILL_FAILED", e))?;
             Ok(Value::new(serde_json::json!({ "output": "terminated" })))
         })
@@ -574,7 +602,7 @@ mod tests {
         let service = Arc::new(TerminalService::new());
         let id = start(&service, Some("sh"));
         assert!(!id.is_empty());
-        service.kill(&id).unwrap();
+        service.kill(&id, None).unwrap();
     }
 
     #[test]
@@ -678,7 +706,7 @@ mod tests {
         // A quiet terminal times out as a REASON with the shell still running.
         assert_eq!(out["waitReason"], "timeout", "{out}");
         assert_eq!(out["sessionStatus"]["kind"], "running");
-        service.kill(&id).unwrap();
+        service.kill(&id, None).unwrap();
     }
 
     #[tokio::test]
@@ -708,7 +736,7 @@ mod tests {
             "{out}"
         );
         assert_eq!(out["waitReason"], "inferred_idle", "{out}");
-        service.kill(&id).unwrap();
+        service.kill(&id, None).unwrap();
     }
 
     #[tokio::test]
@@ -737,7 +765,7 @@ mod tests {
                 .contains("foreground process group"),
             "{out}"
         );
-        service.kill(&id).unwrap();
+        service.kill(&id, None).unwrap();
     }
 
     #[test]

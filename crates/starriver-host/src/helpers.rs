@@ -183,6 +183,40 @@ pub fn tool_call_label(name: &str, arg: &str) -> String {
     }
 }
 
+/// Human-visible argument summary for a tool call. Known display keys
+/// (file/path/command) keep their short form; every other tool — terminal_*,
+/// mcp_*, web_* … — falls back to the FULL arguments JSON so the chat card and
+/// backtrack timeline no longer degrade to a bare tool name (2026-10-26).
+/// Malformed ingress (arguments serialized as a bare string) shows the string.
+/// The JSON fallback is byte-capped at a char boundary: pathological payloads
+/// must not blow up the transcript card (the trajectory's toolInput already
+/// carries the uncapped JSON).
+pub fn tool_call_arg(arguments: Option<&serde_json::Value>) -> String {
+    const MAX_JSON_BYTES: usize = 2000;
+    let Some(value) = arguments else {
+        return String::new();
+    };
+    if let Some(text) = value.as_str() {
+        return text.to_string();
+    }
+    for key in ["file", "path", "command"] {
+        if let Some(text) = value.get(key).and_then(|v| v.as_str()) {
+            return text.to_string();
+        }
+    }
+    let json = serde_json::to_string(value).unwrap_or_default();
+    if json.len() <= MAX_JSON_BYTES {
+        return json;
+    }
+    // Trim at the last char boundary at/below the cap (no floor_char_boundary
+    // on stable): walk back over UTF-8 continuation bytes.
+    let mut end = MAX_JSON_BYTES;
+    while end > 0 && (json.as_bytes()[end] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+    format!("{}…", &json[..end])
+}
+
 /// Slash command dispatch: when a task starts with `/skill`, inject the skill body and drop the command token.
 pub fn apply_slash_dispatch(task: &str, skill: Option<&SkillProfile>) -> (String, Option<String>) {
     let Some(cmd) = task.split_whitespace().next() else {
@@ -555,7 +589,6 @@ mod tests {
     }
 }
 
-
 // ── Round-6 regressions (BUG-99 / BUG-101) ──
 #[cfg(test)]
 mod round6_tests {
@@ -577,12 +610,7 @@ mod round6_tests {
     fn email_stays_verbatim_even_with_a_same_named_file() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("example.com"), "oops").unwrap();
-        let out = expand_file_references(
-            "mail me at a@example.com",
-            Some(dir.path()),
-            1024,
-            4096,
-        );
+        let out = expand_file_references("mail me at a@example.com", Some(dir.path()), 1024, 4096);
         assert_eq!(
             out, "mail me at a@example.com",
             "zero-false-positive contract holds even when the domain names an existing file"

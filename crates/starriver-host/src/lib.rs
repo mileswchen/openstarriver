@@ -29,6 +29,7 @@ pub mod plan_review_bridge;
 pub mod plugin;
 pub mod plugin_kernel;
 pub mod preset;
+pub mod prompt_override;
 pub mod prompts;
 pub mod protocol_json;
 pub mod providers;
@@ -47,7 +48,6 @@ pub mod title;
 pub mod tools;
 pub mod types;
 pub mod ui_channel;
-pub mod vision;
 pub mod workspace;
 
 #[cfg(test)]

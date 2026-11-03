@@ -97,7 +97,8 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 let embedded = std::net::Ipv4Addr::new(o[2], o[3], o[4], o[5]);
                 is_private_ip(IpAddr::V4(embedded))
             };
-            let v4_compatible = o[..12].iter().all(|&b| b == 0) && !(o[12] == 0 && o[13] == 0 && o[14] == 0 && o[15] == 0);
+            let v4_compatible = o[..12].iter().all(|&b| b == 0)
+                && !(o[12] == 0 && o[13] == 0 && o[14] == 0 && o[15] == 0);
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_unique_local()
@@ -332,7 +333,7 @@ impl WebFetch {
         Self { renderer, ..self }
     }
 
- /// Configure the model-facing output cap (`maxBodyChars`). Zero is a
+    /// Configure the model-facing output cap (`maxBodyChars`). Zero is a
     /// program error: a cap must leave room for at least something. The
     /// request-level `max_chars` argument may only lower this cap.
     pub fn with_max_body_chars(self, max_body_chars: usize) -> Self {
@@ -1233,7 +1234,6 @@ mod tests {
         assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }
-
 
 // ── Round-6 regressions (BUG-97 + scheme case) ──
 #[cfg(test)]

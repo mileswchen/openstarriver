@@ -274,13 +274,18 @@ fn event_dir_canonical(event: &str) -> anyhow::Result<String> {
         .iter()
         .find(|e| e.eq_ignore_ascii_case(event))
         .map(|e| (*e).to_string())
-        .ok_or_else(|| anyhow::anyhow!("unknown hook event `{event}` (expected PreToolUse or PostToolUse)"))
+        .ok_or_else(|| {
+            anyhow::anyhow!("unknown hook event `{event}` (expected PreToolUse or PostToolUse)")
+        })
 }
 
 /// Enumerate every script across the two event directories. Missing hooks
 /// dir or event dirs yield an empty list (the convention: absent = empty).
 pub fn list_hook_scripts() -> Vec<HookScriptInfo> {
-    hooks_dir().as_deref().map(list_hook_scripts_in).unwrap_or_default()
+    hooks_dir()
+        .as_deref()
+        .map(list_hook_scripts_in)
+        .unwrap_or_default()
 }
 
 /// [`list_hook_scripts`] against an explicit directory (test seam).
@@ -320,7 +325,8 @@ pub fn list_hook_scripts_in(dir: &Path) -> Vec<HookScriptInfo> {
 }
 
 pub fn read_hook_script(event: &str, name: &str) -> anyhow::Result<String> {
-    let dir = hooks_dir().ok_or_else(|| anyhow::anyhow!("no home directory — hooks directory unknown"))?;
+    let dir = hooks_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home directory — hooks directory unknown"))?;
     read_hook_script_in(&dir, event, name)
 }
 
@@ -332,12 +338,18 @@ pub fn read_hook_script_in(dir: &Path, event: &str, name: &str) -> anyhow::Resul
 }
 
 pub fn write_hook_script(event: &str, name: &str, content: &str) -> anyhow::Result<()> {
-    let dir = hooks_dir().ok_or_else(|| anyhow::anyhow!("no home directory — hooks directory unknown"))?;
+    let dir = hooks_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home directory — hooks directory unknown"))?;
     write_hook_script_in(&dir, event, name, content)
 }
 
 /// [`write_hook_script`] against an explicit directory (test seam).
-pub fn write_hook_script_in(dir: &Path, event: &str, name: &str, content: &str) -> anyhow::Result<()> {
+pub fn write_hook_script_in(
+    dir: &Path,
+    event: &str,
+    name: &str,
+    content: &str,
+) -> anyhow::Result<()> {
     let event = event_dir_canonical(event)?;
     validate_hook_name(name).map_err(|e| anyhow::anyhow!(e))?;
     let event_path = dir.join(event);
@@ -353,7 +365,8 @@ pub fn write_hook_script_in(dir: &Path, event: &str, name: &str, content: &str) 
 }
 
 pub fn delete_hook_script(event: &str, name: &str) -> anyhow::Result<()> {
-    let dir = hooks_dir().ok_or_else(|| anyhow::anyhow!("no home directory — hooks directory unknown"))?;
+    let dir = hooks_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home directory — hooks directory unknown"))?;
     delete_hook_script_in(&dir, event, name)
 }
 
@@ -511,7 +524,10 @@ mod tests {
         let dir = temp_dir("boundary");
         let event = dir.join("preToolUse");
         std::fs::create_dir_all(&event).unwrap();
-        write_script(&event.join("editor_config.sh"), "#!/bin/sh\necho hit\nexit 2\n");
+        write_script(
+            &event.join("editor_config.sh"),
+            "#!/bin/sh\necho hit\nexit 2\n",
+        );
         let engine = HookEngine::new(Some(dir.clone()));
         let r = engine.trigger("preToolUse", "edit", &dir).await;
         assert!(r.allowed, "substring filename must not run the hook");

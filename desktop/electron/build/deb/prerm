@@ -1,0 +1,16 @@
+#!/bin/bash
+# Starriver: 在升级/卸载前优雅停掉运行中的 starriverd。
+# dpkg 在删除/替换文件之前运行 prerm，此时包内二进制仍在（升级时是旧构建——
+# 控制通道协议与版本无关，跨构建关停是安全的）；postrm 时二进制已删除，
+# 停进程只能靠这里。best-effort：任何失败都不阻塞包操作（恒 exit 0）。
+set +e
+DAEMON="/opt/Starriver/resources/starriverd"
+[ -x "$DAEMON" ] || exit 0
+for home in /root /home/*; do
+    sock="$home/.starriver/starriverd.sock"
+    [ -S "$sock" ] || continue
+    # 守护进程从 $HOME 解析 ~/.starriver/starriverd.sock；root 连接用户 socket
+    # 不受 0600 权限限制，无需 runuser。
+    HOME="$home" "$DAEMON" --shutdown >/dev/null 2>&1
+done
+exit 0

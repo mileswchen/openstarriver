@@ -1134,7 +1134,9 @@ impl starriver_kernel::agent::Agent for BridgeFakeAgent {
         _wakeup: bool,
     ) {
     }
-    fn cancel(&self, _cause: starriver_kernel::agent::AgentCancelCause, _keep_inbox: bool) -> bool { false }
+    fn cancel(&self, _cause: starriver_kernel::agent::AgentCancelCause, _keep_inbox: bool) -> bool {
+        false
+    }
     fn when_idle(&self) -> cordis_rslite::BoxFuture<()> {
         Box::pin(async {})
     }
@@ -1496,7 +1498,7 @@ async fn execute_meta_appends_title_without_surface_visibility() {
             tokio_util::sync::CancellationToken::new(),
             Some(HostSessionMeta {
                 title: Some("my session".into()),
-                image_hot_override: None,
+                reject_images: false,
             }),
         )
         .await
@@ -1551,7 +1553,7 @@ async fn execute_projects_title_into_host_store_projection() {
             tokio_util::sync::CancellationToken::new(),
             Some(HostSessionMeta {
                 title: Some("hello task".into()),
-                image_hot_override: None,
+                reject_images: false,
             }),
         )
         .await
@@ -1627,7 +1629,7 @@ async fn run_sp1b(
             vec![],
             None,
             None,
-        None,
+            None,
         )
         .await
         .unwrap();
@@ -1852,7 +1854,7 @@ async fn sp3_instructions_full_chain_and_resync() {
             vec![],
             None,
             None,
-        None,
+            None,
         )
         .await
         .unwrap();
@@ -1962,7 +1964,7 @@ async fn sp2_assembly_failure_reaches_the_ui_as_turn_error() {
             vec![],
             None,
             None,
-        None,
+            None,
         )
         .await
         .unwrap();
@@ -2083,7 +2085,7 @@ async fn sp4_time_context_samples_once_per_window_across_resume() {
             vec![],
             None,
             None,
-        None,
+            None,
         )
         .await
         .unwrap();
@@ -2200,8 +2202,14 @@ async fn pre_tool_use_hook_denies_before_approval_with_context() {
     execution.dispose();
 
     let audit_log = std::fs::read_to_string(&audit).unwrap();
-    assert!(audit_log.contains("PreToolUse write session=s-hook"), "{audit_log}");
-    assert!(audit_log.contains("out.txt"), "params file content: {audit_log}");
+    assert!(
+        audit_log.contains("PreToolUse write session=s-hook"),
+        "{audit_log}"
+    );
+    assert!(
+        audit_log.contains("out.txt"),
+        "params file content: {audit_log}"
+    );
 }
 
 /// An observing (exit 0) PreToolUse hook leaves the tool flowing (through

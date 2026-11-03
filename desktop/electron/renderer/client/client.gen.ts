@@ -13,6 +13,7 @@ export interface ProtocolMethodMeta {
 export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
   "session.list": { params: {"type":"object","properties":{"workspaceId":{"type":"string"}},"required":[],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["session:read"] },
   "session.messages": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"limit":{"type":"integer"},"before":{"type":"integer"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
+  "session.archiveMessages": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.fork": { params: {"type":"object","properties":{"sourceId":{"type":"string"},"beforeMsgId":{"type":"integer"},"task":{"type":"string"}},"required":["sourceId","beforeMsgId","task"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.delete": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.rename": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"title":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
@@ -46,14 +47,21 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
   "session.confirmPlan": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.search": { params: {"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "sessions.running": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"array","items":{"type":"string"}}, streaming: false, permissions: ["session:read"] },
+  "session.waitTurn": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"timeoutMs":{"type":"integer"}},"required":["sessionId"],"additionalProperties":false}, result: {"type":"object","properties":{"ended":{"type":"boolean"},"reason":{"type":"string"}},"required":["ended","reason"],"additionalProperties":false}, streaming: false, permissions: ["session:read"] },
   "session.timeline": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["session:read"] },
   "session.trace": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
+  "session.archiveTrace": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.compact": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"keepRecent":{"type":"integer"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.usage": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.export": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"cwd":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "approval.respond": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"allowed":{"type":"boolean"},"remember":{"type":"boolean"}},"required":["sessionId","allowed"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["approval:respond"] },
-  "plan.reviewDecision": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"requestId":{"type":"string"},"approved":{"type":"boolean"},"feedback":{"type":"string"}},"required":["sessionId","approved"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
+  "plan.reviewDecision": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"requestId":{"type":"string"},"approved":{"type":"boolean"},"feedback":{"type":"string"},"preset":{"type":"string"}},"required":["sessionId","approved"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "interaction.respond": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"questionId":{"type":"string"},"answer":{"type":"string"}},"required":["sessionId","questionId","answer"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["approval:respond"] },
+  "lan.state": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
+  "lan.messages": { params: {"type":"object","properties":{"peerId":{"type":"string"},"sinceId":{"type":"integer"}},"required":["peerId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
+  "lan.send": { params: {"type":"object","properties":{"peerId":{"type":"string"},"kind":{"type":"string"},"text":{"type":"string"},"imageBase64":{"type":"string"},"mime":{"type":"string"}},"required":["peerId","kind"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
+  "lan.attachment": { params: {"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
+  "lan.markRead": { params: {"type":"object","properties":{"peerId":{"type":"string"}},"required":["peerId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["lan:chat"] },
   "approval.listRules": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "approval.revokeRule": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"ruleId":{"type":"string"}},"required":["sessionId","ruleId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "agentPresets.list": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"object","properties":{"presets":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"agent":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},"source":{"type":"string"},"broken":{"type":"string"},"isDefault":{"type":"boolean"}},"required":["id","agent","name","description","source","isDefault"],"additionalProperties":false}},"default":{"type":"string"}},"required":["presets","default"],"additionalProperties":false}, streaming: false, permissions: ["agents:read"] },
@@ -138,6 +146,7 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
 export interface ProtocolClientMethods {
   sessionList(params: { workspaceId?: string }): Promise<unknown[]>;
   sessionMessages(params: { sessionId: string; limit?: number; before?: number }): Promise<unknown>;
+  sessionArchiveMessages(params: { sessionId: string }): Promise<unknown>;
   sessionFork(params: { sourceId: string; beforeMsgId: number; task: string }): Promise<unknown>;
   sessionDelete(params: { sessionId: string }): Promise<unknown>;
   sessionRename(params: { sessionId: string; title?: string }): Promise<unknown>;
@@ -171,14 +180,21 @@ export interface ProtocolClientMethods {
   sessionConfirmPlan(params: { sessionId: string }): Promise<unknown>;
   sessionSearch(params: { query: string; limit?: number }): Promise<unknown>;
   sessionsRunning(params: {  }): Promise<string[]>;
+  sessionWaitTurn(params: { sessionId: string; timeoutMs?: number }): Promise<{ ended: boolean; reason: string }>;
   sessionTimeline(params: { sessionId: string }): Promise<unknown[]>;
   sessionTrace(params: { sessionId: string }): Promise<unknown>;
+  sessionArchiveTrace(params: { sessionId: string }): Promise<unknown>;
   sessionCompact(params: { sessionId: string; keepRecent?: number }): Promise<unknown>;
   sessionUsage(params: { sessionId: string }): Promise<unknown>;
   sessionExport(params: { sessionId: string; cwd?: string }): Promise<unknown>;
   approvalRespond(params: { sessionId: string; allowed: boolean; remember?: boolean }): Promise<unknown>;
-  planReviewDecision(params: { sessionId: string; requestId?: string; approved: boolean; feedback?: string }): Promise<unknown>;
+  planReviewDecision(params: { sessionId: string; requestId?: string; approved: boolean; feedback?: string; preset?: string }): Promise<unknown>;
   interactionRespond(params: { sessionId: string; questionId: string; answer: string }): Promise<unknown>;
+  lanState(params: {  }): Promise<unknown>;
+  lanMessages(params: { peerId: string; sinceId?: number }): Promise<unknown>;
+  lanSend(params: { peerId: string; kind: string; text?: string; imageBase64?: string; mime?: string }): Promise<unknown>;
+  lanAttachment(params: { id: string }): Promise<unknown>;
+  lanMarkRead(params: { peerId: string }): Promise<unknown>;
   approvalListRules(params: { sessionId: string }): Promise<unknown>;
   approvalRevokeRule(params: { sessionId: string; ruleId: string }): Promise<unknown>;
   agentPresetsList(params: {  }): Promise<{ presets: { id: string; agent: string; name: string; description: string; source: string; broken?: string; isDefault: boolean }[]; default: string }>;

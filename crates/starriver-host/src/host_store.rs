@@ -130,7 +130,9 @@ impl HostStore {
             }
             // WI-152: scheduled-run origin stamp (Tasks → Scheduled runs grouping).
             let has_origin = conn
-                .prepare("SELECT 1 FROM pragma_table_info('session_projcache') WHERE name = 'origin'")?
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('session_projcache') WHERE name = 'origin'",
+                )?
                 .exists([])?;
             if !has_origin {
                 conn.execute("ALTER TABLE session_projcache ADD COLUMN origin TEXT", [])?;
@@ -401,7 +403,7 @@ impl HostStore {
         self.attach_session(&workspace_id, session_id)
     }
 
- /// Stamp a fresh session's execution mode (binding: chosen at creation,
+    /// Stamp a fresh session's execution mode (binding: chosen at creation,
     /// locked for the session's life). Write-once — a later stamp for the same
     /// session is ignored, so the first execute fixes the mode.
     pub fn stamp_execution_mode(&self, session_id: &str, mode: &str) -> Result<(), String> {
@@ -982,17 +984,33 @@ mod tests {
         // — the projection must clear the pin so fallback titles apply again.
         let dir = tempfile::tempdir().unwrap();
         let store = HostStore::open(dir.path().join("host.db"), EventBus::new()).unwrap();
-        upsert_title(&store.db.lock().unwrap(), "s1", Some("Pinned".into()), Some("user".into()))
-            .unwrap();
+        upsert_title(
+            &store.db.lock().unwrap(),
+            "s1",
+            Some("Pinned".into()),
+            Some("user".into()),
+        )
+        .unwrap();
         upsert_title(&store.db.lock().unwrap(), "s1", None, Some("user".into())).unwrap();
         let rows = store.list_sessions(false);
         let row = rows.iter().find(|r| r.session_id == "s1").unwrap();
         assert_eq!(row.title, None);
         assert_eq!(row.title_source, None);
         // A non-user null event must NOT clear a pin.
-        upsert_title(&store.db.lock().unwrap(), "s1", Some("Pinned".into()), Some("user".into()))
-            .unwrap();
-        upsert_title(&store.db.lock().unwrap(), "s1", None, Some("fallback".into())).unwrap();
+        upsert_title(
+            &store.db.lock().unwrap(),
+            "s1",
+            Some("Pinned".into()),
+            Some("user".into()),
+        )
+        .unwrap();
+        upsert_title(
+            &store.db.lock().unwrap(),
+            "s1",
+            None,
+            Some("fallback".into()),
+        )
+        .unwrap();
         let rows = store.list_sessions(false);
         let row = rows.iter().find(|r| r.session_id == "s1").unwrap();
         assert_eq!(row.title.as_deref(), Some("Pinned"));
@@ -1054,7 +1072,7 @@ mod tests {
 
     #[test]
     fn execution_mode_stamp_is_write_once() {
- // binding: the first execute stamps and locks — later stamps do not
+        // binding: the first execute stamps and locks — later stamps do not
         // change the value; sessions predating the binding read None.
         let dir = tempfile::tempdir().unwrap();
         let store = HostStore::open(dir.path().join("host.db"), EventBus::new()).unwrap();
@@ -1226,12 +1244,8 @@ mod round5_tests {
         let ws_b = dir.path().join("project-b");
         std::fs::create_dir_all(&ws_a).unwrap();
         std::fs::create_dir_all(&ws_b).unwrap();
-        let (a, _) = store
-            .resolve_workspace(ws_a.to_str().unwrap())
-            .unwrap();
-        let (b, _) = store
-            .resolve_workspace(ws_b.to_str().unwrap())
-            .unwrap();
+        let (a, _) = store.resolve_workspace(ws_a.to_str().unwrap()).unwrap();
+        let (b, _) = store.resolve_workspace(ws_b.to_str().unwrap()).unwrap();
 
         store.attach_session(&a, "s-move").unwrap();
         store.insert_before(&b, "s-move", None).unwrap();

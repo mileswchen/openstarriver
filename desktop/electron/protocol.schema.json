@@ -49,6 +49,26 @@
       "streaming": false
     },
     {
+      "name": "session.archiveMessages",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
       "name": "session.fork",
       "params": {
         "type": "object",
@@ -839,6 +859,44 @@
       "streaming": false
     },
     {
+      "name": "session.waitTurn",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ended": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ended",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
       "name": "session.timeline",
       "params": {
         "type": "object",
@@ -863,6 +921,26 @@
     },
     {
       "name": "session.trace",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "session:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "session.archiveTrace",
       "params": {
         "type": "object",
         "properties": {
@@ -990,6 +1068,9 @@
           },
           "feedback": {
             "type": "string"
+          },
+          "preset": {
+            "type": "string"
           }
         },
         "required": [
@@ -1029,6 +1110,116 @@
       "result": {},
       "permissions": [
         "approval:respond"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "lan.state",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "lan.messages",
+      "params": {
+        "type": "object",
+        "properties": {
+          "peerId": {
+            "type": "string"
+          },
+          "sinceId": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "peerId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "lan.send",
+      "params": {
+        "type": "object",
+        "properties": {
+          "peerId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "imageBase64": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "peerId",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "lan.attachment",
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "lan.markRead",
+      "params": {
+        "type": "object",
+        "properties": {
+          "peerId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "peerId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "lan:chat"
       ],
       "streaming": false
     },

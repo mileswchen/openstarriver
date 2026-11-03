@@ -606,6 +606,10 @@ const ICON_FOLDER_OPEN = '<svg width="13" height="13" viewBox="0 0 24 24" fill="
 const ICON_GIT_BRANCH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
 /* Sidebar phone button: opens the Remote Access (iPhone pairing) dialog. */
 const ICON_PHONE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>';
+// LAN chat entry (feather "message-circle") — sidebar footer, next to lock/phone.
+const ICON_MESSAGE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>';
+// LAN chat composer image picker (feather "image").
+const ICON_MESSAGE_IMAGE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
 // 界面定时锁（sidebar 左下角入口）— feather "lock"
 const ICON_LOCK = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 /* Thinking-row icon: monochrome stroke brain (Lucide), same style/size as the tool icons. */
@@ -780,6 +784,21 @@ export function toolCommandOf(input: unknown): string {
     // Flatten newlines so a multiline bash command stays on one row and
     // ToolRow renders it as a single code block (it unescapes on display).
     return cmd.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+  } catch { return ''; }
+}
+
+/** 2026-10-26: full-arguments fallback for the live tool card label — tools
+ *  without a known display key (terminal_*, mcp_* …) previously degraded to a
+ *  bare "🔧 name" while the trajectory showed the full payload. Mirrors the
+ *  host's tool_call_arg: serialize the whole input JSON, byte-capped. */
+export function toolArgsJson(input: unknown): string {
+  if (!input) return '';
+  try {
+    const params = typeof input === 'string' ? JSON.parse(input) : input;
+    if (!params || typeof params !== 'object') return '';
+    const json = JSON.stringify(params);
+    const MAX = 2000;
+    return json.length <= MAX ? json : json.slice(0, MAX) + '…';
   } catch { return ''; }
 }
 
@@ -963,10 +982,44 @@ function WorkFoldRow({ group, expanded, onToggle }: {
   );
 }
 
-/** WI-150: one background-terminal row — start clock time + live elapsed
- *  (ticks every second while mounted). */
-function TerminalRow({ term, onKill }: {
-  term: { id: string; status: string; startedAtMs: number; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number } | null };
+/** 后台终端的用途标签：常见长驻模式一眼可辨；识别不出返回 null（不标）。 */
+function terminalPurposeLabel(cmd: string | null | undefined, t: (k: string) => string): string | null {
+  if (!cmd) return null;
+  const c = cmd.toLowerCase();
+  if (/(vite|next\s+(dev|start)|webpack|npm\s+run\s+dev|pnpm\s+dev|pnpm\s+run\s+dev|yarn\s+dev|uvicorn|flask|gunicorn|http\.server|http-server|serve\b|jekyll|hugo\s+server)/.test(c)) {
+    return t('coding.terminalPurposeServer');
+  }
+  if (/(watch|tail\s+-f|nodemon|-w\b)/.test(c)) return t('coding.terminalPurposeWatch');
+  if (/(^|\s)(python3?|node|irb|psql|sqlite3?|ipython|deno|bun)\s*$/.test(c)) return t('coding.terminalPurposeRepl');
+  if (/(build|compile|tsc\b|webpack\s+--mode\s+production)/.test(c)) return t('coding.terminalPurposeBuild');
+  return null;
+}
+
+/** 2026-10-26: the terminals popover renders as a table — PTY rows and one-shot
+ *  shell rows share one grid (dot | command | session | started | elapsed |
+ *  status | kill) under a header row, so the meta info aligns into columns
+ *  instead of squeezing into one line. */
+function TerminalsTableHead() {
+  const { t } = useI18n();
+  return (
+    <div className="terminals-grid terminals-head-row">
+      <span />
+      <span>{t('coding.terminalsColCommand')}</span>
+      <span>{t('coding.terminalsColSession')}</span>
+      <span>{t('coding.terminalsColStarted')}</span>
+      <span>{t('coding.terminalsColElapsed')}</span>
+      <span>{t('coding.terminalsColStatus')}</span>
+      <span />
+    </div>
+  );
+}
+
+/** WI-150: one background-terminal row — what it runs (FULL command, wrapped,
+ *  never truncated + purpose label), owning session, start clock time + live
+ *  elapsed (ticks every second while mounted), status chip, kill. */
+function TerminalRow({ term, sessionTitle, onKill }: {
+  term: { id: string; status: string; startedAtMs: number; ownerSessionId?: string | null; workspace?: string | null; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number; cmd?: string | null } | null };
+  sessionTitle?: string;
   onKill: () => void;
 }) {
   const { t } = useI18n();
@@ -978,15 +1031,25 @@ function TerminalRow({ term, onKill }: {
   // 逐字节实时一致（dsh 式标记契约）：命令有精确生命周期——发出即 running，
   // 结束标记一出现即 done · exit N；无标记信息时回退 host 会话状态。
   const cmd = term.command;
+  const cmdText = cmd?.cmd ?? null;
   const baseMs = cmd?.startedAtMs ?? term.startedAtMs;
   const startedText = new Date(baseMs).toLocaleTimeString(undefined, { hour12: false });
   const endMs = cmd?.finishedAtMs ?? null;
   const elapsed = fmtDuration(Math.max(0, (endMs ?? Date.now()) - baseMs));
   const done = cmd?.finishedAtMs != null;
-  const statusText = done ? `done · exit ${cmd?.exitCode ?? 0}` : term.status;
-  const statusClass = done ? 'done' : term.status;
+  const failed = done && (cmd?.exitCode ?? 0) !== 0;
+  const statusText = done ? `${t('coding.terminalDone')} · exit ${cmd?.exitCode ?? 0}` : term.status;
+  const statusClass = failed ? 'failed' : done ? 'done' : term.status;
+  const purpose = terminalPurposeLabel(cmdText, t);
+  const tip = [sessionTitle ?? term.ownerSessionId ?? '', cmdText ?? '', term.id].filter(Boolean).join('\n');
   return (
-    <div className="terminal-row" title={term.id}>
+    <div className="terminals-grid terminal-row" title={tip}>
+      <span className={`terminal-dot ${done ? 'off' : 'live'}`} aria-hidden />
+      <span className="terminal-cmd">
+        {cmdText ?? `PTY · ${term.id.slice(0, 8)}`}
+        {purpose && <span className="terminal-purpose">{purpose}</span>}
+      </span>
+      <span className="terminal-session" title={term.ownerSessionId ?? ''}>{sessionTitle ?? ''}</span>
       <span className="terminal-started">{startedText}</span>
       <span className="terminal-elapsed">{elapsed}</span>
       <span className={`terminal-status ${statusClass}`}>{statusText}</span>
@@ -995,9 +1058,11 @@ function TerminalRow({ term, onKill }: {
   );
 }
 
-/** WI-157: one running shell tool call in the terminals popover — command plus
- *  a live elapsed stopwatch (1s tick, same rhythm as TerminalRow). */
+/** WI-157: one running shell tool call in the terminals popover — FULL command
+ *  (wrapped) plus a live elapsed stopwatch (1s tick, same rhythm as
+ *  TerminalRow); shares the terminals grid so both row kinds align. */
 function ShellCmdRow({ entry }: { entry: { cmd: string; startedAt: number } }) {
+  const { t } = useI18n();
   const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick(n => n + 1), 1000);
@@ -1006,10 +1071,14 @@ function ShellCmdRow({ entry }: { entry: { cmd: string; startedAt: number } }) {
   const startedText = new Date(entry.startedAt).toLocaleTimeString(undefined, { hour12: false });
   const elapsed = fmtDuration(Math.max(0, Date.now() - entry.startedAt));
   return (
-    <div className="terminals-shell-cmd" title={entry.cmd}>
-      <span className="terminals-shell-dot" aria-hidden />
-      <span className="terminals-shell-text">{entry.cmd}</span>
-      <span className="terminals-shell-meta">{startedText} · {elapsed}</span>
+    <div className="terminals-grid terminal-row shell-row" title={entry.cmd}>
+      <span className="terminal-dot live" aria-hidden />
+      <span className="terminal-cmd">{entry.cmd}</span>
+      <span className="terminal-session">{t('coding.terminalsShellLabel')}</span>
+      <span className="terminal-started">{startedText}</span>
+      <span className="terminal-elapsed">{elapsed}</span>
+      <span className="terminal-status running">running</span>
+      <span />
     </div>
   );
 }
@@ -1183,9 +1252,12 @@ export function ToolsMenu({ cwd, onError }: { cwd: string | null; onError: (mess
  *  The pick persists in localStorage. */
 export function TrajectoryView({ sessionId }: { sessionId: string }) {
   const { t } = useI18n();
-  const [entries, setEntries] = useState<TraceEntry[] | null>(null);
   const [mode, setMode] = useState<'list' | 'ledger'>(() =>
     localStorage.getItem('starriver.trajMode') === 'ledger' ? 'ledger' : 'list');
+  // Single history source — session.archive, the complete-ledger projection:
+  // compaction-shadowed spans stay visible, each fold site marked by a
+  // labeled compaction checkpoint. (There is no separate folded view.)
+  const [archive, setArchive] = useState<{ entries: TraceEntry[]; compactions: number } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const switchMode = (m: 'list' | 'ledger') => {
     setMode(m);
@@ -1193,14 +1265,14 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
     localStorage.setItem('starriver.trajMode', m);
   };
   useEffect(() => {
-    setEntries(null);
-    if (!sessionId) { setEntries([]); return; }
+    setArchive(null);
+    if (!sessionId) { setArchive({ entries: [], compactions: 0 }); return; }
     // Guard against stale responses: a slow session-A fetch resolving after
     // session-B's would render A's ledger under B's id.
     let stale = false;
-    window.starriver.getSessionTrace(sessionId)
-      .then((r) => { if (!stale) setEntries(r?.entries ?? []); })
-      .catch(() => { if (!stale) setEntries([]); });
+    window.starriver.getSessionArchive?.(sessionId)
+      .then((r) => { if (!stale) setArchive({ entries: r?.entries ?? [], compactions: r?.compactions ?? 0 }); })
+      .catch(() => { if (!stale) setArchive({ entries: [], compactions: 0 }); });
     // Positional keys (`e3`, `turn-1`) are meaningless across sessions —
     // reset the open/collapsed/selection state or session B inherits A's.
     setExpanded(new Set());
@@ -1215,7 +1287,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
     const turns: { key: string; rows: TrajRow[]; hasUser: boolean }[] = [];
     let n = 0;
     let cur: { key: string; rows: TrajRow[] } | null = null;
-    const list = entries ?? [];
+    const list = archive?.entries ?? [];
     const carry = (e: TraceEntry, idx: number): TrajRow => ({ ...e, key: `e${idx}` });
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
@@ -1248,7 +1320,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
       }
     }
     return turns;
-  }, [entries]);
+  }, [archive]);
 
  // ── Ledger-mode instrumentation state (toolbar parity) ──
   const [collapsedTurns, setCollapsedTurns] = useState<Set<string>>(new Set());
@@ -1276,17 +1348,18 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
   const fmtTime = (ms: number | null | undefined) =>
     ms == null ? '—' : new Date(ms).toLocaleTimeString(undefined, { hour12: false });
 
-  if (entries === null) {
+  if (archive === null) {
     return <div className="traj-empty">{t('coding.trajLoading')}</div>;
   }
-  if (entries.length === 0) {
+  if (archive.entries.length === 0) {
     return <div className="traj-empty">{t('coding.trajEmpty')}</div>;
   }
 
   const kindLabel = (k: TrajRow['kind']) =>
     k === 'user' ? t('coding.trajUser') : k === 'assistant' ? t('coding.trajAssistant')
     : k === 'thinking' ? t('coding.trajThinking') : k === 'system' ? t('coding.trajSystem')
-    : k === 'context' ? t('coding.trajContext') : t('coding.trajTool');
+    : k === 'context' ? t('coding.trajContext') : k === 'compaction' ? t('coding.trajCompaction')
+    : t('coding.trajTool');
   const kindIcon = (k: TrajRow['kind'], name?: string, hint?: string) => {
     if (k === 'system') return ICON_SYSTEM;
     if (k === 'context') return ICON_CONTEXT;
@@ -1307,7 +1380,6 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
       <button type="button" className={mode === 'ledger' ? 'active' : ''} aria-pressed={mode === 'ledger'} onClick={() => switchMode('ledger')}>{t('coding.trajModeLedger')}</button>
     </div>
   );
-
   if (mode === 'ledger') {
  // Assistant rows followed by same-group tool rows get a
     // "… N tool calls · names" fold summary (the Calls toggle flips them).
@@ -1545,7 +1617,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
     <div className="traj-view">
       <div className="traj-list-toolbar">{modeSwitch}</div>
       {(() => {
-        const todo = latestTodoFromTexts(entries.map((e) => e.toolOutput ?? (e.kind === 'tool_result' ? e.text : null)));
+        const todo = latestTodoFromTexts(archive.entries.map((e) => e.toolOutput ?? (e.kind === 'tool_result' ? e.text : null)));
         return todo ? <TodoCard todo={todo} /> : null;
       })()}
       {turns.map((turn, ti) => {
@@ -2366,9 +2438,10 @@ export function MiniSelect(props: React.SelectHTMLAttributes<HTMLSelectElement>)
      the right-hand Plan panel), a feedback line, 继续规划 / 批准计划. Enter
      with text keeps planning with that feedback; empty Enter opens step 2.
    step "mode": the four permission presets — same vocabulary as the composer's
-     permission dropdown — with Manual preselected. 开始实施 hands the preset
-     to onApplyPreset; the host writes it BEFORE the plan decision. Full
-     access routes through step "risk" first.
+     permission dropdown — with the session's folded preset preselected.
+     开始实施 sends the preset as part of the approval decision itself
+     (plan.reviewDecision `preset` param); the host applies it atomically.
+     Full access routes through step "risk" first.
    step "risk": the existing risk-confirmation copy + acknowledge checkbox
      gating 开启并实施 (danger preset cannot be enabled blind). */
 const PLAN_REVIEW_MODES: { value: string; labelKey: string; descKey: string; danger?: boolean }[] = [
@@ -2472,7 +2545,7 @@ export function PlanChecklist({ source }: { source: string }) {
   return <>{out}</>;
 }
 
-export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }: {
+export function PlanReviewCard({ plan, currentPreset, onApprove, onDecide }: {
   plan: string;
   /** The session's folded permission preset — preselected on the mode step so
    *  re-approving a plan never silently downgrades the session (2026-10-14:
@@ -2480,9 +2553,11 @@ export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }:
    *  write downgraded a danger-full-access session to workspace-write, which
    *  then refused out-of-workspace edits mid-task). */
   currentPreset?: string;
-  /** Approve + apply the chosen permission preset; the host writes the
-      preset first and only then sends the approval decision. */
-  onApplyPreset: (preset: string) => void;
+  /** Approve + apply: the preset rides the decision itself (plan.reviewDecision
+      `preset` param) and the host applies it atomically with the approval.
+      The promise rejects on failure; the card stays up with the error so a
+      failed approval can never silently run under the wrong mode. */
+  onApprove: (preset: string) => Promise<void>;
   /** Keep planning, optionally with typed feedback. */
   onDecide: (feedback?: string) => void;
 }) {
@@ -2495,6 +2570,13 @@ export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }:
   );
   const [draft, setDraft] = useState('');
   const [riskChecked, setRiskChecked] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = (preset: string) => {
+    setError(null);
+    Promise.resolve(onApprove(preset)).catch((e) =>
+      setError(String(e?.message ?? e)),
+    );
+  };
 
   if (step === 'review') {
     const text = draft.trim();
@@ -2584,12 +2666,13 @@ export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }:
             <button
               type="button"
               className="plan-review-submit"
-              onClick={() => (mode === 'danger-full-access' ? setStep('risk') : onApplyPreset(mode))}
+              onClick={() => (mode === 'danger-full-access' ? setStep('risk') : submit(mode))}
             >
               {t('coding.planReviewStart')}
             </button>
           </span>
         </div>
+        {error && <div className="plan-review-error" role="alert">{error}</div>}
       </div>
     );
   }
@@ -2622,12 +2705,13 @@ export function PlanReviewCard({ plan, currentPreset, onApplyPreset, onDecide }:
             className="plan-review-submit danger"
             disabled={!riskChecked}
             onClick={() => {
-              if (riskChecked) onApplyPreset('danger-full-access');
+              if (riskChecked) submit('danger-full-access');
             }}
           >
             {t('coding.planReviewEnableStart')}
           </button>
         </span>
+        {error && <div className="plan-review-error" role="alert">{error}</div>}
       </div>
     </div>
   );
@@ -2677,13 +2761,17 @@ function QuestionCard({ question, onAnswer }: {
   );
 }
 
-/** WI-152 S2: resolved image-accept for one active route key — the active
- *  provider's `visionSupported` decides; unknown providers stay permissive
- *  (the backend strips images for truly text-only routes). */
+/** WI-152 v3 (dsh pattern): image-accept for one active route key — the
+ *  active MODEL's per-variant declaration decides; undeclared or unknown
+ *  routes stay permissive (a wrong "supports" claim surfaces the provider's
+ *  own error, per the claim-not-check philosophy). */
 export function imagesAcceptedForRoute(models: ModelEntry[], activeModelKey: string): boolean {
-  const providerId = activeModelKey.split('/')[0] || '';
+  const slash = activeModelKey.indexOf('/');
+  const providerId = slash >= 0 ? activeModelKey.slice(0, slash) : activeModelKey;
+  const modelId = slash >= 0 ? activeModelKey.slice(slash + 1) : '';
   const provider = models.find(m => m.id === providerId);
-  return provider ? provider.visionSupported !== false : true;
+  const variant = provider?.models?.find(v => v.id === modelId);
+  return variant ? variant.supportsVision !== false : true;
 }
 
 export function Composer(props: {
@@ -3527,6 +3615,11 @@ interface ModelVariant {
   name: string;
   /** Real context window reported by the provider (/v1/models context_length), if any. */
   contextLength?: number;
+  /** Per-model image-input declaration (dsh pattern): false = declared
+   *  text-only (image requests fail loudly at request assembly);
+   *  undefined/null = undeclared → permissive, the provider's own error is
+   *  the arbiter. */
+  supportsVision?: boolean | null;
 }
 
 interface ModelEntry {
@@ -3550,11 +3643,9 @@ interface ModelEntry {
   reasoningEffort?: string;
   /** Custom model ID used as the prefix of selector names; blank = provider name. */
   modelLabel?: string;
-  /** Legacy stored declaration (no UI, ignored — WI-152 v2 resolves capability automatically). */
+  /** Legacy provider-level declaration (no UI, ignored — capability is
+   *  declared per model variant now). */
   supportsVision?: boolean;
-  /** Resolved vision support (built-in provider table > supported; automatic).
-   *  The composer image gate consumes this (WI-152 S1). */
-  visionSupported?: boolean;
 }
 
 interface BoundModelInfo {
@@ -3573,7 +3664,7 @@ interface AgentModelBinding {
 
 /** One session.trace event (mirrors host types::SessionTraceEntry). */
 interface TraceEntry {
-  kind: 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'system' | 'context';
+  kind: 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'system' | 'context' | 'compaction';
   text: string;
   toolName?: string | null;
   toolInput?: string | null;
@@ -3765,14 +3856,18 @@ type StartHttpServerFn = () => Promise<string>;
 type HttpServerInfoFn = () => Promise<string | null>;
 type GetPermissionFn = (sessionId: string) => Promise<{ sandbox: string | null; approval: string | null; preset: string | null }>;
 interface StarriverBridge {
+  /** FPM P1: generic protocol entry (raw envelope in, response JSON out). */
+  invoke?(requestJson: string): Promise<string>;
   lanAddress?: LanAddressFn;
   retryInit?(): Promise<{ ok: boolean; relaunched?: boolean }>;
   startHttpServer?: StartHttpServerFn;
   httpServerInfo?: HttpServerInfoFn;
   execute(task: string, sessionId: string | undefined, cb: (err: string | null, event: any) => void, executionMode?: string, agent?: string, isolation?: boolean, agentPreset?: string, permissionPreset?: string): void;
   approve(sessionId: string, allowed: boolean, remember?: boolean): Promise<void>;
-  /** Plan fold: answer a pending exit_plan_mode review (Plan confirm card). */
-  planReviewDecision(sessionId: string, requestId: string, approved: boolean, feedback?: string): Promise<void>;
+  /** Plan fold: answer a pending exit_plan_mode review (Plan confirm card).
+   *  `preset` rides the decision — the host applies it atomically with the
+   *  approval. */
+  planReviewDecision(sessionId: string, requestId: string, approved: boolean, feedback?: string, preset?: string): Promise<void>;
   /** WI-5: agent-preset roster + deployment default for new sessions. */
   listAgentPresets?(): Promise<{ presets: { id: string; agent: string; name: string; description: string; source: string; broken: string | null; isDefault: boolean }[]; default: string }>;
   listTools(): Promise<any[]>;
@@ -3781,7 +3876,7 @@ interface StarriverBridge {
   /** WI-92: inject a user message into the RUNNING turn (kernel steer). */
   steerSession(sessionId: string, task: string): Promise<{ steered: boolean }>;
   /** WI-93: background terminal panel. */
-  listTerminals?(): Promise<{ terminals: { id: string; status: string; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number } | null }[] }>;
+  listTerminals?(): Promise<{ terminals: { id: string; status: string; ownerSessionId?: string | null; workspace?: string | null; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number; cmd?: string | null } | null }[] }>;
   killTerminal?(id: string): Promise<{ killed: boolean }>;
   /** WI-101: paginated session messages. */
   getSessionMessagesPage?(sessionId: string, limit?: number, before?: number): Promise<{ messages: ChatMessage[]; total: number; hasMore: boolean }>;
@@ -3828,9 +3923,12 @@ interface StarriverBridge {
   suggestFiles?(workspaceId: string, prefix?: string): Promise<string[]>;
   listSessions(workspaceId?: string): Promise<SessionInfo[]>;
   getSessionMessages(id: string): Promise<ChatMessage[]>;
+  /** Full-history chat archive (session.archiveMessages): raw-ledger transcript incl. compaction-shadowed turns. */
+  getSessionArchiveMessages(id: string): Promise<ChatMessage[]>;
   getSessionTimeline(id: string): Promise<SessionMessage[]>;
-  /** Trajectory ledger (session.trace): chronological event stream rendered by TrajectoryView. */
   getSessionTrace(id: string): Promise<{ entries: TraceEntry[] }>;
+  /** Full-history archive (session.archive): raw ledger projection incl. compaction-shadowed spans. */
+  getSessionArchive(id: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
   forkSession(sourceId: string, beforeMsgId: number, task: string): Promise<SessionInfo>;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string | null): Promise<void>;
@@ -3881,6 +3979,9 @@ interface StarriverBridge {
   openIDE?(cwd: string, command?: string): Promise<{ ok: boolean }>;
   /** Models page "open config file": open ~/.starriver/settings.yaml in the system editor. */
   openModelsConfig?(): Promise<{ ok: boolean; error?: string }>;
+  /** 设置页：退出时是否顺带停止后台服务（desktop-prefs.json，主进程持有）。 */
+  getQuitStopsDaemon?(): Promise<boolean>;
+  setQuitStopsDaemon?(value: boolean): Promise<boolean>;
 
   // MCP Servers
   listMcpServers(): Promise<McpServerInfo[]>;
@@ -3903,6 +4004,8 @@ interface StarriverBridge {
   /** WI-179: jobs registry — active scheduled runs carry `sessionId`. */
   listJobs?(): Promise<JobInfo[]>;
   getSessionTrace(sessionId: string): Promise<SessionTrace>;
+  getSessionArchiveMessages?(sessionId: string): Promise<ChatMessage[]>;
+  getSessionArchive?(sessionId: string): Promise<{ entries: TraceEntry[]; compactions: number }>;
 
   // Backend health — renderer asks "is the Rust backend alive?" on mount and
   // shows a full-screen error instead of a silent zombie UI when it isn't.
@@ -4568,6 +4671,15 @@ export function ModelCatalogEditor(props: {
                       return next;
                     });
                   }} />
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, alignSelf: 'end', paddingBottom: 6,
+                fontSize: 12, color: 'var(--text-muted)', cursor: props.disabled ? 'default' : 'pointer' }}
+                title={t('models.textOnlyModelHint')}>
+                <input type="checkbox" disabled={props.disabled}
+                  checked={v.supportsVision === false}
+                  aria-label={`${t('models.textOnlyModel')} ${index + 1}`}
+                  onChange={(e) => patch(index, { supportsVision: e.target.checked ? false : undefined })} />
+                <span>{t('models.textOnlyModel')}</span>
               </label>
             </div>
           )}
@@ -7235,6 +7347,11 @@ const composerDrafts: Record<string, string> = {};
 export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const { t, lang, setLang } = useI18n();
   const [messages, setMessages] = useState<Message[]>([]);
+  // Chat history base (session.archiveMessages): the full-ledger transcript —
+  // compaction-shadowed turns stay visible, each fold marked by a
+  // role="compaction" row that reuses the live-stream CompactionRow
+  // rendering. The live streaming tail is appended on top of this snapshot.
+  const [archiveMessages, setArchiveMessages] = useState<Message[] | null>(null);
   // Stale-todo watermark for the Todo widget: TaskStarted on a fresh turn
   // hides the previous turn's fully-completed todo list until this turn
   // writes a fresh todo_write (in-progress lists stay visible across turns).
@@ -7271,7 +7388,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       else localStorage.removeItem('starriver-goal-budget');
     } catch { /* storage unavailable */ }
   };
-  const [terminals, setTerminals] = useState<{ id: string; status: string; startedAtMs: number; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number } | null }[]>([]);
+  const [terminals, setTerminals] = useState<{ id: string; status: string; startedAtMs: number; ownerSessionId?: string | null; workspace?: string | null; command?: { startedAtMs: number; finishedAtMs?: number; exitCode?: number; cmd?: string | null } | null }[]>([]);
   // Terminal ids whose idle state was already surfaced at a turn's settle —
   // one reminder per terminal per idle episode (re-armed once it shows
   // activity again).
@@ -7528,6 +7645,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const wsCtx = useWorkspaces();
   const {
     workspaces,
+    sessions,
     archivedSessions,
     activeWorkspaceId,
     setActiveWorkspaceId,
@@ -7539,6 +7657,17 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     handleUnarchive,
     newConvSeq,
   } = wsCtx;
+  // 工作区过滤：只显示本工作区（含其会话）启动的后台终端。workspace 字段
+  // 缺失的旧数据/宿主级终端照常显示——不藏数据。
+  const activeWorkspacePath = workspaces.find(w => w.id === activeWorkspaceId)?.path ?? null;
+  const workspaceTerminals = useMemo(
+    () => terminals.filter(x => !x.workspace || !activeWorkspacePath || x.workspace === activeWorkspacePath),
+    [terminals, activeWorkspacePath],
+  );
+  const sessionTitleOf = useCallback(
+    (sid?: string | null) => (sid ? sessions.find(s => s.id === sid)?.title : undefined),
+    [sessions],
+  );
  /** Middle-column view: conversation (message stream) | trajectory (-style ledger). */
   const [view, setView] = useState<'chat' | 'trajectory'>('chat');
   const [gitStatus, setGitStatus] = useState<WorktreeStatus | null>(null);
@@ -7739,10 +7868,50 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Displayed chat transcript: the full-ledger archive as the history base —
+  // compacted spans stay visible with their compaction markers — plus the
+  // live tail: streaming rows carry no server seq yet, and any seq beyond
+  // the archive snapshot is history that landed after it was taken. Before
+  // the archive resolves, the live transcript renders alone.
+  const displayMessages = useMemo<Message[]>(() => {
+    if (!archiveMessages) return messages;
+    const maxSeq = archiveMessages.reduce((a, m) => Math.max(a, m.seq ?? 0), 0);
+    const tail = messages.filter((m) => m.seq == null || m.seq > maxSeq);
+    return tail.length ? [...archiveMessages, ...tail] : archiveMessages;
+  }, [archiveMessages, messages]);
+
   const showError = useCallback((msg: string) => {
     setErrorMsg(msg);
     setTimeout(() => setErrorMsg(null), 4000);
   }, []);
+
+  // Chat archive (session.archiveMessages): fetched once per session on
+  // open; the transcript always shows the full ledger plus the live tail.
+  // The fetch effect owns the archive lifecycle: entering a session drops
+  // the previous one synchronously, so a history-load finishing later can
+  // never wipe an archive that belongs to the current session.
+  const archiveSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeSessionId || archiveSessionRef.current === activeSessionId) return;
+    archiveSessionRef.current = activeSessionId;
+    setArchiveMessages(null);
+    let stale = false;
+    window.starriver.getSessionArchiveMessages?.(activeSessionId)
+      .then((msgs: any[]) => {
+        if (stale) return;
+        setArchiveMessages(msgs.map((m: any) => ({
+          id: crypto.randomUUID(), role: m.role as Message['role'], content: m.content,
+          seq: m.seq ?? undefined,
+          ts: m.ts ?? undefined,
+          usage: m.usage ?? undefined,
+          durationMs: m.durationMs ?? undefined,
+          doneTs: m.doneTs ?? undefined,
+          fileChanges: m.fileChanges ?? undefined,
+        })));
+      })
+      .catch(() => { if (!stale) setArchiveMessages([]); });
+    return () => { stale = true; };
+  }, [activeSessionId]);
 
   // On mount, load the deployment default as the initial staged mode for new
  // sessions (binding: the mode locks per session at creation; the global
@@ -7946,9 +8115,9 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // null → Ungrouped (the Chat Agent keeps no workspace binding).
   const [chatWorkspaceId, setChatWorkspaceId] = useState<string | null>(null);
 
-  // WI-152 S2: resolve the image gate from the staged agent's active route.
-  // The resolved `visionSupported` (declaration > built-in table) decides;
-  // an unknown provider defaults to permissive (backend strips if wrong).
+  // WI-152 v3 (dsh pattern): resolve the image gate from the staged agent's
+  // active route. The active model's declaration decides; undeclared
+  // defaults to permissive (a wrong claim surfaces the provider's error).
   const activeModelKey = stagedChat ? chatModelId : activeModelId;
   useEffect(() => {
     const disabled = !imagesAcceptedForRoute(models, activeModelKey);
@@ -9031,7 +9200,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           // no ToolCallStart preceded (accumulator path) — never renders "undefined".
           if (mid) {
             const cmd = toolCommandOf(event.input);
-            updateMessage(mid, cmd ? `🔧 ${tname}: ${cmd}` : `🔧 ${tname || 'tool'}`, false);
+            const args = toolArgsJson(event.input);
+            updateMessage(mid, cmd ? `🔧 ${tname}: ${cmd}` : args ? `🔧 ${tname}: ${args}` : `🔧 ${tname || 'tool'}`, false);
           }
           break;
         }
@@ -9203,15 +9373,22 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           closeThinkingBubble();
           const tname = event.name || 'tool';
           const cmd = toolCommandOf(event.input);
-          const tmid = addMessage('tool', cmd ? `🔧 ${tname}: ${cmd}` : `🔧 ${tname}...`, true, tname);
+          // 完整参数回退：terminal_*/mcp_* 无已知显示键时展示完整 JSON（与
+          // 轨迹、历史重建一致），不再退化成裸工具名。
+          const args = toolArgsJson(event.input);
+          const tmid = addMessage('tool', cmd ? `🔧 ${tname}: ${cmd}` : args ? `🔧 ${tname}: ${args}` : `🔧 ${tname}...`, true, tname);
           toolMsgIdRef.current[event.id || ''] = tmid;
           toolNameByIdRef.current[event.id || ''] = tname;
           const startedAt = Date.now();
           toolStartRef.current[event.id || ''] = startedAt;
           // WI-152: shell-type tools (bash/terminal_*) light the terminal entry icon while running.
           // WI-157: record the start time; the popover row shows a running stopwatch.
-          if (/^bash$|^terminal/.test(tname)) {
-            shellCallsRef.current.set(event.id || '', { cmd: cmd || tname, startedAt });
+          // 2026-10-26: only REAL commands get a row — bookkeeping calls
+          // (terminal_wait/kill/list carry no command) must not show up as
+          // bogus "terminal_wait" shell rows.
+          if (cmd && /^bash$|^terminal/.test(tname)) {
+            // 面板完整显示命令（pre-wrap）：还原 toolCommandOf 为聊天行压平的换行。
+            shellCallsRef.current.set(event.id || '', { cmd: cmd.replace(/\\n/g, '\n'), startedAt });
             syncShellState();
           }
           // WI-91: subagent spawns render as nested activity rows.
@@ -9525,10 +9702,10 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // quirk (missing Done / out-of-order Start) must never leave an early row
     // shimmering after later steps already ran.
     let lastThinkId: string | null = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'thinking') { lastThinkId = messages[i].id; break; }
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      if (displayMessages[i].role === 'thinking') { lastThinkId = displayMessages[i].id; break; }
     }
-    for (const m of messages) {
+    for (const m of displayMessages) {
       if (m.role === 'user') {
         flushStep();
         // History rows: display_pieces splits one user message into a text
@@ -9625,7 +9802,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     }
     flushStep();
     return items;
-  }, [messages]);
+  }, [displayMessages]);
 
   // Turn folding (iOS parity): every user message starts a turn (same semantics as
   // the Trajectory's TURN x); earlier turns collapse to a one-line summary by default, and the last
@@ -10002,15 +10179,15 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // (live and replayed history share the same `## TODO` text shape), honoring
   // the todoHideUpTo stale-todo watermark above.
   const latestTodo = useMemo(() => {
-    for (let i = messages.length - 1; i >= todoHideUpTo; i--) {
-      const m = messages[i];
+    for (let i = displayMessages.length - 1; i >= todoHideUpTo; i--) {
+      const m = displayMessages[i];
       if (m.role === 'tool' && m.result && /todo/i.test(m.content)) {
         const parsed = parseTodoState(m.result);
         if (parsed) return parsed;
       }
     }
     return null;
-  }, [messages, todoHideUpTo]);
+  }, [displayMessages, todoHideUpTo]);
   const [todoOpen, setTodoOpen] = useState(false);
   const todoDone = latestTodo?.items.filter(i => i.done).length ?? 0;
   const todoTotal = latestTodo?.items.length ?? 0;
@@ -10323,28 +10500,20 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
               <PlanReviewCard
                 plan={planReview.plan}
                 currentPreset={permissionPresetRef.current}
-                onApplyPreset={(preset) => {
-                  // Approve + apply: the preset write lands BEFORE the plan
-                  // decision so execution starts under the chosen mode; a
-                  // failed write is logged but never blocks the approval.
+                onApprove={(preset) => {
+                  // The preset rides the decision itself (plan.reviewDecision
+                  // `preset` param): the host applies it atomically with the
+                  // approval — no write-before-decision race, no silent
+                  // planning-phase rejection. Only after the decision
+                  // resolves is the composer picker synced to the (now
+                  // ledger-backed) mode.
                   const sid = sessionIdRef2.current!;
-                  window.starriver
-                    .setPermissionPreset(sid, preset)
-                    .catch((e) => console.error('[Coding] setPermissionPreset (plan approval) failed:', e))
+                  return window.starriver
+                    .planReviewDecision(sid, planReview.requestId, true, undefined, preset)
                     .then(() => {
-                      // The card's pick is now the engine's truth — sync the
-                      // composer picker so the UI can't advertise a broader
-                      // mode than the ledger holds (2026-10-14: the picker
-                      // kept showing 完全访问 while the card's 标准 write had
-                      // confined the session to workspace-write; the model
-                      // read that from the runtime context and every
-                      // out-of-workspace edit failed with sandbox confine).
                       setPermissionPresetState(preset);
                       permissionPresetRef.current = preset;
                       setPlanPhase('executing');
-                      window.starriver
-                        .planReviewDecision(sid, planReview.requestId, true)
-                        .catch((e) => console.error('[Coding] planReviewDecision failed:', e));
                     });
                 }}
                 onDecide={(feedback) => {
@@ -10450,7 +10619,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
               </>
             );
           })()}
-          leadingControls={(terminals.length > 0 || shellBusy) ? (
+          leadingControls={(workspaceTerminals.length > 0 || shellBusy) ? (
             <button type="button" className="composer-terminals-btn" aria-label="background-terminals"
               title={t('coding.terminalsTitle')} onClick={() => setTerminalsOpen(o => !o)}
               dangerouslySetInnerHTML={{ __html: TERMINAL_ICON }} />
@@ -10461,11 +10630,16 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           // letting the user re-pick the approval mode for later turns (WI-144); during planning it stays locked to Manual.
           permissionLocked={!stagedChat && mode === 'plan' && planPhase === 'planning'}
           onPermissionPresetChange={stagedChat ? undefined : (m) => {
+            // Optimistic label; reverted if the ledger rejects the write so
+            // the picker never advertises a mode the engine doesn't hold.
+            const previous = permissionPresetRef.current;
             setPermissionPresetState(m);
             permissionPresetRef.current = m;
             if (sessionIdRef2.current) {
               return window.starriver.setPermissionPreset(sessionIdRef2.current, m).catch((e) => {
                 console.error('[Coding] setPermissionPreset failed:', e);
+                setPermissionPresetState(previous);
+                permissionPresetRef.current = previous;
                 throw e;
               });
             }
@@ -10507,19 +10681,23 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           } : null}
         />
         {/* WI-150: background terminals popover — hangs off the composer, above
-            the input bar; lists start time + live elapsed per terminal. */}
-        {terminalsOpen && (terminals.length > 0 || shellBusy) && (
+            the input bar; lists what each terminal runs (command + purpose),
+            its owning session, start time + live elapsed. Workspace-scoped:
+            only terminals started in this workspace (unknown-origin rows
+            still show). */}
+        {terminalsOpen && (workspaceTerminals.length > 0 || shellBusy) && (
           <div className="terminals-popover" data-testid="terminals-panel">
             <div className="terminals-head">
               <span>{t('coding.terminalsTitle')}</span>
-              <span className="terminals-count">{terminals.length + (shellBusy ? shellCmds.length : 0)}</span>
+              <span className="terminals-count">{workspaceTerminals.length + (shellBusy ? shellCmds.length : 0)}</span>
             </div>
+            <TerminalsTableHead />
             {/* WI-152: running bash command (one-shot process, not a PTY); since WI-157 shows start time + running stopwatch. */}
             {shellCmds.map((entry, i) => (
               <ShellCmdRow key={`shell-${i}`} entry={entry} />
             ))}
-            {terminals.map(term => (
-              <TerminalRow key={term.id} term={term} onKill={() => {
+            {workspaceTerminals.map(term => (
+              <TerminalRow key={term.id} term={term} sessionTitle={sessionTitleOf(term.ownerSessionId)} onKill={() => {
                 window.starriver.killTerminal?.(term.id)
                   .then(() => setTerminals(prev => prev.filter(x => x.id !== term.id)))
                   .catch(() => {});
@@ -10763,6 +10941,9 @@ interface WorkspaceCtx {
   /** CodingView registers a reset for view-local per-session flags (isolation toggle). */
   registerIsolationReset: (fn: (() => void) | null) => void;
   archiveSession: (sessionId: string) => Promise<void>;
+  /** Tasks-section rows (对话 / 定时运行): hard delete after the sidebar
+   *  confirmation modal. Mirrors archiveSession's active-session contract. */
+  handleDeleteSession: (sessionId: string) => Promise<void>;
   handleUnarchive: (sessionId: string) => Promise<void>;
   handleRenameSession: (sessionId: string) => Promise<void>;
   handleRenameSubmit: (workspaceId: string) => Promise<void>;
@@ -11043,6 +11224,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     await loadSessions();
   }, [activeSessionId, setActiveSessionId, loadSessions]);
 
+  // Tasks-section delete (对话 / 定时运行 rows): hard delete after the sidebar
+  // confirmation modal. Same active-session contract as archive — deleting the
+  // open session clears the stream via CodingView's sync effect.
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
+    if (activeSessionId === sessionId) setActiveSessionId('');
+    try {
+      await window.starriver.deleteSession(sessionId);
+      notifyView(`🗑 ${t('thread.deleted')}`, 'delete');
+      await loadSessions();
+    } catch (e) { showError(t('thread.deleteFailed')); }
+  }, [activeSessionId, setActiveSessionId, loadSessions, notifyView, showError, t]);
+
   // Click an archived row (or the modal's restore) → back to the default list.
   const handleUnarchive = useCallback(async (sessionId: string) => {
     try {
@@ -11096,6 +11289,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     showNewWorkspace, setShowNewWorkspace, newWorkspacePath, setNewWorkspacePath,
     confirmDeleteWorkspace, setConfirmDeleteWorkspace,
     loadSessions, toggleWorkspace, activateWorkspace, requestNewConversation, archiveSession,
+    handleDeleteSession,
     runningSessionIds, refreshRunningSessions,
     handleUnarchive, handleRenameSession, handleRenameSubmit, handleCreateWorkspace,
     handleDeleteWorkspace, handleConfirmDelete,
@@ -11129,6 +11323,9 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
   }, [ws.sessions]);
   // Row label: real title → owning task's name → generic fallback.
   const sessionLabel = (s: SessionInfo) => s.title || taskRuns.get(s.id) || 'Chat';
+  // Tasks-section delete: the row's trash button only arms this id; the actual
+  // session.delete fires from the confirmation modal below (destructive).
+  const [confirmDeleteSession, setConfirmDeleteSession] = useState<string | null>(null);
   // Folder fold state for the Tasks / Ungrouped sections (same interaction as
   // the workspace groups above).
   const [foldedFolders, setFoldedFolders] = useState<Record<string, boolean>>({});
@@ -11391,6 +11588,18 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
                         <span className="sb-run-dot" data-tip={t('scheduled.runningTip')} aria-label={t('scheduled.runningTip')} />
                       )}
                       <span className="sb-ws-session-name">{sessionLabel(s)}</span>
+                      {/* Delete affordance for both Tasks folders (chats +
+                          scheduled runs). Disabled while a run is live — an
+                          in-flight session must not be deleted under the
+                          stream; stop the run first, then delete. */}
+                      <button
+                        className="sb-ws-icon-btn"
+                        disabled={ws.runningSessionIds.has(s.id)}
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteSession(s.id); }}
+                        aria-label={t('common.delete')}
+                        data-tip={t('common.delete')}>
+                        <span dangerouslySetInnerHTML={{ __html: ICON_TRASH }} />
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -11445,6 +11654,29 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
           onCancel={() => ws.setConfirmDeleteWorkspace(null)}
         />
       )}
+
+      {/* Tasks-row delete confirmation: names the target session, then hard
+          deletes (session.delete) — no undo. */}
+      {confirmDeleteSession && (() => {
+        const target = ws.sessions.find(s => s.id === confirmDeleteSession);
+        return (
+          <div className="modal-overlay" onClick={() => setConfirmDeleteSession(null)}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-title">{t('thread.deleteSidebarTitle')}</div>
+              <div className="modal-body">{t('thread.deleteSidebarBody', { name: target ? sessionLabel(target) : '' })}</div>
+              <div className="modal-actions">
+                <button className="modal-btn" onClick={() => setConfirmDeleteSession(null)}>{t('common.cancel')}</button>
+                <button
+                  className="modal-btn danger"
+                  data-testid="confirm-delete-session"
+                  onClick={() => { const id = confirmDeleteSession; setConfirmDeleteSession(null); if (id) void ws.handleDeleteSession(id); }}>
+                  {t('coding.delete')}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -11731,6 +11963,384 @@ const copyBtn: React.CSSProperties = {
   padding: '4px 10px', border: '1px solid var(--border-strong)', borderRadius: 6,
   background: 'var(--surface)', color: 'var(--text)', fontSize: 13, cursor: 'pointer',
 };
+
+/* ─── LAN chat (lan.* protocol family)：局域网实例互发消息 ───
+ *  侧栏左下角消息图标打开；实例自动发现（Rust lan_chat UDP beacon），
+ *  按 hostname 命名；点选实例互发文字/图片。数据走 window.starriver.invoke
+ *  → lan.state / lan.messages / lan.send / lan.attachment / lan.markRead。 */
+
+interface LanPeer {
+  id: string;
+  hostname: string;
+  ip: string;
+  port: number;
+  lastSeenMs?: number;
+  online: boolean;
+}
+interface LanChatImageMeta { ref: string; mime: string; width: number; height: number; bytes: number; }
+interface LanChatMessage {
+  id: number;
+  dir: 'in' | 'out';
+  kind: 'text' | 'image';
+  text?: string;
+  image?: LanChatImageMeta;
+  tsMs: number;
+  status?: 'sending' | 'sent' | 'failed';
+}
+interface LanChatState {
+  enabled: boolean;
+  self?: { id: string; hostname: string; port: number; ip: string };
+  peers: LanPeer[];
+  conversations?: string[];
+  unread: Record<string, number>;
+  unreadTotal: number;
+}
+
+let lanInvokeSeq = 0;
+/** Generic protocol call over the raw IPC bridge (same envelope as preload's call()). */
+async function lanInvoke<T = any>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  const bridge = (window as any).starriver;
+  if (!bridge?.invoke) throw new Error('protocol invoke unavailable');
+  const request = { v: 1, id: `lan_${Date.now().toString(36)}_${++lanInvokeSeq}`, method, params };
+  const text = await bridge.invoke(JSON.stringify(request));
+  const response = JSON.parse(text);
+  if (!response.ok) {
+    const error = new Error(response.error?.message || `lan protocol error ${response.error?.code ?? ''}`);
+    (error as any).code = response.error?.code;
+    throw error;
+  }
+  return response.result as T;
+}
+
+const LAN_CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+const LAN_CHAT_IMAGE_MAX_EDGE = 2000;
+/** Pick + downscale one image for sending: canvas-resize over 2000px edge,
+ *  re-encode JPEG when the payload is heavy. Throws 'too-large' over the cap. */
+async function lanChatImageFromFile(file: File | undefined | null): Promise<{ base64: string; mime: string } | null> {
+  if (!file) return null;
+  if (file.size > LAN_CHAT_IMAGE_MAX_BYTES) throw 'too-large';
+  let dataUrl = await fileToDataUrl(file);
+  let mime = (/^data:(image\/(?:png|jpeg|webp));/.exec(dataUrl)?.[1]) ?? 'image/png';
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = reject;
+    el.src = dataUrl;
+  });
+  const maxEdge = Math.max(img.width, img.height);
+  const heavy = dataUrl.length > 1.5 * 1024 * 1024;
+  if (maxEdge > LAN_CHAT_IMAGE_MAX_EDGE || heavy) {
+    const scale = Math.min(1, LAN_CHAT_IMAGE_MAX_EDGE / maxEdge);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
+    dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    mime = 'image/jpeg';
+  }
+  return { base64: base64FromDataUrl(dataUrl), mime };
+}
+
+/** Sidebar-footer badge: unread total, cheap poll every 3s (both embedded and
+ *  daemon modes expose lan.state; a disabled service reports unreadTotal 0). */
+export function useLanChatUnread(): number {
+  const [unreadTotal, setUnreadTotal] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const poll = () => {
+      lanInvoke<LanChatState>('lan.state')
+        .then((state) => { if (alive) setUnreadTotal(state?.unreadTotal ?? 0); })
+        .catch(() => {});
+    };
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
+  return unreadTotal;
+}
+
+/** 消息小程序对话框：左列实例列表（hostname 命名 + 在线点 + 未读数），
+ *  右列会话（气泡 / data-URL 图片 / 输入行）。打开与选中时 markRead + probe。 */
+export function LanChatDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n();
+  const [state, setState] = useState<LanChatState | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [messages, setMessages] = useState<LanChatMessage[]>([]);
+  const [peer, setPeer] = useState<LanPeer | null>(null);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [searching, setSearching] = useState(true);
+  const [zoom, setZoom] = useState<string | null>(null);
+  const imageData = useRef<Map<string, string>>(new Map());
+  const [, bumpRender] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const lastIdRef = useRef<number>(0);
+  const refreshRef = useRef<() => void>(() => {});
+
+  // Discovery + unread: 3s poll.
+  useEffect(() => {
+    let alive = true;
+    const poll = () => {
+      lanInvoke<LanChatState>('lan.state')
+        .then((next) => {
+          if (!alive) return;
+          setState(next);
+          setSearching(false);
+          setSelected((current) => {
+            if (current) return current;
+            const first = next.peers?.[0]?.id ?? next.conversations?.[0] ?? null;
+            return first && first !== next.self?.id ? first : null;
+          });
+        })
+        .catch(() => { if (alive) setSearching(false); });
+    };
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
+
+  // Incremental history poll for the selected peer (sinceId → no repeated
+  // image base64 over the wire) + markRead.
+  useEffect(() => {
+    if (!selected) { setMessages([]); setPeer(null); return; }
+    let alive = true;
+    lastIdRef.current = 0;
+    setMessages([]);
+    const refresh = () => {
+      lanInvoke<{ messages: LanChatMessage[]; peer: LanPeer | null }>('lan.messages', { peerId: selected })
+        .then((result) => {
+          if (!alive) return;
+          setPeer(result.peer ?? null);
+          const incoming = result.messages ?? [];
+          setMessages((current) => {
+            if (incoming.length === 0) return current;
+            const knownLast = current.length > 0 ? current[current.length - 1].id : lastIdRef.current;
+            const fresh = incoming.filter((m) => m.id > Math.max(knownLast, 0));
+            const merged = fresh.length > 0 ? [...current, ...fresh] : current;
+            if (merged.length > 0) lastIdRef.current = merged[merged.length - 1].id;
+            return merged;
+          });
+          void lanInvoke('lan.markRead', { peerId: selected }).catch(() => {});
+        })
+        .catch(() => {});
+    };
+    refreshRef.current = refresh;
+    refresh();
+    const timer = setInterval(refresh, 1500);
+    return () => { alive = false; clearInterval(timer); };
+  }, [selected]);
+
+  // Resolve chat images (sha256 refs → data URLs) with a per-session cache.
+  useEffect(() => {
+    for (const message of messages) {
+      const ref = message.image?.ref;
+      if (!ref || imageData.current.has(ref)) continue;
+      lanInvoke<{ base64: string; mime: string }>('lan.attachment', { id: ref })
+        .then((att) => {
+          imageData.current.set(ref, `data:${att.mime};base64,${att.base64}`);
+          bumpRender((n) => n + 1);
+        })
+        .catch(() => {});
+    }
+  }, [messages]);
+
+  // Keep the conversation pinned to the bottom. (scrollTop assignment, not
+  // scrollTo — jsdom lacks Element.scrollTo and the assignment works everywhere.)
+  useEffect(() => {
+    const list = listRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [messages, imageData.current.size]);
+
+  // Esc closes (dialog + zoom overlay).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (zoom) { setZoom(null); return; }
+      onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, zoom]);
+
+  const roster = useMemo(() => {
+    const entries: { id: string; hostname: string; sub: string; online: boolean; unread: number }[] = [];
+    const seen = new Set<string>();
+    for (const p of state?.peers ?? []) {
+      entries.push({ id: p.id, hostname: p.hostname || p.id.slice(0, 8), sub: `${p.ip}:${p.port}`, online: p.online, unread: state?.unread?.[p.id] ?? 0 });
+      seen.add(p.id);
+    }
+    for (const id of state?.conversations ?? []) {
+      if (seen.has(id) || id === state?.self?.id) continue;
+      entries.push({ id, hostname: id.length > 12 ? `${id.slice(0, 8)}…` : id, sub: t('lanChat.offline'), online: false, unread: state?.unread?.[id] ?? 0 });
+    }
+    entries.sort((a, b) => (a.online === b.online ? a.hostname.localeCompare(b.hostname) : a.online ? -1 : 1));
+    return entries;
+  }, [state, t]);
+
+  const sendText = async () => {
+    const text = input.trim();
+    if (!text || !selected || busy) return;
+    setInput('');
+    setBusy(true);
+    setError('');
+    try {
+      await lanInvoke('lan.send', { peerId: selected, kind: 'text', text });
+      refreshRef.current?.();
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+    setBusy(false);
+  };
+
+  const sendImage = async (file: File | undefined | null) => {
+    if (!file || !selected || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const image = await lanChatImageFromFile(file);
+      if (image) {
+        await lanInvoke('lan.send', { peerId: selected, kind: 'image', imageBase64: image.base64, mime: image.mime });
+        refreshRef.current?.();
+      }
+    } catch (e: any) {
+      setError(e === 'too-large' ? t('lanChat.imageTooLarge') : (e?.message || String(e)));
+    }
+    setBusy(false);
+  };
+
+  const selectedHostname = peer?.hostname || roster.find((r) => r.id === selected)?.hostname || (selected ? selected.slice(0, 8) : '');
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, background: 'var(--overlay-strong)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+      }}
+      onClick={onClose}
+    >
+      <div className="lan-chat-dialog" role="dialog" aria-modal="true" aria-label={t('lanChat.title')} onClick={(e) => e.stopPropagation()} data-testid="lan-chat-dialog">
+        <div className="lan-chat-header">
+          <h3 className="lan-chat-title">
+            <span style={{ display: 'inline-flex', color: 'var(--text-secondary)' }} dangerouslySetInnerHTML={{ __html: ICON_MESSAGE }} />
+            {t('lanChat.title')}
+          </h3>
+          <button type="button" className="lan-chat-close" onClick={onClose} aria-label={t('settings.close')}>✕</button>
+        </div>
+        {!state?.enabled ? (
+          <div className="lan-chat-disabled">{t('lanChat.notEnabled')}</div>
+        ) : (
+          <div className="lan-chat-body">
+            <div className="lan-chat-peer-list" data-testid="lan-chat-peers">
+              {state.self && (
+                <div className="lan-chat-self" title={`${state.self.ip}:${state.self.port}`}>
+                  <span className="lan-chat-self-label">{t('lanChat.self')}</span>
+                  <span className="lan-chat-self-name">{state.self.hostname}</span>
+                </div>
+              )}
+              {roster.length === 0 && (
+                <div className="lan-chat-empty" data-testid="lan-chat-empty">
+                  {searching ? t('lanChat.searching') : t('lanChat.empty')}
+                </div>
+              )}
+              {roster.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className={'lan-chat-peer-row' + (entry.id === selected ? ' active' : '')}
+                  onClick={() => setSelected(entry.id)}
+                  data-testid="lan-chat-peer"
+                >
+                  <span className={'lan-chat-dot' + (entry.online ? ' online' : '')} />
+                  <span className="lan-chat-peer-text">
+                    <span className="lan-chat-peer-name">{entry.hostname}</span>
+                    <span className="lan-chat-peer-sub">{entry.sub}</span>
+                  </span>
+                  {entry.unread > 0 && <span className="lan-chat-unread">{entry.unread > 99 ? '99+' : entry.unread}</span>}
+                </button>
+              ))}
+            </div>
+            <div className="lan-chat-conversation">
+              <div className="lan-chat-conv-header">
+                <span className="lan-chat-conv-name" data-testid="lan-chat-peer-title">{selectedHostname || t('lanChat.searching')}</span>
+                {peer && (
+                  <span className={'lan-chat-conv-status' + (peer.online ? ' online' : '')}>
+                    {peer.online ? t('lanChat.online') : t('lanChat.offline')}
+                  </span>
+                )}
+                <span className="lan-chat-conv-sub">{peer ? `${peer.ip}:${peer.port}` : ''}</span>
+              </div>
+              <div className="lan-chat-messages" ref={listRef} data-testid="lan-chat-messages">
+                {messages.map((message) => (
+                  <div key={message.id} className={`lan-chat-row ${message.dir}`}>
+                    <div className={`lan-chat-msg ${message.dir}` + (message.status === 'failed' ? ' failed' : '')}>
+                      {message.kind === 'text' && <span className="lan-chat-msg-text">{message.text}</span>}
+                      {message.kind === 'image' && message.image && (
+                        imageData.current.has(message.image.ref) ? (
+                          <img
+                            className="lan-chat-msg-image"
+                            src={imageData.current.get(message.image.ref)}
+                            alt=""
+                            style={{ maxWidth: 240, maxHeight: 200, borderRadius: 8, cursor: 'zoom-in', display: 'block' }}
+                            onClick={() => setZoom(imageData.current.get(message.image.ref) || null)}
+                          />
+                        ) : (
+                          <span className="lan-chat-msg-loading">…</span>
+                        )
+                      )}
+                      {message.status === 'failed' && <span className="lan-chat-msg-flag" title={t('lanChat.sendFailed')}>!</span>}
+                    </div>
+                    <div className="lan-chat-msg-time">
+                      {new Date(message.tsMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {message.dir === 'out' && message.status === 'sending' ? ' · …' : ''}
+                    </div>
+                  </div>
+                ))}
+                {messages.length === 0 && selected && <div className="lan-chat-none">{t('lanChat.searching')}</div>}
+              </div>
+              <div className="lan-chat-composer">
+                <button
+                  type="button"
+                  className="lan-chat-attach"
+                  title={t('lanChat.attachImage')}
+                  aria-label={t('lanChat.attachImage')}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <span style={{ display: 'inline-flex' }} dangerouslySetInnerHTML={{ __html: ICON_MESSAGE_IMAGE }} />
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  style={{ display: 'none' }}
+                  onChange={(e) => { void sendImage(e.target.files?.[0]); e.target.value = ''; }}
+                />
+                <input
+                  className="lan-chat-input"
+                  data-testid="lan-chat-input"
+                  value={input}
+                  placeholder={t('lanChat.placeholder')}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) void sendText(); }}
+                />
+                <button type="button" className="lan-chat-send" data-testid="lan-chat-send" onClick={() => void sendText()} disabled={busy || !input.trim()}>
+                  {t('lanChat.send')}
+                </button>
+              </div>
+              {error && <div className="lan-chat-error" data-testid="lan-chat-error">{error}</div>}
+            </div>
+          </div>
+        )}
+        {zoom && (
+          <div className="lan-chat-imgzoom" onClick={() => setZoom(null)}>
+            <img src={zoom} alt="" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /* ─── Settings hot-update sections (WI-4: settings sections / model-provider
  *  config / plugin inventory — first consumers of settings.get/update) ─── */
@@ -12292,6 +12902,32 @@ export function SubagentDelegationSection() {
   );
 }
 
+/** 退出行为：是否顺带停止后台服务（starriverd）。存 desktop-prefs.json（主进程
+ *  userData），不走 settings.yaml —— 这是桌面应用自身的偏好，与协议后端无关。 */
+function SettingsDaemonSection() {
+  const { t } = useI18n();
+  const [stopOnQuit, setStopOnQuit] = useState<boolean | null>(null);
+  useEffect(() => {
+    Promise.resolve(window.starriver.getQuitStopsDaemon?.())
+      .then(setStopOnQuit)
+      .catch(() => setStopOnQuit(false));
+  }, []);
+  const toggle = () => {
+    const next = !(stopOnQuit ?? false);
+    setStopOnQuit(next);
+    Promise.resolve(window.starriver.setQuitStopsDaemon?.(next)).catch(() => {});
+  };
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>{t('settings.quitStopsDaemon')}</div>
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+        <input type="checkbox" checked={stopOnQuit ?? false} onChange={toggle} style={{ marginTop: 2 }} />
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>{t('settings.quitStopsDaemonHint')}</span>
+      </label>
+    </div>
+  );
+}
+
 export function SettingsDialog({ onClose }: {
   onClose: () => void;
 }) {
@@ -12341,6 +12977,7 @@ export function SettingsDialog({ onClose }: {
                   <option value="zh">{t('settings.chinese')}</option>
                 </select>
               </div>
+              <SettingsDaemonSection />
               {/* Theme picker removed (2026-10-05): Classic Gray is the only
                   supported theme for now; boot forces the default so a stale
                   saved pick can't stick with no picker to undo it. */}
@@ -12791,6 +13428,9 @@ function App() {
   const [showRemoteAccess, setShowRemoteAccess] = useState(false);
   // 定时锁配置入口：侧栏左下角锁形按钮（手机图标左侧）
   const [showUiLock, setShowUiLock] = useState(false);
+  // LAN chat（消息小程序）：侧栏左下角消息图标打开
+  const [showLanChat, setShowLanChat] = useState(false);
+  const lanUnread = useLanChatUnread();
   // API Debug is currently off with no toggle surface (the Settings → Coding
   // switch was removed); the plumbing stays so the panel can be re-wired.
   const [debugEnabled] = useState(false);
@@ -12893,8 +13533,23 @@ function App() {
             <span className="nav-icon" dangerouslySetInnerHTML={{ __html: tabIcons.settings || "" }} />
             {t('nav.settings')}
           </button>
-          {/* 锁形（定时锁）+ 手机（远程配对）成组紧邻贴右缘 — 用户反馈两图标不应分开 */}
+          {/* 锁形（定时锁）+ 手机（远程配对）成组紧邻贴右缘 — 用户反馈两图标不应分开。
+              LAN chat 消息图标在最左，红点徽标显示未读总数。 */}
           <div className="sb-footer-icons">
+            <button
+              className="nav-item sb-footer-icon"
+              onClick={() => setShowLanChat(true)}
+              title={t('lanChat.title')}
+              aria-label={t('lanChat.title')}
+              data-testid="lan-chat-entry"
+            >
+              <span className="nav-icon" dangerouslySetInnerHTML={{ __html: ICON_MESSAGE }} />
+              {lanUnread > 0 && (
+                <span className="sb-footer-badge" data-testid="lan-chat-badge">
+                  {lanUnread > 99 ? '99+' : lanUnread}
+                </span>
+              )}
+            </button>
             <button
               className="nav-item sb-footer-icon"
               onClick={() => setShowUiLock(true)}
@@ -12936,6 +13591,11 @@ function App() {
       {showUiLock && (
         <UiLockDialog
           onClose={() => setShowUiLock(false)}
+        />
+      )}
+      {showLanChat && (
+        <LanChatDialog
+          onClose={() => setShowLanChat(false)}
         />
       )}
     </div>

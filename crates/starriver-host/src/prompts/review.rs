@@ -147,11 +147,7 @@ pub fn parse_review_findings(text: &str) -> Vec<ReviewFinding> {
 }
 
 /// WI-96: the structured-review prompt (child-thread one-shot).
-pub fn structured_review_prompt(
-    files: &[String],
-    diff: &str,
-    dimensions: &[String],
-) -> String {
+pub fn structured_review_prompt(files: &[String], diff: &str, dimensions: &[String]) -> String {
     let dim_line = if dimensions.is_empty() {
         "correctness, security, performance, maintainability, testing".to_string()
     } else {
@@ -159,7 +155,11 @@ pub fn structured_review_prompt(
     };
     let mut prompt = format!(
         "Review the following changes. Dimensions: {dim_line}.\n\nFiles:\n{}\n\n",
-        files.iter().map(|f| format!("- {f}")).collect::<Vec<_>>().join("\n")
+        files
+            .iter()
+            .map(|f| format!("- {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     if !diff.is_empty() {
         prompt.push_str("Unified diff:\n```diff\n");

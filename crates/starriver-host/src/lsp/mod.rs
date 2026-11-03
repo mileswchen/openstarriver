@@ -359,17 +359,16 @@ impl LspManager {
 
     /// Remove every session idle past `idle_timeout` from the map and return
     /// them for out-of-lock graceful shutdown.
-    fn take_idle(
-        &self,
-        sessions: &mut HashMap<(String, PathBuf), Entry>,
-    ) -> Vec<Entry> {
+    fn take_idle(&self, sessions: &mut HashMap<(String, PathBuf), Entry>) -> Vec<Entry> {
         let now = Instant::now();
         let idle: Vec<(String, PathBuf)> = sessions
             .iter()
             .filter(|(_, e)| now.duration_since(e.last_used) > self.idle_timeout)
             .map(|(key, _)| key.clone())
             .collect();
-        idle.into_iter().filter_map(|key| sessions.remove(&key)).collect()
+        idle.into_iter()
+            .filter_map(|key| sessions.remove(&key))
+            .collect()
     }
 }
 

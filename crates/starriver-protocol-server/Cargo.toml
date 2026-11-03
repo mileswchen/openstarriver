@@ -18,11 +18,16 @@ tokio-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+tracing = { workspace = true }
 uuid = { workspace = true }
 sha1 = { workspace = true }
 base64 = { workspace = true }
+socket2 = { workspace = true }
+hostname = { workspace = true }
+if-addrs = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 futures = { workspace = true }
+image = { workspace = true }

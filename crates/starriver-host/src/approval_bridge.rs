@@ -4,7 +4,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use cordis_rslite::EventBus;
 use starriver_kernel::approval::{ApprovalOutcome, ApprovalRequestEvent};
@@ -13,10 +12,6 @@ use starriver_kernel::session::SessionId;
 use tokio::sync::oneshot;
 
 use starriver_kernel::agent::AgentRegistry;
-
-/// Default pending-approval timeout (WI-16): a request no client answers
-/// within this window is denied (`rejected` + `approval/timed-out` event).
-pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// How many recent resolutions to remember for late-responder arbitration.
 const RESOLUTION_HISTORY: usize = 256;
@@ -58,54 +53,29 @@ pub struct ApprovalBridge {
     registry: Arc<dyn AgentRegistry>,
     pending: Arc<Mutex<HashMap<String, Pending>>>,
     session_latest: Arc<Mutex<HashMap<String, String>>>,
-    /// Pending-approval timeout; `None` disables it (WI-16). Defaults to
-    /// [`DEFAULT_APPROVAL_TIMEOUT`].
-    timeout: Arc<Mutex<Option<Duration>>>,
     /// Recently resolved requests (first-wins arbitration record, WI-16):
     /// lets a late second responder learn the final decision.
     resolved: Arc<Mutex<VecDeque<(String, ApprovalDecision)>>>,
 }
 
-/// Await a pending decision with the WI-16 timeout: a request no client
-/// answers in time is denied (`rejected`). Returns the outcome, the decision
-/// when one arrived, and whether the timeout fired.
-async fn await_decision(
-    rx: oneshot::Receiver<ApprovalDecision>,
-    timeout: Option<Duration>,
-) -> (ApprovalOutcome, Option<ApprovalDecision>, bool) {
-    match timeout {
-        Some(limit) => match tokio::time::timeout(limit, rx).await {
-            Ok(Ok(decision)) => (decision.to_outcome(), Some(decision), false),
-            Ok(Err(_)) => (ApprovalOutcome::Cancelled, None, false),
-            Err(_) => (ApprovalOutcome::Rejected, None, true),
-        },
-        None => match rx.await {
-            Ok(decision) => (decision.to_outcome(), Some(decision), false),
-            Err(_) => (ApprovalOutcome::Cancelled, None, false),
-        },
+/// Await a pending decision. Approvals wait indefinitely (dsh/codex
+/// parity): only an actual decision or the client channel dropping
+/// (requester gone) settles the request — never a clock.
+async fn await_decision(rx: oneshot::Receiver<ApprovalDecision>) -> ApprovalOutcome {
+    match rx.await {
+        Ok(decision) => decision.to_outcome(),
+        Err(_) => ApprovalOutcome::Cancelled,
     }
 }
 
 impl ApprovalBridge {
     pub fn new(registry: Arc<dyn AgentRegistry>) -> Self {
-        Self::with_timeout(registry, Some(DEFAULT_APPROVAL_TIMEOUT))
-    }
-
-    /// Bridge with an explicit pending-request timeout (`None` = wait
-    /// indefinitely, the pre-WI-16 behavior).
-    pub fn with_timeout(registry: Arc<dyn AgentRegistry>, timeout: Option<Duration>) -> Self {
         Self {
             registry,
             pending: Arc::new(Mutex::new(HashMap::new())),
             session_latest: Arc::new(Mutex::new(HashMap::new())),
-            timeout: Arc::new(Mutex::new(timeout)),
             resolved: Arc::new(Mutex::new(VecDeque::new())),
         }
-    }
-
-    /// Retune the pending-request timeout (e.g. from a settings update).
-    pub fn set_timeout(&self, timeout: Option<Duration>) {
-        *self.timeout.lock().unwrap() = timeout;
     }
 
     /// The latest approval request id seen for a session (pending or
@@ -131,12 +101,10 @@ impl ApprovalBridge {
         let pending = Arc::clone(&self.pending);
         let session_latest = Arc::clone(&self.session_latest);
         let registry = Arc::clone(&self.registry);
-        let timeout = Arc::clone(&self.timeout);
         bus.on_waterfall::<ApprovalRequestEvent, _>(move |event, _next| {
             let pending = Arc::clone(&pending);
             let session_latest = Arc::clone(&session_latest);
             let registry = Arc::clone(&registry);
-            let timeout = Arc::clone(&timeout);
             Box::pin(async move {
                 let req = event.req.clone();
                 if req.signal.as_ref().is_some_and(|s| s.is_cancelled()) {
@@ -146,7 +114,7 @@ impl ApprovalBridge {
                     return Ok(ApprovalOutcome::Unavailable);
                 };
                 // Find the newest unmatched approval/asked for this call
- // (-aligned: the audit pair is appended by the service).
+                // (-aligned: the audit pair is appended by the service).
                 let events = agent.session().events();
                 let claimed: std::collections::HashSet<String> =
                     pending.lock().unwrap().keys().cloned().collect();
@@ -193,29 +161,11 @@ impl ApprovalBridge {
                     .lock()
                     .unwrap()
                     .insert(req.agent_id.clone(), id.clone());
-                let limit = *timeout.lock().unwrap();
-                let (outcome, _decision, timed_out) = await_decision(rx, limit).await;
+                let outcome = await_decision(rx).await;
                 // The first-wins arbitration record is appended by `respond`
                 // itself, so every resolution path (protocol client, legacy
                 // approve, direct respond) is covered exactly once.
                 pending.lock().unwrap().remove(&id);
-                if timed_out {
-                    // WI-16: the timeout denies the request; the service
-                    // completes the audit pair (decided/rejected) and the
-                    // timeout itself is an explicit session event.
-                    let _ = agent.session().append(
-                        "approval/timed-out",
-                        JsonValue::Object(vec![
-                            ("id".into(), JsonValue::String(id.clone())),
-                            (
-                                "timeoutMs".into(),
-                                JsonValue::UInt(
-                                    limit.map(|d| d.as_millis() as u64).unwrap_or_default(),
-                                ),
-                            ),
-                        ]),
-                    );
-                }
                 Ok(outcome)
             })
         })
@@ -298,64 +248,23 @@ mod tests {
         ApprovalBridge::new(registry)
     }
 
-    // ── WI-16: pending timeout ──
+    // ── wait semantics: a decision wins, a dropped channel cancels, no clock ──
 
     #[tokio::test]
-    async fn timeout_denies_and_flags() {
-        let (_tx, rx) = oneshot::channel::<ApprovalDecision>();
-        let (outcome, decision, timed_out) =
-            await_decision(rx, Some(Duration::from_millis(20))).await;
-        assert_eq!(outcome, ApprovalOutcome::Rejected);
-        assert!(decision.is_none());
-        assert!(timed_out);
-    }
-
-    #[tokio::test]
-    async fn answer_before_timeout_wins() {
+    async fn answer_wins() {
         let (tx, rx) = oneshot::channel::<ApprovalDecision>();
         tx.send(ApprovalDecision::Allow { remember: false })
             .unwrap();
-        let (outcome, decision, timed_out) =
-            await_decision(rx, Some(Duration::from_secs(30))).await;
+        let outcome = await_decision(rx).await;
         assert_eq!(outcome, ApprovalOutcome::AllowedOnce);
-        assert_eq!(decision, Some(ApprovalDecision::Allow { remember: false }));
-        assert!(!timed_out);
     }
 
     #[tokio::test]
     async fn dropped_channel_cancels() {
         let (tx, rx) = oneshot::channel::<ApprovalDecision>();
         drop(tx);
-        let (outcome, decision, timed_out) =
-            await_decision(rx, Some(Duration::from_secs(30))).await;
+        let outcome = await_decision(rx).await;
         assert_eq!(outcome, ApprovalOutcome::Cancelled);
-        assert!(decision.is_none());
-        assert!(!timed_out);
-    }
-
-    #[tokio::test]
-    async fn disabled_timeout_waits_for_the_answer() {
-        let (tx, rx) = oneshot::channel::<ApprovalDecision>();
-        let task = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            let _ = tx.send(ApprovalDecision::Reject);
-        });
-        let (outcome, _, timed_out) = await_decision(rx, None).await;
-        task.await.unwrap();
-        assert_eq!(outcome, ApprovalOutcome::Rejected);
-        assert!(!timed_out);
-    }
-
-    #[test]
-    fn timeout_is_configurable() {
-        let bridge = empty_bridge();
-        bridge.set_timeout(None);
-        assert_eq!(*bridge.timeout.lock().unwrap(), None);
-        bridge.set_timeout(Some(Duration::from_secs(1)));
-        assert_eq!(
-            *bridge.timeout.lock().unwrap(),
-            Some(Duration::from_secs(1))
-        );
     }
 
     // ── WI-16: multi-UI first-wins arbitration ──
@@ -423,7 +332,9 @@ mod tests {
             fn steer(&self, _message: Message) {}
             fn inject(&self, _message: Message) {}
             fn send(&self, _message: Message, _target: InboxTarget, _wakeup: bool) {}
-            fn cancel(&self, _cause: AgentCancelCause, _keep_inbox: bool) -> bool { false }
+            fn cancel(&self, _cause: AgentCancelCause, _keep_inbox: bool) -> bool {
+                false
+            }
             fn when_idle(&self) -> BoxFuture<()> {
                 Box::pin(async {})
             }
@@ -457,14 +368,14 @@ mod tests {
                     ctx,
                 })
             };
-            registry.register(agent.clone()).unwrap();
+            let _ = registry.register(agent.clone()).unwrap();
             // A different call's still-unmatched audit pair.
             agent
                 .session()
                 .append("approval/asked", asked("ar-9", Some("call-9")))
                 .unwrap();
 
-            let bridge = ApprovalBridge::with_timeout(registry.clone(), Some(Duration::from_millis(50)));
+            let bridge = ApprovalBridge::new(registry.clone());
             let _handle = bridge.register(&bus);
 
             let event = Arc::new(ApprovalRequestEvent {
@@ -494,12 +405,15 @@ mod tests {
                 bridge.session_latest_request("s1").is_none(),
                 "call-7's request must not claim call-9's pending slot"
             );
-            let timed_out = agent
+            let any_timed_out = agent
                 .session()
                 .events()
                 .iter()
                 .any(|e| e.event_type == "approval/timed-out");
-            assert!(!timed_out, "an unanswered request must not time out ar-9");
+            assert!(
+                !any_timed_out,
+                "approvals wait indefinitely — no timeout event may ever be appended"
+            );
         }
     }
 }

@@ -326,7 +326,6 @@ mod tests {
     }
 }
 
-
 // ── Round-6 regressions (BUG-93 / BUG-94 / find -fls) ──
 #[cfg(test)]
 mod round6_tests {

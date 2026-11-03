@@ -102,8 +102,8 @@ pub fn reload_image_definition(store: Arc<AttachmentStore>) -> ToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use crate::attachments::{ImageAttachmentLimits, NormalizationPolicy, SaveImageAttachment};
+    use base64::Engine as _;
     use starriver_kernel::tools::{ToolExecution, ToolRuntime};
 
     fn store_with_asset() -> (tempfile::TempDir, Arc<AttachmentStore>, String) {
@@ -233,7 +233,10 @@ mod tests {
             .expect("admit (imagegen path)");
         assert_eq!(admitted.len(), 1);
         let reference = admitted[0].id.clone();
-        assert!(reference.starts_with("sha256:"), "imagegen ref shape: {reference}");
+        assert!(
+            reference.starts_with("sha256:"),
+            "imagegen ref shape: {reference}"
+        );
 
         let def = reload_image_definition(Arc::clone(&store));
         let result = run(&def, serde_json::json!({ "file_id": reference }))

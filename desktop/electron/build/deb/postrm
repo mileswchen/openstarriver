@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# Delete the link to the binary (electron-builder/fpm 原有逻辑，保持不变)
+if type update-alternatives >/dev/null 2>&1; then
+    update-alternatives --remove 'starriver-electron' '/usr/bin/starriver-electron'
+else
+    rm -f '/usr/bin/starriver-electron'
+fi
+
+# Starriver: purge 只清理运行时交接文件（daemon.json / 控制 socket）。
+# ~/.starriver 下的会话与配置刻意保留——对 purge 惯例的有意偏离，
+# 理由与彻底清除方法见 README「彻底清除」小节。
+if [ "$1" = "purge" ]; then
+    set +e
+    for home in /root /home/*; do
+        [ -d "$home/.starriver" ] || continue
+        rm -f "$home/.starriver/daemon.json" "$home/.starriver/starriverd.sock"
+    done
+fi
+exit 0

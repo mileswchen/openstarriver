@@ -236,11 +236,10 @@ Set `llm.image_model` to an image-capable route (`provider/model`) in settings, 
                 (sniff_image(&bytes, "image/png"), b64)
             }
             ImagePayload::Url(src) => {
-                let get = http
-                    .get(&src)
-                    .send()
-                    .await
-                    .map_err(|e| format!("downloading generated image from `{src}` failed: {e}"))?;
+                let get =
+                    http.get(&src).send().await.map_err(|e| {
+                        format!("downloading generated image from `{src}` failed: {e}")
+                    })?;
                 if !get.status().is_success() {
                     return Err(format!(
                         "downloading generated image from `{src}` returned {}",
@@ -304,7 +303,10 @@ impl ToolExecutor for GenerateImage {
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| invalid_input("generate_image", "missing prompt".into()))?
                 .to_string();
-            let param_provider = json.get("provider").and_then(|v| v.as_str()).map(String::from);
+            let param_provider = json
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let param_model = json.get("model").and_then(|v| v.as_str()).map(String::from);
             let size = json.get("size").and_then(|v| v.as_str()).map(String::from);
             let count = json
@@ -453,7 +455,8 @@ mod tests {
         ];
 
         // Explicit provider + model wins.
-        let r = resolve_image_route(&providers, None, Some("cloud-b"), Some("gpt-image-1")).unwrap();
+        let r =
+            resolve_image_route(&providers, None, Some("cloud-b"), Some("gpt-image-1")).unwrap();
         assert_eq!(r.provider.id, "cloud-b");
         assert_eq!(r.model, "gpt-image-1");
 
@@ -543,10 +546,8 @@ mod tests {
     async fn executor_generates_admits_and_reports_paths() {
         use crate::tools::web_common::test_support::{http_ok, spawn_http_server_capture};
 
-        let body = serde_json::json!({ "data": [{ "b64_json": TINY_PNG_B64 }] })
-            .to_string();
-        let (base, requests) =
-            spawn_http_server_capture(vec![http_ok(&body)]).await;
+        let body = serde_json::json!({ "data": [{ "b64_json": TINY_PNG_B64 }] }).to_string();
+        let (base, requests) = spawn_http_server_capture(vec![http_ok(&body)]).await;
 
         let mut entry = provider("img-cloud", "cloud", "gpt-image-1");
         entry.base_url = base;
@@ -579,7 +580,10 @@ mod tests {
         let output = json["output"].as_str().unwrap();
         assert!(output.contains(&format!("![generated-1]({id})")));
         let path = json["images"][0]["path"].as_str().unwrap();
-        assert!(std::path::Path::new(path).is_file(), "object missing: {path}");
+        assert!(
+            std::path::Path::new(path).is_file(),
+            "object missing: {path}"
+        );
         assert!(output.contains("Generated 1 image(s) with img-cloud/gpt-image-1"));
 
         // The request hit the images endpoint with the bearer key and body.
@@ -590,7 +594,7 @@ mod tests {
 
     #[tokio::test]
     async fn executor_reports_provider_errors_readably() {
-        use crate::tools::web_common::test_support::{spawn_http_server};
+        use crate::tools::web_common::test_support::spawn_http_server;
 
         let base = spawn_http_server(vec![
             "HTTP/1.1 404 Not Found\r\nContent-Length: 25\r\nConnection: close\r\n\r\n{\"error\":{\"code\":\"nope\"}}"
@@ -613,10 +617,7 @@ mod tests {
         let def = generate_image_definition(config, store);
         let err = def
             .executor
-            .execute(
-                Value::new(serde_json::json!({ "prompt": "x" })),
-                ctx(),
-            )
+            .execute(Value::new(serde_json::json!({ "prompt": "x" })), ctx())
             .await
             .unwrap_err();
         let rendered = format!("{err:?}");
@@ -631,7 +632,10 @@ mod tests {
         let img = image::RgbImage::from_pixel(1, 1, image::Rgb([200u8, 0, 0]));
         let mut jpeg = Vec::new();
         image::DynamicImage::ImageRgb8(img)
-            .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+            .write_to(
+                &mut std::io::Cursor::new(&mut jpeg),
+                image::ImageFormat::Jpeg,
+            )
             .expect("encode jpeg");
         assert_eq!(sniff_image(&jpeg, "image/png"), "image/jpeg");
 

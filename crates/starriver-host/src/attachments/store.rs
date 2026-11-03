@@ -128,7 +128,7 @@ impl AttachmentStore {
         }
         let _ = std::fs::remove_file(&staging);
         // Make the publication durable: the directory entries must reach
- // storage, not just the file bytes (syncDirectory).
+        // storage, not just the file bytes (syncDirectory).
         let _ = sync_dir(&bucket);
         let _ = sync_dir(&self.root);
         Ok(prepared.reference.clone())
@@ -168,7 +168,9 @@ impl AttachmentStore {
     /// an `fs::metadata` lookup on the content-addressed object, no read,
     /// no decode (WI-159 request-budget accounting). `None` = not stored.
     pub fn image_bytes(&self, id: &str) -> Option<u64> {
-        std::fs::metadata(self.object_path(id)?).ok().map(|meta| meta.len())
+        std::fs::metadata(self.object_path(id)?)
+            .ok()
+            .map(|meta| meta.len())
     }
 
     /// Cheap identity probe (BUG-120/126): the fs-metadata length plus a
@@ -180,7 +182,10 @@ impl AttachmentStore {
         let path = self.object_path(id)?;
         let len = std::fs::metadata(&path).ok()?.len();
         let mut head = vec![0u8; 8192.min(len as usize)];
-        std::fs::File::open(&path).ok()?.read_exact(&mut head).ok()?;
+        std::fs::File::open(&path)
+            .ok()?
+            .read_exact(&mut head)
+            .ok()?;
         let media_type = if head.starts_with(&[0x89, b'P', b'N', b'G']) {
             "image/png"
         } else if head.starts_with(&[0xFF, 0xD8]) {
@@ -462,15 +467,9 @@ mod tests {
             .unwrap();
         let id = refs[0].attachment_id.clone();
         let sha = id.trim_start_matches("sha256:").to_string();
-        let on_disk = std::fs::read(
-            store
-                .root()
-                .join("objects")
-                .join(&sha[0..2])
-                .join(&sha),
-        )
-        .unwrap()
-        .len() as u64;
+        let on_disk = std::fs::read(store.root().join("objects").join(&sha[0..2]).join(&sha))
+            .unwrap()
+            .len() as u64;
         assert_eq!(store.image_bytes(&id), Some(on_disk));
         assert_eq!(store.image_bytes("not-a-ref"), None, "invalid ref");
         assert_eq!(
@@ -508,11 +507,7 @@ mod tests {
         );
         // A non-raster object under the store root is refused, not guessed.
         let sha = id.trim_start_matches("sha256:").to_string();
-        let object = store
-            .root()
-            .join("objects")
-            .join(&sha[0..2])
-            .join(&sha);
+        let object = store.root().join("objects").join(&sha[0..2]).join(&sha);
         std::fs::write(&object, b"not an image at all").unwrap();
         assert_eq!(store.image_info(&id), None, "unrecognized magic");
     }

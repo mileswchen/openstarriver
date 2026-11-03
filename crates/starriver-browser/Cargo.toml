@@ -1,0 +1,17 @@
+[package]
+name = "starriver-browser"
+description = "First-party browser automation service: CDP-driven Chromium sessions (terminal-service parity for pages)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chromiumoxide = { version = "0.9", default-features = false, features = ["bytes"] }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
