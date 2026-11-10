@@ -235,3 +235,148 @@ describe('Plan panel + status phase + Todo widget', () => {
     });
   });
 });
+
+/* ─── Doc-viewer panel: multi-document tabs + zoom + hide/restore ─── */
+describe('Doc-viewer panel: multi-doc tabs, zoom, hide', () => {
+  // Diff bodies avoid JS/TS keywords ('new' etc.) — the panel's per-line
+  // syntax highlighting wraps keywords in spans, which breaks exact-text
+  // queries (getNodeText only reads direct text nodes).
+  const DIFF_A = '--- a/one.ts\n+++ b/one.ts\n@@ -1,2 +1,2 @@\n-draft alpha\n+fresh alpha\n ctx line';
+  const DIFF_B = '--- a/two.ts\n+++ b/two.ts\n@@ -1 +1 @@\n-draft beta\n+fresh beta';
+
+  /** Send an edit tool result carrying a unified diff and click its Review
+      button — the exact user path that opens a document tab. `nth` is the
+      1-based number of Review buttons expected AFTER this row renders (each
+      edit tool row carries exactly one), so the wait cannot be satisfied by
+      an earlier row's button. */
+  async function openDiffDoc(id: string, diff: string, nth: number) {
+    executeCb!(null, { type: 'toolCall', id, name: 'edit' });
+    executeCb!(null, { type: 'toolResult', id, ok: true, output: diff });
+    const btns = await waitFor(() => {
+      const found = screen.getAllByText('Review');
+      expect(found.length).toBeGreaterThanOrEqual(nth);
+      return found;
+    });
+    fireEvent.click(btns[btns.length - 1]);
+  }
+
+  it('opens multiple documents as separate tabs and switches between them', async () => {
+    await sendInPlanSession();
+    await openDiffDoc('d1', DIFF_A, 1);
+    await openDiffDoc('d2', DIFF_B, 2);
+
+    const panel = document.querySelector('.plan-panel') as HTMLElement;
+    expect(panel).toBeTruthy();
+    // Two doc tabs; the newest one is active (two.ts content shown).
+    expect(panel.querySelectorAll('.plan-panel-doc-tab').length).toBe(2);
+    expect(within(panel).getByText('fresh beta')).toBeTruthy();
+
+    // Switch back to the first document — its content replaces the view.
+    fireEvent.click(within(panel).getByText('one.ts'));
+    expect(within(panel).getByText('fresh alpha')).toBeTruthy();
+    expect(within(panel).queryByText('fresh beta')).toBeNull();
+  });
+
+  it('closing one document tab keeps the others and activates a neighbour', async () => {
+    await sendInPlanSession();
+    await openDiffDoc('d1', DIFF_A, 1);
+    await openDiffDoc('d2', DIFF_B, 2);
+
+    // Close the ACTIVE doc (two.ts) — one.ts becomes the active tab.
+    fireEvent.click(screen.getByLabelText('close-doc-two.ts'));
+    const panel = document.querySelector('.plan-panel') as HTMLElement;
+    expect(panel.querySelectorAll('.plan-panel-doc-tab').length).toBe(1);
+    expect(within(panel).getByText('fresh alpha')).toBeTruthy();
+    expect(screen.queryByLabelText('close-doc-two.ts')).toBeNull();
+
+    // Closing the last tab with no plan around collapses the panel.
+    fireEvent.click(screen.getByLabelText('close-doc-one.ts'));
+    expect(document.querySelector('.plan-panel')).toBeNull();
+  });
+
+  it('zooms the panel body via the footer control and resets on % click', async () => {
+    await sendInPlanSession();
+    await openDiffDoc('d1', DIFF_A, 1);
+
+    const panel = document.querySelector('.plan-panel') as HTMLElement;
+    expect(panel.style.getPropertyValue('--panel-zoom')).toBe('1');
+    expect(screen.getByLabelText('panel-zoom-reset').textContent).toBe('100%');
+
+    fireEvent.click(screen.getByLabelText('panel-zoom-in'));
+    expect(panel.style.getPropertyValue('--panel-zoom')).toBe('1.1');
+    expect(screen.getByLabelText('panel-zoom-reset').textContent).toBe('110%');
+
+    fireEvent.click(screen.getByLabelText('panel-zoom-out'));
+    fireEvent.click(screen.getByLabelText('panel-zoom-out'));
+    expect(panel.style.getPropertyValue('--panel-zoom')).toBe('0.9');
+
+    // Clamped: 30 more zoom-ins stop at 200%.
+    for (let i = 0; i < 30; i += 1) fireEvent.click(screen.getByLabelText('panel-zoom-in'));
+    expect(panel.style.getPropertyValue('--panel-zoom')).toBe('2');
+
+    fireEvent.click(screen.getByLabelText('panel-zoom-reset'));
+    expect(panel.style.getPropertyValue('--panel-zoom')).toBe('1');
+  });
+
+  it('hides the panel without dropping tabs; the toolbar button restores it', async () => {
+    await sendInPlanSession();
+    await openDiffDoc('d1', DIFF_A, 1);
+    await openDiffDoc('d2', DIFF_B, 2);
+
+    // Header ✕ hides the whole panel…
+    fireEvent.click(screen.getByLabelText('close-plan-panel'));
+    expect(document.querySelector('.plan-panel')).toBeNull();
+
+    // …but the toolbar master switch stays (docs are open) and restores
+    // the panel with BOTH tabs and the previously active document.
+    const toggle = screen.getByLabelText('plan-panel');
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(toggle);
+    const panel = document.querySelector('.plan-panel') as HTMLElement;
+    expect(panel).toBeTruthy();
+    expect(panel.querySelectorAll('.plan-panel-doc-tab').length).toBe(2);
+    expect(within(panel).getByText('fresh beta')).toBeTruthy();
+
+    // Toggle again hides; toggle again shows — a pure visibility switch.
+    fireEvent.click(toggle);
+    expect(document.querySelector('.plan-panel')).toBeNull();
+    fireEvent.click(toggle);
+    expect(document.querySelector('.plan-panel')).toBeTruthy();
+  });
+
+  it('the toggle is persistent: opens an empty panel with a hint before any content exists', async () => {
+    await sendInPlanSession();
+    // No plan, no documents yet — the button is ALWAYS there (常驻).
+    const toggle = screen.getByLabelText('plan-panel');
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(document.querySelector('.plan-panel')).toBeNull();
+
+    // Clicking opens the panel in its empty state with the hint.
+    fireEvent.click(toggle);
+    const panel = document.querySelector('.plan-panel') as HTMLElement;
+    expect(panel).toBeTruthy();
+    expect(within(panel).getByText(/No documents open yet/)).toBeTruthy();
+
+    // And it hides again — a pure visibility switch.
+    fireEvent.click(screen.getByLabelText('close-plan-panel'));
+    expect(document.querySelector('.plan-panel')).toBeNull();
+  });
+
+  it('plan tab and document tabs coexist; planReviewRequested still auto-opens the plan', async () => {
+    await sendInPlanSession();
+    await openDiffDoc('d1', DIFF_A, 1);
+    // The plan arrives mid-viewing: the panel switches to the plan tab.
+    executeCb!(null, { type: 'planReviewRequested', requestId: 'r1', plan: '# My Plan\n\n- step one' });
+    const panel = await waitFor(() => {
+      const p = document.querySelector('.plan-panel') as HTMLElement;
+      expect(within(p).getByText('My Plan')).toBeTruthy();
+      return p;
+    });
+    // Both kinds of tabs are present; the doc tab is still one click away.
+    expect(within(panel).getByText('Plan')).toBeTruthy();
+    expect(within(panel).getByText('one.ts')).toBeTruthy();
+    fireEvent.click(within(panel).getByText('one.ts'));
+    expect(within(panel).getByText('fresh alpha')).toBeTruthy();
+    expect(within(panel).queryByText('step one')).toBeNull();
+  });
+});

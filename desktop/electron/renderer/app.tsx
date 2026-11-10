@@ -1141,6 +1141,10 @@ export function TurnFileSummary({
 
 const IDE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
 
+/** Top-right persistent side-panel toggle icon: a window whose right pane is
+    divided off (WorkBuddy-style dock toggle). */
+const PANEL_TOGGLE_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="14.5" y1="4" x2="14.5" y2="20"/></svg>';
+
 /** Toolbar-right dropdown (approved wireframe 2026-09-13): open the session's
     workspace directory in the user's terminal or IDE. Both actions spawn
     OUTSIDE the agent (main-process IPC) — sandbox does not apply. An
@@ -7721,11 +7725,22 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // an execution reference (the review card itself closes on decision).
   const [lastPlan, setLastPlan] = useState<string | null>(null);
   const [planApproved, setPlanApproved] = useState(false);
-  const [planPanelOpen, setPlanPanelOpen] = useState(false);
-  // Panel file tab (review): a turn's changed file opened as a diff alongside
+  // Doc-viewer panel (2026-11-10 方案): the panel is a multi-document viewer
+  // — plan tab + any number of diff tabs, zoomable, and hideable WITHOUT
+  // dropping the open documents (the toolbar button brings it back).
+  const [panelOpen, setPanelOpen] = useState(false);
+  // Panel file tabs (review): a turn's changed files open as diffs alongside
   // the Plan tab. The diff text is the turn-event snapshot — exact for the
-  // reviewed change and worktree-correct by construction.
-  const [reviewFile, setReviewFile] = useState<{ path: string; text: string } | null>(null);
+  // reviewed change and worktree-correct by construction. Re-opening a path
+  // that is already open refreshes its snapshot and activates the tab.
+  const [panelDocs, setPanelDocs] = useState<{ id: string; path: string; text: string }[]>([]);
+  const [activeDocId, setActiveDocId] = useState<string | null>(null);
+  // Panel zoom: font scale for the panel body (diff + plan markdown).
+  // 0.5–2.0 in 0.1 steps; Ctrl/Cmd +/-/0 and Ctrl/Cmd+wheel on the body.
+  const [panelZoom, setPanelZoom] = useState(1);
+  const clampPanelZoom = (z: number) => Math.min(2, Math.max(0.5, Math.round(z * 10) / 10));
+  const zoomPanel = (dir: 1 | -1) => setPanelZoom(z => clampPanelZoom(z + dir * 0.1));
+  const resetPanelZoom = () => setPanelZoom(1);
   // Fullscreen viewer for the diff shown in the right panel (Esc / ✕ closes).
   const [diffFull, setDiffFull] = useState(false);
   useEffect(() => {
@@ -7735,10 +7750,70 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [diffFull]);
   const [panelTab, setPanelTab] = useState<'plan' | 'file'>('plan');
+  const activeDoc = panelDocs.find(d => d.id === activeDocId) || null;
+  const MAX_PANEL_DOCS = 10;
   const openReviewFile = (path: string, text: string) => {
-    setReviewFile({ path, text });
+    const existing = panelDocs.find(d => d.path === path);
+    if (existing) {
+      // Same path again: the newer turn snapshot wins, tab just activates.
+      setPanelDocs(prev => prev.map(d => (d.id === existing.id ? { ...d, text } : d)));
+      setActiveDocId(existing.id);
+    } else {
+      const doc = { id: crypto.randomUUID(), path, text };
+      // Cap the tab strip: FIFO-evict the oldest inactive doc past the cap so
+      // a long session cannot grow the strip without bound.
+      setPanelDocs(prev => {
+        let kept = prev;
+        while (kept.length >= MAX_PANEL_DOCS) {
+          const drop = kept.find(d => d.id !== activeDocId) || kept[0];
+          kept = kept.filter(d => d.id !== drop.id);
+        }
+        return [...kept, doc];
+      });
+      setActiveDocId(doc.id);
+    }
     setPanelTab('file');
+    setPanelOpen(true);
   };
+  const closePanelDoc = (id: string) => {
+    const idx = panelDocs.findIndex(d => d.id === id);
+    if (idx < 0) return;
+    const next = panelDocs.filter(d => d.id !== id);
+    setPanelDocs(next);
+    if (id === activeDocId) {
+      // Activate the neighbour (prefer the one to the left, like editors do).
+      setActiveDocId(next.length ? next[Math.max(0, idx - 1)].id : null);
+      if (!next.length && !lastPlan) setPanelOpen(false);
+      else if (!next.length) setPanelTab('plan');
+    }
+  };
+  // Panel zoom shortcuts: only while the panel is visible, so the composer
+  // and conversation keep their normal keys.
+  useEffect(() => {
+    if (!panelOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomPanel(1); }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomPanel(-1); }
+      else if (e.key === '0') { e.preventDefault(); resetPanelZoom(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [panelOpen]);
+  // Ctrl/Cmd+wheel zoom on the panel body — a non-passive NATIVE listener so
+  // the event can be prevented (Chromium otherwise page-zooms the whole app).
+  const panelBodyRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = panelBodyRef.current;
+    if (!panelOpen || !el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      setPanelZoom(z => Math.min(2, Math.max(0.5, Math.round((z + (e.deltaY < 0 ? 0.1 : -0.1)) * 10) / 10)));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [panelOpen]);
   // Plan phase for the status bar: planning (read-only) vs executing (the
   // review approved and the sandbox was released back to workspace-write).
   // Plan phase for the status bar: planning (read-only) vs executing (the
@@ -7842,9 +7917,12 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         })
         .catch((e) => console.error('[Coding] getPermission(session) failed:', e));
       // The Plan panel shows the live plan of THIS session only — a reopened
-      // session has no renderer-side plan readback yet.
+      // session has no renderer-side plan readback yet. The doc tabs are the
+      // session's diff snapshots — same leak family, cleared with the plan.
       setLastPlan(null);
-      setPlanPanelOpen(false);
+      setPanelOpen(false);
+      setPanelDocs([]);
+      setActiveDocId(null);
       setPlanApproved(false);
     } catch (e) { console.error('[Coding] Load session error:', e); }
   }, []);
@@ -8018,7 +8096,9 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     setGoalInfo(null);
     setDoctorReport(null);
     setLastPlan(null);
-    setPlanPanelOpen(false);
+    setPanelOpen(false);
+    setPanelDocs([]);
+    setActiveDocId(null);
     setPlanApproved(false);
     // Same leak family, found in the 2026-10-07 sweep: the previous
     // session's run state, pending approval/question cards, turn meta and
@@ -9632,7 +9712,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           setLastPlan(event.plan || null);
           setPlanApproved(false);
           setPlanPhase('planning');
-          setPlanPanelOpen(true);
+          setPanelTab('plan');
+          setPanelOpen(true);
           break;
         case 'planReviewDecided':
           // Any surface's decision (or a timeout) closes the card everywhere.
@@ -10343,10 +10424,6 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           <div className="coding-view-switch" role="tablist">
             <button type="button" role="tab" aria-selected={view === 'chat'} className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>{t('coding.sessionTab')}</button>
             <button type="button" role="tab" aria-selected={view === 'trajectory'} className={view === 'trajectory' ? 'active' : ''} onClick={() => setView('trajectory')}>{t('coding.trajectoryTab')}</button>
-            {lastPlan && (
-              <button type="button" className={planPanelOpen ? 'active' : ''} aria-label="plan-panel" aria-pressed={planPanelOpen}
-                onClick={() => setPlanPanelOpen(o => !o)}>📄 Plan</button>
-            )}
           </div>
 
           {/* Model & reasoning selectors live in the composer's control row. */}
@@ -10359,6 +10436,27 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
             cwd={workspaces.find(w => w.id === activeWorkspaceId)?.path ?? null}
             onError={setErrorMsg}
           />
+          {/* Far-right corner: PERSISTENT side-panel toggle (常驻). Hide keeps
+              every open tab; show restores the previous tab when still valid
+              (plan needs lastPlan, file needs a doc), else the panel opens in
+              its empty state. */}
+          <button
+            type="button"
+            className={`tools-btn panel-toggle-btn${panelOpen ? ' open' : ''}`}
+            aria-label="plan-panel"
+            aria-pressed={panelOpen}
+            title={t('coding.panelToggle')}
+            onClick={() => {
+              if (panelOpen) { setPanelOpen(false); return; }
+              const tab = panelTab === 'file'
+                ? (panelDocs.length ? 'file' : 'plan')
+                : (lastPlan ? 'plan' : 'file');
+              setPanelTab(tab);
+              setPanelOpen(true);
+            }}
+          >
+            <span dangerouslySetInnerHTML={{ __html: PANEL_TOGGLE_ICON }} />
+          </button>
         </div>
       )}
       {/* Workspace instructions banner (same file set as the model context) */}
@@ -10872,25 +10970,20 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
         <div className="traj-scroll"><TrajectoryView sessionId={activeSessionId} /></div>
       )}
       </div>
-      {/* Right: side panel — two tabs over one resizable shell. Plan: the
-          exit_plan_mode markdown, kept after approval as an execution
-          reference (auto-opens on planReviewRequested). 审查: a turn's changed
-          file opened as a diff from the changed-files card. */}
-      {inSession && (reviewFile || (lastPlan && planPanelOpen)) && (() => {
+      {/* Right: side panel — a multi-document viewer over one resizable shell.
+          Plan: the exit_plan_mode markdown, kept after approval as an
+          execution reference (auto-opens on planReviewRequested). 审查: a
+          turn's changed files open as diff tabs — several at once, each tab
+          closable, the whole panel hideable WITHOUT dropping tabs (the
+          toolbar button brings it back), and the body zooms via the footer
+          −/%/+ control (Ctrl/Cmd ±/0, Ctrl/Cmd+wheel). */}
+      {inSession && panelOpen && (() => {
         const showPlanTab = !!lastPlan;
         const active: 'plan' | 'file' =
-          panelTab === 'file' && reviewFile ? 'file' : reviewFile && !showPlanTab ? 'file' : 'plan';
-        const closeActive = () => {
-          if (active === 'file') {
-            setReviewFile(null);
-            if (!(planPanelOpen && lastPlan)) setPanelTab('plan');
-          } else {
-            setPlanPanelOpen(false);
-            if (reviewFile) setPanelTab('file');
-          }
-        };
+          panelTab === 'file' && activeDoc ? 'file' : activeDoc && !showPlanTab ? 'file' : 'plan';
+        const hasContent = !!(activeDoc || lastPlan);
         return (
-          <div className="plan-panel" style={{ width: planWidth }}>
+          <div className="plan-panel" style={{ width: planWidth, ['--panel-zoom' as string]: String(panelZoom) } as React.CSSProperties}>
             <div className="plan-panel-resizer" onMouseDown={planOnMouseDown} />
             <div className="plan-panel-head">
               <div className="plan-panel-tabs">
@@ -10906,18 +10999,24 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
                     </span>
                   </button>
                 )}
-                {reviewFile && (
-                  <button
-                    type="button"
-                    className={`plan-panel-tab${active === 'file' ? ' active' : ''}`}
-                    title={reviewFile.path}
-                    onClick={() => setPanelTab('file')}
+                {panelDocs.map(d => (
+                  <div
+                    key={d.id}
+                    className={`plan-panel-tab plan-panel-doc-tab${active === 'file' && d.id === activeDocId ? ' active' : ''}`}
+                    title={d.path}
+                    onClick={() => { setPanelTab('file'); setActiveDocId(d.id); }}
                   >
-                    {reviewFile.path.split('/').pop()}
-                  </button>
-                )}
+                    <span className="plan-panel-tab-label">{d.path.split('/').pop()}</span>
+                    <span
+                      className="plan-panel-tab-close"
+                      aria-label={`close-doc-${d.path}`}
+                      title={t('common.close')}
+                      onClick={(e) => { e.stopPropagation(); closePanelDoc(d.id); }}
+                    >✕</span>
+                  </div>
+                ))}
               </div>
-              {active === 'file' && reviewFile && (
+              {active === 'file' && activeDoc && (
                 <button
                   type="button"
                   className="plan-panel-fs"
@@ -10926,25 +11025,41 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
                   onClick={() => setDiffFull(true)}
                 >⤢</button>
               )}
-              <button type="button" className="plan-panel-close" aria-label="close-plan-panel" onClick={closeActive}>✕</button>
+              <button type="button" className="plan-panel-close" aria-label="close-plan-panel" title={t('coding.panelHide')} onClick={() => setPanelOpen(false)}>✕</button>
             </div>
-            <div className="plan-panel-body">
-              {active === 'file' && reviewFile ? (
-                <DiffView text={reviewFile.text} maxLines={1000000} />
+            <div className="plan-panel-body" ref={panelBodyRef}>
+              {!hasContent ? (
+                /* Persistent toggle: the panel can be opened with nothing in
+                   it — tell the user how documents get in here. */
+                <div className="panel-doc-empty">{t('coding.panelEmpty')}</div>
+              ) : active === 'file' && activeDoc ? (
+                isDiffContent(activeDoc.text) ? (
+                  <DiffView text={activeDoc.text} maxLines={1000000} />
+                ) : activeDoc.text.trim() ? (
+                  /* Non-diff content still gets shown (plain pre), never a blank tab. */
+                  <pre className="panel-doc-plain">{activeDoc.text}</pre>
+                ) : (
+                  <div className="panel-doc-empty">{t('coding.panelEmptyDiff')}</div>
+                )
               ) : (
                 <MarkdownContent source={lastPlan || ''} />
               )}
+            </div>
+            <div className="plan-panel-foot">
+              <button type="button" className="panel-zoom-btn" aria-label="panel-zoom-out" title={t('coding.panelZoomOut')} onClick={() => zoomPanel(-1)}>−</button>
+              <button type="button" className="panel-zoom-level" aria-label="panel-zoom-reset" title={t('coding.panelZoomReset')} onClick={resetPanelZoom}>{Math.round(panelZoom * 100)}%</button>
+              <button type="button" className="panel-zoom-btn" aria-label="panel-zoom-in" title={t('coding.panelZoomIn')} onClick={() => zoomPanel(1)}>+</button>
             </div>
           </div>
         );
       })()}
       {/* Fullscreen diff viewer: the whole change in one scrollable surface;
           click backdrop / ✕ / Esc to close. */}
-      {diffFull && reviewFile && (
+      {diffFull && activeDoc && (
         <div className="diff-fullscreen" onClick={() => setDiffFull(false)}>
           <div className="diff-fullscreen-card" onClick={(e) => e.stopPropagation()}>
             <div className="diff-fullscreen-head">
-              <span className="diff-fullscreen-path" title={reviewFile.path}>{reviewFile.path}</span>
+              <span className="diff-fullscreen-path" title={activeDoc.path}>{activeDoc.path}</span>
               <button
                 type="button"
                 className="diff-fullscreen-close"
@@ -10954,7 +11069,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
               >✕</button>
             </div>
             <div className="diff-fullscreen-body">
-              <DiffView text={reviewFile.text} maxLines={1000000} />
+              <DiffView text={activeDoc.text} maxLines={1000000} />
             </div>
           </div>
         </div>
