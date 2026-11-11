@@ -1,8 +1,8 @@
 /// <reference types="vitest/globals" />
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import React from 'react';
-import { render } from '@testing-library/react';
+import { render, fireEvent, waitFor } from '@testing-library/react';
 import { ToolRow, AssistantContent } from './app';
 import { I18nProvider } from './i18n';
 
@@ -26,6 +26,23 @@ describe('code block syntax highlighting (Xcode palette)', () => {
     expect(code.querySelector('.hljs-keyword')).not.toBeNull();
     expect(code.querySelector('.hljs-number')).not.toBeNull();
     expect(code.querySelector('.hljs-comment')).not.toBeNull();
+  });
+
+  it('markdown fenced blocks carry a copy button that copies the exact code', async () => {
+    // rehype-highlight splits the code into token spans — the chip must copy
+    // the FLATTENED raw text, not a fragment.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const md = '```bash\ncd /x && git push origin feat/tool-env\n```';
+    const { container } = w(<AssistantContent content={md} />);
+    const wrap = container.querySelector('.md-pre-wrap')!;
+    expect(wrap).not.toBeNull();
+    const chip = wrap.querySelector('.copy-chip') as HTMLButtonElement;
+    expect(chip).not.toBeNull();
+    fireEvent.click(chip);
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('cd /x && git push origin feat/tool-env\n'),
+    );
   });
 
   it('highlights whitelisted tool output (json keys → hljs-attr)', () => {

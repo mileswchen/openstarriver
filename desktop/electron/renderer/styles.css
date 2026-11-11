@@ -1677,6 +1677,12 @@ details.step-group[data-live='true'] > summary.step-group-summary {
   border: 1px solid var(--border); overflow-x: auto; margin: 10px 0;
   font-size: 14px; line-height: 1.5; position: relative;
 }
+/* Fenced-block copy button (2026-11-10): the wrapper owns positioning so the
+   chip stays pinned at the label row's right end even when the pre scrolls
+   horizontally (absolute inside the scrolling pre would scroll away). */
+.md-pre-wrap { position: relative; margin: 10px 0; }
+.md-pre-wrap pre { margin: 0; }
+.md-pre-wrap .code-copy-slot { background: var(--surface); border-radius: var(--radius-sm); }
 .md-content pre::before {
   content: attr(data-lang); position: absolute; top: 0; left: 0; right: 0;
   padding: 4px 12px; font-size: 12px; color: var(--text-muted); background: var(--surface);

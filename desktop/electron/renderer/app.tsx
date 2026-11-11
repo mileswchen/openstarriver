@@ -3479,6 +3479,17 @@ function mdUrlTransform(url: string): string {
   return defaultUrlTransform(url);
 }
 
+/** Flatten a React element tree back to its raw text. rehype-highlight splits
+ *  fenced code into token spans — the copy button needs the exact code, so
+ *  walk strings/numbers/elements recursively (textContent-equivalent). */
+function reactNodeText(node: unknown): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(reactNodeText).join('');
+  const el = node as { props?: { children?: unknown } };
+  return el?.props ? reactNodeText(el.props.children) : '';
+}
+
 function MarkdownContent({ source }: { source: string }) {
   return (
     <div className="md-content">
@@ -3493,7 +3504,16 @@ function MarkdownContent({ source }: { source: string }) {
             const el = React.Children.toArray(children)[0] as any;
             const cls: string | undefined = el?.props?.className;
             const lang = /language-([\w+-]+)/.exec(cls || '')?.[1];
-            return <pre data-lang={lang || 'code'}>{children}</pre>;
+            // Fenced-block copy (2026-11-10): like the tool-row blocks
+            // (WI-151), pin a CopyChip at the language-label row's right end.
+            // The wrapper owns positioning so the chip stays at the visible
+            // corner even when wide code scrolls the pre horizontally.
+            return (
+              <div className="md-pre-wrap">
+                <pre data-lang={lang || 'code'}>{children}</pre>
+                <span className="code-copy-slot"><CopyChip text={reactNodeText(el?.props?.children)} /></span>
+              </div>
+            );
           },
           // External links open in a new tab.
           a({ node: _node, ...rest }) {
