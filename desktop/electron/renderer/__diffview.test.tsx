@@ -103,6 +103,97 @@ describe('TurnFileSummary', () => {
     expect(getByText('crates/x.rs')).toBeTruthy();
     expect(queryByText('审查')).toBeNull();
   });
+
+  it('打开 sits right of 审查 and hands the row to onOpenExternal', async () => {
+    const { TurnFileSummary } = await import('./app');
+    const onOpen = vi.fn();
+    const onOpenExternal = vi.fn();
+    const { getByText } = render(
+      <I18nProvider>
+        <TurnFileSummary files={FILES} onOpen={onOpen} onOpenExternal={onOpenExternal} />
+      </I18nProvider>,
+    );
+    const review = getByText('审查');
+    const open = getByText('打开');
+    // 打开 renders AFTER 审查 inside the same row (right-hand neighbour).
+    expect(review.compareDocumentPosition(open) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(open);
+    expect(onOpenExternal).toHaveBeenCalledWith('crates/x.rs', DIFF);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('no 打开 button without an onOpenExternal handler', async () => {
+    const { TurnFileSummary } = await import('./app');
+    const { queryByText } = render(
+      <I18nProvider>
+        <TurnFileSummary files={FILES} onOpen={vi.fn()} />
+      </I18nProvider>,
+    );
+    expect(queryByText('打开')).toBeNull();
+  });
+});
+
+describe('openFileWithEditor (打开: configured editor vs panel fallback)', () => {
+  localStorage.setItem('starriver-language', 'zh');
+  const PATH = 'crates/x.rs';
+  const TEXT = 'diff text';
+
+  it('launches the configured editor (apps.ide_command) and skips the panel', async () => {
+    const { openFileWithEditor } = await import('./app');
+    const openFile = vi.fn().mockResolvedValue({ ok: true });
+    (window as any).starriver = {
+      getSettings: vi.fn().mockResolvedValue({ apps: { ide_command: "cursor wait '{dir}'" } }),
+      openFile,
+    };
+    const openInPanel = vi.fn();
+    const showError = vi.fn();
+    const where = await openFileWithEditor(PATH, TEXT, { openInPanel, showError, label: (k) => k });
+    expect(where).toBe('editor');
+    expect(openFile).toHaveBeenCalledWith(PATH, "cursor wait '{dir}'");
+    expect(openInPanel).not.toHaveBeenCalled();
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it('no editor configured → the right-hand panel is the default editor', async () => {
+    const { openFileWithEditor } = await import('./app');
+    const openFile = vi.fn();
+    (window as any).starriver = {
+      getSettings: vi.fn().mockResolvedValue({ apps: { ide_command: null } }),
+      openFile,
+    };
+    const openInPanel = vi.fn();
+    const where = await openFileWithEditor(PATH, TEXT, { openInPanel, showError: vi.fn(), label: (k) => k });
+    expect(where).toBe('panel');
+    expect(openInPanel).toHaveBeenCalledWith(PATH, TEXT);
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it('settings unavailable → panel fallback', async () => {
+    const { openFileWithEditor } = await import('./app');
+    (window as any).starriver = {
+      getSettings: vi.fn().mockRejectedValue(new Error('bridge gone')),
+    };
+    const openInPanel = vi.fn();
+    const where = await openFileWithEditor(PATH, TEXT, { openInPanel, showError: vi.fn(), label: (k) => k });
+    expect(where).toBe('panel');
+    expect(openInPanel).toHaveBeenCalledWith(PATH, TEXT);
+  });
+
+  it('a configured editor that fails to launch surfaces the error (no silent panel)', async () => {
+    const { openFileWithEditor } = await import('./app');
+    (window as any).starriver = {
+      getSettings: vi.fn().mockResolvedValue({ apps: { ide_command: 'gone-editor {file}' } }),
+      openFile: vi.fn().mockRejectedValue(new Error('spawn ENOENT')),
+    };
+    const openInPanel = vi.fn();
+    const showError = vi.fn();
+    const where = await openFileWithEditor(PATH, TEXT, { openInPanel, showError, label: (k) => k });
+    expect(where).toBe('editor');
+    expect(showError).toHaveBeenCalledTimes(1);
+    expect(String(showError.mock.calls[0][0])).toContain('coding.openFailed');
+    expect(String(showError.mock.calls[0][0])).toContain('spawn ENOENT');
+    expect(openInPanel).not.toHaveBeenCalled();
+  });
 });
 
 // ── Round-6 regressions (BUG-84 / BUG-85 / BUG-86 / BUG-90) ──

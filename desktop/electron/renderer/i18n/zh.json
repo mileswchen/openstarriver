@@ -94,6 +94,7 @@
     "turnTruncated": "⚠️ 输出在 max_tokens 上限处被截断，本步可能未完成（例如文件编辑被截断）。可在模型设置里调大 max_tokens，或让模型分小步修改。",
     "turnFilesChanged": "文件变更 {count} 个",
     "turnFileReview": "审查",
+    "turnFileOpen": "打开",
     "toolsMenu": "终端 / IDE",
     "openConsole": "命令行控制台",
     "openConsoleSub": "在系统终端中打开工作区目录",

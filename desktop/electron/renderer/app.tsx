@@ -1085,15 +1085,54 @@ function ShellCmdRow({ entry }: { entry: { cmd: string; startedAt: number } }) {
 
 /* ─── turn-level file change summary ─── */
 
+/** 打开 on the per-turn file list: launch ONE file in the user's configured
+ *  editor. `apps.ide_command` (settings.yaml, `{file}`/`{dir}` placeholders)
+ *  IS the editor; with none set the right-hand panel is the default editor —
+ *  the fallback reuses the 审查 open. A configured editor that fails to
+ *  launch surfaces an error toast (no silent panel fallback). Resolves to
+ *  'editor' | 'panel' so tests can assert the branch taken. */
+export async function openFileWithEditor(
+  path: string,
+  text: string,
+  io: {
+    openInPanel: (path: string, text: string) => void;
+    showError: (message: string) => void;
+    label: (key: string) => string;
+  },
+): Promise<'editor' | 'panel'> {
+  let command: string | undefined;
+  try {
+    const s = await Promise.resolve(window.starriver.getSettings?.());
+    command = (s as { apps?: { ide_command?: string | null } })?.apps?.ide_command || undefined;
+  } catch { /* settings unavailable → panel fallback below */ }
+  if (!command) {
+    io.openInPanel(path, text);
+    return 'panel';
+  }
+  try {
+    const fn = window.starriver.openFile;
+    if (!fn) throw new Error('not supported by this build');
+    await fn(path, command);
+    return 'editor';
+  } catch (e) {
+    io.showError(`${io.label('coding.openFailed')}: ${String((e as Error)?.message ?? e)}`);
+    return 'editor';
+  }
+}
+
 /** Per-turn changed-files card. Each row opens the file's diff in the
     right-hand panel (审查) — the inline `<details>` expansion was replaced by
-    the panel so diffs get the full width and coexist with the Plan tab. */
+    the panel so diffs get the full width and coexist with the Plan tab.
+    打开 sits right of 审查: launches the file in the configured editor
+    (`openFileWithEditor`; panel fallback when no editor is set). */
 export function TurnFileSummary({
   files,
   onOpen,
+  onOpenExternal,
 }: {
   files: { path: string; add: number; del: number; text: string }[];
   onOpen?: (path: string, text: string) => void;
+  onOpenExternal?: (path: string, text: string) => void;
 }) {
   const { t } = useI18n();
   const add = files.reduce((n, f) => n + f.add, 0);
@@ -1129,6 +1168,15 @@ export function TurnFileSummary({
               onClick={() => onOpen(f.path, f.text)}
             >
               {t('coding.turnFileReview')}
+            </button>
+          )}
+          {onOpenExternal && (
+            <button
+              type="button"
+              className="turn-file-open"
+              onClick={() => onOpenExternal(f.path, f.text)}
+            >
+              {t('coding.turnFileOpen')}
             </button>
           )}
         </div>
@@ -3981,6 +4029,9 @@ interface StarriverBridge {
   // Open the workspace directory externally (main-process spawn)
   openTerminal?(cwd: string, command?: string): Promise<{ ok: boolean }>;
   openIDE?(cwd: string, command?: string): Promise<{ ok: boolean }>;
+  /** Turn file list 打开: open ONE file with the configured editor command
+      (main-process spawn; `command` = apps.ide_command template). */
+  openFile?(path: string, command?: string): Promise<{ ok: boolean; error?: string }>;
   /** Models page "open config file": open ~/.starriver/settings.yaml in the system editor. */
   openModelsConfig?(): Promise<{ ok: boolean; error?: string }>;
   /** 设置页：退出时是否顺带停止后台服务（desktop-prefs.json，主进程持有）。 */
@@ -7775,6 +7826,15 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     setPanelTab('file');
     setPanelOpen(true);
   };
+  /** 打开 (2026-11-11): the file-change row's external launch — configured
+   *  editor via openFileWithEditor, panel when none is set. */
+  const openFileExternally = (path: string, text: string) => {
+    void openFileWithEditor(path, text, {
+      openInPanel: openReviewFile,
+      showError: wsCtx.showError,
+      label: t,
+    });
+  };
   const closePanelDoc = (id: string) => {
     const idx = panelDocs.findIndex(d => d.id === id);
     if (idx < 0) return;
@@ -10325,7 +10385,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           {/* File-change summary sits ABOVE the meta row; duration and
               token spend share the timestamp row. */}
           {summaryFiles && summaryFiles.length > 0 && (
-            <TurnFileSummary files={summaryFiles} onOpen={openReviewFile} />
+            <TurnFileSummary files={summaryFiles} onOpen={openReviewFile} onOpenExternal={openFileExternally} />
           )}
           {m.role === 'user' && (
             <button

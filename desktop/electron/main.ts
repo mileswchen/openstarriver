@@ -232,17 +232,21 @@ app.whenReady().then(async () => {
     else mainWindow?.maximize();
   });
 
-  // ── shell:openTerminal / shell:openIDE ──
+  // ── shell:openTerminal / shell:openIDE / shell:openFile ──
   // Renderer-initiated "open the workspace elsewhere" actions: spawn the
-  // user's terminal emulator / IDE on the session's workspace directory.
-  // These run OUTSIDE the agent (user-invoked, main-process spawn) — sandbox
+  // user's terminal emulator / IDE on the session's workspace directory, or
+  // open ONE file in the user's editor (turn file list 打开). These run
+  // OUTSIDE the agent (user-invoked, main-process spawn) — sandbox
   // does not apply. A settings-provided command template (`apps.*_command`,
-  // `{dir}` placeholder) wins over the platform default; `{dir}` is
-  // single-quoted before `sh -c` so paths with spaces survive.
+  // `{dir}` placeholder) wins over the platform default; `{dir}` (and
+  // `{file}` for openFile) is single-quoted before `sh -c` so paths with
+  // spaces survive.
   const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-  const runCommandTemplate = (template: string, cwd: string) =>
+  const runCommandTemplate = (template: string, cwd: string, file?: string) =>
     new Promise<void>((resolve, reject) => {
-      const child = spawn('/bin/sh', ['-c', template.replace(/\{dir\}/g, shellQuote(cwd))], {
+      let command = template.replace(/\{dir\}/g, shellQuote(cwd));
+      if (file !== undefined) command = command.replace(/\{file\}/g, shellQuote(file));
+      const child = spawn('/bin/sh', ['-c', command], {
         cwd,
         stdio: 'ignore',
       });
@@ -340,6 +344,23 @@ app.whenReady().then(async () => {
       return { ok: true };
     }
     throw new Error('VS Code CLI (`code`) not found on PATH — configure apps.ide_command in settings.yaml');
+  });
+
+  // Turn file list 打开: open ONE file in the user's editor. A settings
+  // `apps.ide_command` template runs with `{file}` (full path) and `{dir}`
+  // (the file's directory) placeholders; the renderer only calls this when
+  // an editor IS configured (no template → it opens the file in the
+  // right-hand panel instead), so the shell.openPath branch below is the
+  // defensive path, not the designed default.
+  ipcMain.handle('shell:openFile', async (_e, args: { path: string; command?: string }) => {
+    const filePath = String(args?.path ?? '');
+    if (!filePath || !fs.existsSync(filePath)) throw new Error(`file not found: ${filePath || '(empty)'}`);
+    if (args?.command) {
+      await runCommandTemplate(args.command, path.dirname(filePath), filePath);
+      return { ok: true };
+    }
+    const error = await shell.openPath(filePath);
+    return error ? { ok: false, error } : { ok: true };
   });
   if (!DAEMON_MODE) {
   try {

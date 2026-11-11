@@ -146,6 +146,10 @@ contextBridge.exposeInMainWorld('starriver', {
     ipcRenderer.invoke('shell:openTerminal', { cwd, command }),
   openIDE: (cwd: string, command?: string): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('shell:openIDE', { cwd, command }),
+  // Turn file list 打开: open ONE file with the configured editor (main
+  // process spawn; `command` = apps.ide_command template, {file}/{dir}).
+  openFile: (path: string, command?: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('shell:openFile', { path, command }),
   // Models page "open config file": open ~/.starriver/settings.yaml in the system editor.
   openModelsConfig: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openModelsConfig'),

@@ -94,6 +94,7 @@
     "turnTruncated": "⚠️ Output stopped at the max_tokens limit — the model may not have finished this step (e.g. an edit was cut off mid-way). Raise max_tokens in model settings, or ask for smaller edits.",
     "turnFilesChanged": "{count} files changed",
     "turnFileReview": "Review",
+    "turnFileOpen": "Open",
     "toolsMenu": "Terminal / IDE",
     "openConsole": "Console",
     "openConsoleSub": "Open the workspace directory in your terminal",
