@@ -92,7 +92,13 @@ impl From<starriver_host::types::PluginEntry> for napi_types::PluginEntry {
             ui: v.ui.map(|ui| {
                 serde_json::json!({
                     "entry": ui.entry,
-                    "tabs": ui.tabs.iter().map(|t| serde_json::json!({ "id": t.id, "title": t.title })).collect::<Vec<_>>(),
+                    "tabs": ui.tabs.iter().map(|t| {
+                        let mut tab = serde_json::json!({ "id": t.id, "title": t.title });
+                        if !t.titles.is_empty() {
+                            tab["titles"] = serde_json::json!(t.titles);
+                        }
+                        tab
+                    }).collect::<Vec<_>>(),
                     "permissions": ui.permissions,
                     "theme": ui.theme,
                 })
@@ -136,6 +142,7 @@ impl_from_host!(WorkspaceInfo {
     path,
     title,
     created_at,
+    pinned_at,
     session_ids
 });
 impl_from_host!(SessionInfo {
@@ -1436,6 +1443,13 @@ impl AgentRuntime {
     }
 
     #[napi]
+    pub fn pin_workspace(&self, workspace_id: String, pinned: bool) -> Result<()> {
+        self.host
+            .set_workspace_pinned(workspace_id, pinned)
+            .map_err(to_napi_err)
+    }
+
+    #[napi]
     pub fn delete_workspace(&self, workspace_id: String) -> Result<()> {
         self.host
             .delete_workspace(workspace_id)
@@ -1633,10 +1647,12 @@ mod tests {
             path: "/tmp/a".into(),
             title: "alpha".into(),
             created_at: "t".into(),
+            pinned_at: Some(123),
             session_ids: vec!["s1".into(), "s2".into()],
         };
         let n: napi_types::WorkspaceInfo = ws.into();
         assert_eq!(n.session_ids, vec!["s1".to_string(), "s2".to_string()]);
+        assert_eq!(n.pinned_at, Some(123));
 
         let sess = host_types::SessionInfo {
             id: "s1".into(),

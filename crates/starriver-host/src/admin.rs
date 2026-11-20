@@ -287,10 +287,12 @@ impl HostRuntime {
                                 .map(|t| types::PluginUiTab {
                                     id: t.id,
                                     title: t.title,
+                                    titles: t.titles,
                                 })
                                 .collect(),
                             permissions: ui.permissions,
                             theme: ui.theme,
+                            icon: ui.icon,
                         }),
                         source_url: p.source_url.clone(),
                         installed_at: p.installed_at.clone(),
@@ -316,10 +318,12 @@ impl HostRuntime {
                     .map(|t| types::PluginUiTab {
                         id: t.id,
                         title: t.title,
+                        titles: t.titles,
                     })
                     .collect(),
                 permissions: ui.permissions,
                 theme: ui.theme,
+                icon: ui.icon,
             }),
             source_url: entry.source_url,
             installed_at: entry.installed_at,

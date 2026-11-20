@@ -4,6 +4,7 @@
 // Tab ids degrade from a union type to string — an extension point, not a frozen enum.
 
 import type { ReactNode } from 'react';
+import type { Lang } from '../i18n';
 
 export type TabId = string;
 
@@ -15,6 +16,9 @@ export interface TabContribution {
   id: TabId;
   /** i18n key (e.g. `nav.chat`). */
   labelKey: string;
+  /** Per-language labels (e.g. a plugin manifest's `tabs[].titles`); win over
+   *  the `labelKey` dictionary lookup, missing languages fall back to it. */
+  labels?: Partial<Record<Lang, string>>;
   /** Inline SVG icon (stroke="currentColor"). */
   icon: string;
   render: (ctx: TabRenderContext) => ReactNode;

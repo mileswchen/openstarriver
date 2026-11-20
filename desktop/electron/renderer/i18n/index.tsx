@@ -41,6 +41,16 @@ function resolveKey(obj: any, key: string): string {
   return typeof current === 'string' ? current : key;
 }
 
+/**
+ * Translation-existence probe for non-React callers — e.g. the plugin host picks
+ * a sidebar label key at sync time, outside any component. Checks both
+ * dictionaries: the en/zh parity test guarantees identical key sets, so a key
+ * found in either locale resolves in both.
+ */
+export function hasTranslation(key: string): boolean {
+  return resolveKey(DICTS.en, key) !== key || resolveKey(DICTS.zh, key) !== key;
+}
+
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangRaw] = useState<Lang>(detectSystemLang);
 

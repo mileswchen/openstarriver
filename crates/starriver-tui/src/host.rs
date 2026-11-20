@@ -348,6 +348,7 @@ pub mod mock {
                 path: path.into(),
                 title,
                 created_at: "2026-08-20".into(),
+                pinned_at: None,
                 session_ids: vec![],
             });
         }
@@ -523,6 +524,7 @@ pub mod mock {
                 path: path.clone(),
                 title,
                 created_at: "2026-08-20".into(),
+                pinned_at: None,
                 session_ids: vec![],
             };
             workspaces.push(w.clone());

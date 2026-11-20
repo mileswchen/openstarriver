@@ -5,6 +5,7 @@
 // with a "<plugin>-<skill>" prefix so they are discovered by the SkillManager.
 // Installed plugins are tracked in ~/.starriver/plugins.yaml.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -40,12 +41,23 @@ pub struct PluginUiEntry {
     /// Optional theme CSS file path (e.g. `theme.css`); its content is delivered with `plugins.list`.
     #[serde(default)]
     pub theme: Option<String>,
+    /// Optional tab icon SVG file path (e.g. `icon.svg`); its content (a full
+    /// `<svg>` markup string) is delivered with `plugins.list` and rendered by
+    /// the sidebar at 16px with `currentColor` strokes.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginUiTab {
     pub id: String,
     pub title: String,
+    /// Optional per-language titles (`{"en": "...", "zh": "..."}`) — the plugin's
+    /// own i18n for the shell sidebar. Preferred over the host-dictionary
+    /// fallback (`pluginTabs.<plugin>.<tabId>` in en.json/zh.json) and over the
+    /// raw `title`; missing languages degrade through that same chain.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub titles: BTreeMap<String, String>,
 }
 
 /// Registry persisted to ~/.starriver/plugins.yaml (mirrors ProviderRegistry pattern).
@@ -287,6 +299,7 @@ fn install_ui_assets(root: &Path, dir: &Path) -> anyhow::Result<Option<PluginUiE
             tabs: Vec::new(),
             permissions: Vec::new(),
             theme: None,
+            icon: None,
         }
     };
     // The entry must stay inside ui/ (reject path traversal).
@@ -481,7 +494,7 @@ mod tests {
             src.path().join("ui").join("manifest.json"),
             r#"{
                 "entry": "index.html",
-                "tabs": [{ "id": "board", "title": "Board" }],
+                "tabs": [{ "id": "board", "title": "Board", "titles": { "en": "Board", "zh": "看板" } }],
                 "permissions": ["session:read"],
                 "theme": "theme.css"
             }"#,
@@ -498,6 +511,8 @@ mod tests {
         assert_eq!(ui.entry, "index.html");
         assert_eq!(ui.tabs.len(), 1);
         assert_eq!(ui.tabs[0].id, "board");
+        // Manifest-level i18n: per-language titles survive the parse + copy roundtrip.
+        assert_eq!(ui.tabs[0].titles.get("zh").map(String::as_str), Some("看板"));
         assert_eq!(ui.permissions, vec!["session:read"]);
         assert_eq!(ui.theme.as_deref(), Some("theme.css"));
 
@@ -581,5 +596,70 @@ mod tests {
             "writing"
         );
         assert_eq!(derive_plugin_name("/local/path/to/writing"), "writing");
+    }
+
+    /// Closed-loop check against the bundled xhs-seeding plugin: install from the
+    /// real fixture, assert skills + UI manifest land correctly, then uninstall
+    /// and assert full cleanup. The plugin source lives outside this repo
+    /// (`~/Documents/Projects/starplugins/xhs-seeding`); skipped when no
+    /// candidate fixture is present (e.g. CI, sparse checkouts).
+    #[test]
+    fn xhs_seeding_plugin_install_uninstall_roundtrip() {
+        let candidates = [
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/xhs-seeding"),
+            home_dir().join("Documents").join("Projects").join("starplugins").join("xhs-seeding"),
+        ];
+        let fixture = match candidates.iter().find(|p| p.is_dir()) {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let entry =
+            install_plugin_into(root.path(), fixture.to_str().unwrap()).unwrap();
+
+        assert_eq!(entry.name, "xhs-seeding");
+        let mut skills = entry.skills.clone();
+        skills.sort();
+        assert_eq!(
+            skills,
+            vec![
+                "xhs-compliance",
+                "xhs-cover",
+                "xhs-note-writing",
+                "xhs-persona",
+                "xhs-title-hooks",
+                "xhs-topic-research",
+                "xhs-workflow",
+            ]
+        );
+
+        let sk = root.path().join(".starriver").join("skills");
+        for s in &entry.skills {
+            let dir = sk.join(format!("xhs-seeding-{}", s));
+            assert!(dir.join("SKILL.md").exists(), "missing {}", dir.display());
+        }
+
+        let ui = entry.ui.as_ref().expect("ui manifest must be present");
+        assert_eq!(ui.entry, "index.html");
+        assert_eq!(ui.tabs.len(), 1);
+        assert_eq!(ui.tabs[0].id, "workbench");
+        assert!(ui.theme.is_some());
+        assert!(ui
+            .permissions
+            .iter()
+            .all(|p| p == "session:read" || p == "session:execute"));
+        let ui_dir = root.path().join(".starriver").join("plugins").join("xhs-seeding");
+        assert!(ui_dir.join("ui").join("index.html").exists());
+        assert!(ui_dir.join("ui").join("theme.css").exists());
+
+        uninstall_plugin_from(root.path(), "xhs-seeding").unwrap();
+        assert!(!ui_dir.exists());
+        for s in &entry.skills {
+            assert!(!sk.join(format!("xhs-seeding-{}", s)).exists());
+        }
+        assert!(PluginRegistry::with_path(plugins_file(root.path()))
+            .unwrap()
+            .get("xhs-seeding")
+            .is_none());
     }
 }

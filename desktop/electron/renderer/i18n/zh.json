@@ -58,7 +58,7 @@
     "placeholder": "输入消息…",
     "send": "发送",
     "attachImage": "发送图片",
-    "imageTooLarge": "图片过大（需小于 4MB）",
+    "imageTooLarge": "图片过大（需小于 20MB）",
     "sendFailed": "发送失败",
     "notEnabled": "消息服务未启用（STARRIVER_LAN_CHAT=0 已关闭）"
   },
@@ -421,6 +421,10 @@
     "noPlugins": "尚未安装插件。",
     "installedAt": "安装于"
   },
+  "pluginTabs": {
+    "starpaper": { "workbench": "论文工作台" },
+    "xhs-seeding": { "workbench": "种草工作台" }
+  },
   "settings": {
     "title": "设置",
     "close": "关闭",
@@ -716,6 +720,10 @@
     "empty": "暂无工作区",
     "emptyHint": "添加一个即可开始编码",
     "deleteTitle": "删除工作区",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "pinFailed": "置顶失败",
+    "pinnedState": "已置顶",
     "deleteBody": "删除“{name}”？其 {count} 个会话将从侧边栏隐藏（保留在磁盘上），目录本身不受影响。",
     "ungroupedRestore": "恢复到当前工作区",
     "ungrouped": "未分组",

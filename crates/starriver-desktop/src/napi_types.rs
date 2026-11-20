@@ -342,6 +342,8 @@ pub struct WorkspaceInfo {
     pub path: String,
     pub title: String,
     pub created_at: String,
+    /// Pin stamp (ms epoch); None = unpinned. List arrives pre-sorted.
+    pub pinned_at: Option<i64>,
     pub session_ids: Vec<String>,
 }
 

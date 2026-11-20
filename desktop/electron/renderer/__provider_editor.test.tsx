@@ -200,7 +200,7 @@ describe('ProviderEditorCard — 本地引擎（Ollama）', () => {
     expect(screen.getByLabelText('Model Path')).toBeTruthy();
 
     fireEvent.click(screen.getByText('Fetch available models'));
-    await waitFor(() => expect(fetchModels).toHaveBeenCalledWith('http://localhost:11434', undefined, 'ollama'));
+    await waitFor(() => expect(fetchModels).toHaveBeenCalledWith('http://localhost:11434', undefined, 'ollama', 'openai-chat'));
     // Candidate checkbox popover appears with new models checked by default (a Vision checkbox also exists on the page; take the checked one)
     await waitFor(() => expect(screen.getByText('Choose models to add')).toBeTruthy());
     const checked = screen.getAllByRole('checkbox').find((c) => (c as HTMLInputElement).checked) as HTMLInputElement;
@@ -257,5 +257,45 @@ describe('ProviderEditorCard — GLM Coding Plan protocol → base URL 联动', 
     const urlInput = screen.getByLabelText('Base URL') as HTMLInputElement;
     fireEvent.change(format, { target: { value: 'anthropic' } });
     expect(urlInput.value).toBe('https://api.deepseek.com');
+  });
+});
+
+// The fetch probe must carry the selected wire protocol so the main process
+// can speak Anthropic (x-api-key + /v1/models) instead of OpenAI-compat.
+describe('ProviderEditorCard — fetch probe carries the API format', () => {
+  it('Anthropic format is passed through to fetchProviderModels', async () => {
+    const fetchModels = vi.fn().mockResolvedValue({ ok: true, models: [{ id: 'qwen3-max', name: 'Qwen3 Max' }] });
+    (window as any).starriver.fetchProviderModels = fetchModels;
+    renderCard({
+      entry: deepseekEntry({
+        id: 'qwen-anthropic', baseUrl: 'https://gw.example/apps/anthropic', apiFormat: 'anthropic',
+      }),
+    });
+    fireEvent.click(screen.getByText('Fetch available models'));
+    await waitFor(() => expect(fetchModels).toHaveBeenCalledWith(
+      'https://gw.example/apps/anthropic', undefined, undefined, 'anthropic'));
+  });
+
+  it('switching the format before fetching probes with the new protocol', async () => {
+    const fetchModels = vi.fn().mockResolvedValue({ ok: true, models: [{ id: 'm1', name: 'm1' }] });
+    (window as any).starriver.fetchProviderModels = fetchModels;
+    renderCard({ preset: DEEPSEEK_PRESET });
+    fireEvent.change(await screen.findByLabelText('API Format'), { target: { value: 'anthropic' } });
+    fireEvent.click(screen.getByText('Fetch available models'));
+    await waitFor(() => expect(fetchModels).toHaveBeenCalledWith(
+      'https://api.deepseek.com', undefined, undefined, 'anthropic'));
+  });
+});
+
+// The configurable editor places API Format right above Base URL so the wire
+// protocol and its endpoint stay together (GLM protocol switches jump the URL).
+// Lock the DOM order against regressions.
+describe('ProviderEditorCard — field order', () => {
+  it('renders API Format above Base URL', () => {
+    renderCard({ preset: DEEPSEEK_PRESET });
+    const format = screen.getByLabelText('API Format');
+    const url = screen.getByLabelText('Base URL');
+    // DOCUMENT_POSITION_FOLLOWING (4): url comes after format in the document.
+    expect(format.compareDocumentPosition(url) & 4).toBeTruthy();
   });
 });

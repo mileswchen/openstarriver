@@ -7,6 +7,7 @@ import * as https from 'https';
 import * as http from 'http';
 import { DaemonClient, daemonInvoke, PROTOCOL_VERSION, stopDaemonAndCleanup } from './daemon';
 import { acquireSingleInstanceLock } from './single-instance';
+import { fetchProviderModels } from './providerProbe';
 
 // STARRIVER_USER_DATA: isolate a second instance BEFORE the single-instance
 // lock is taken (electron's appData follows the real macOS home, not $HOME,
@@ -487,92 +488,8 @@ app.whenReady().then(async () => {
   }
 
   // ── Fetch provider models from remote API (pure main-process feature, shared by both modes) ──
-  ipcMain.handle('runtime:fetchProviderModels', async (_e: any, baseUrl: string, apiKey?: string, engine?: 'ollama' | 'lmstudio') => {
-    interface FetchedModel { id: string; name: string; contextLength?: number; }
-    const doRequest = (url: URL): Promise<{ ok: boolean; error?: string; models: FetchedModel[] }> => {
-      return new Promise((resolve) => {
-        try {
-          const mod = url.protocol === 'https:' ? https : http;
-          const headers: Record<string, string> = { 'Accept': 'application/json' };
-          if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-          const req = mod.get(url, { headers, timeout: 10000 }, (res: any) => {
-            let body = '';
-            res.on('data', (chunk: string) => { body += chunk; });
-            res.on('end', () => {
-              const code = res.statusCode || 0;
-              if (code < 200 || code >= 300) {
-                resolve({ ok: false, error: `HTTP ${code}${body ? ': ' + body.slice(0, 200) : ''}`, models: [] });
-                return;
-              }
-              try {
-                const json = JSON.parse(body);
-                // Ollama /api/tags: { models: [{name: "qwen3-coder:7b", ...}] }
-                if (engine === 'ollama') {
-                  const models: FetchedModel[] = (json.models || [])
-                    .filter((m: any) => m.name)
-                    .map((m: any) => ({ id: m.name, name: m.name }));
-                  resolve({ ok: true, models });
-                  return;
-                }
-                // LM Studio /api/v0/models reports loaded_context_length (the real
-                // runtime limit — e.g. 8192 while the model supports 131072);
-                // OpenAI-compat /v1/models reports context_length|max_context_length.
-                const models: FetchedModel[] = (json.data || [])
-                  .filter((m: any) => m.id)
-                  .map((m: any) => {
-                    const ctx = m.loaded_context_length ?? m.context_length ?? m.max_context_length;
-                    const model: FetchedModel = { id: m.id, name: m.id };
-                    if (typeof ctx === 'number' && ctx > 0) model.contextLength = ctx;
-                    return model;
-                  });
-                resolve({ ok: true, models });
-              } catch (e: any) {
-                resolve({ ok: false, error: 'Invalid JSON response from server', models: [] });
-              }
-            });
-          });
-          req.on('error', (e: any) => {
-            resolve({ ok: false, error: e?.message || String(e), models: [] });
-          });
-          req.on('timeout', () => {
-            req.destroy();
-            resolve({ ok: false, error: 'Request timed out (10s)', models: [] });
-          });
-        } catch (e: any) {
-          resolve({ ok: false, error: e?.message || String(e), models: [] });
-        }
-      });
-    };
-
-    try {
-      const base = baseUrl.replace(/\/$/, '');
-
-      // Ollama exposes its native /api/tags (not OpenAI /v1/models). This
-      // branch is what makes "Fetch models" work for Ollama at all — the
-      // old code only spoke LM Studio / OpenAI-compat endpoints.
-      if (engine === 'ollama') {
-        const tagsUrl = new URL(base + '/api/tags');
-        const res = await doRequest(tagsUrl);
-        if (res.ok && res.models.length > 0) return res;
-        // /api/tags returns { models: [{name, ...}] } — parse it into the
-        // shared FetchedModel shape below; plain text fallback keeps the
-        // error surface identical to the other branches.
-        return res;
-      }
-
-      const v1Url = new URL(base + '/models');
-      // For LM Studio (local OR on LAN), prefer the richer /api/v0/models
-      // endpoint which reports loaded_context_length (the real runtime KV
-      // limit); fall back to OpenAI-compat /v1/models on any failure. No
-      // hostname sniffing — a LAN instance serves the same /api/v0/models.
-      const v0Url = new URL(base.replace(/\/v1$/, '') + '/api/v0/models');
-      const v0 = await doRequest(v0Url);
-      if (v0.ok && v0.models.length > 0) return v0;
-      return await doRequest(v1Url);
-    } catch (e: any) {
-      return { ok: false, error: e?.message || String(e), models: [] };
-    }
-  });
+  ipcMain.handle('runtime:fetchProviderModels', (_e: any, baseUrl: string, apiKey?: string, engine?: 'ollama' | 'lmstudio', apiFormat?: string) =>
+    fetchProviderModels(baseUrl, apiKey, engine, apiFormat));
 
   // Backend health — registered OUTSIDE the try so the renderer can always ask
   // "is the backend alive?" and surface a clear error screen when it isn't.

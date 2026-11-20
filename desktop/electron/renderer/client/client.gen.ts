@@ -139,6 +139,7 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
   "workspaces.rename": { params: {"type":"object","properties":{"workspaceId":{"type":"string"},"title":{"type":"string"}},"required":["workspaceId","title"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["workspaces:write"] },
   "workspaces.active": { params: {"type":"object","properties":{"agent":{"type":"string"}},"required":[],"additionalProperties":false}, result: {}, streaming: false, permissions: ["workspaces:read"] },
   "workspaces.delete": { params: {"type":"object","properties":{"workspaceId":{"type":"string"}},"required":["workspaceId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["workspaces:write"] },
+  "workspaces.pin": { params: {"type":"object","properties":{"workspaceId":{"type":"string"},"pinned":{"type":"boolean"}},"required":["workspaceId","pinned"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["workspaces:write"] },
   "workspaces.activate": { params: {"type":"object","properties":{"workspaceId":{"type":"string"},"agent":{"type":"string"}},"required":[],"additionalProperties":false}, result: {}, streaming: false, permissions: ["workspaces:write"] },
   "protocol.info": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {}, streaming: false, permissions: [] },
 };
@@ -272,6 +273,7 @@ export interface ProtocolClientMethods {
   workspacesRename(params: { workspaceId: string; title: string }): Promise<unknown>;
   workspacesActive(params: { agent?: string }): Promise<unknown>;
   workspacesDelete(params: { workspaceId: string }): Promise<unknown>;
+  workspacesPin(params: { workspaceId: string; pinned: boolean }): Promise<unknown>;
   workspacesActivate(params: { workspaceId?: string; agent?: string }): Promise<unknown>;
   protocolInfo(params: {  }): Promise<unknown>;
 }

@@ -792,6 +792,81 @@ pub(crate) fn display_pieces(
     ts: u64,
 ) -> Vec<types::ChatMessage> {
     let mut out: Vec<types::ChatMessage> = Vec::new();
+    // Multimodal user input (text + attached images) must stay ONE display row:
+    // both frontend views derive turns from user rows, so a split row would
+    // open a phantom turn per attachment (2026-11-13: the trajectory showed
+    // 8 turns for 6 real ones). Tool blocks inside a user message (the
+    // kernel's tool-result feedback) keep their own rows — they are role
+    // "tool" and never anchor a turn.
+    if role == "user" {
+        let mut merged = String::new();
+        for block in blocks {
+            let piece = match block {
+                ContentBlock::Text(text) => text.clone(),
+                ContentBlock::Image { attachment } => {
+                    let Some(file_id) = attachment.as_str_at("fileId") else {
+                        continue;
+                    };
+                    let media = attachment.as_str_at("mediaType").unwrap_or("image");
+                    format!("![图片 {media}]({file_id})")
+                }
+                _ => continue,
+            };
+            if !merged.is_empty() {
+                merged.push('\n');
+            }
+            merged.push_str(&piece);
+        }
+        if !merged.is_empty() {
+            out.push(types::ChatMessage {
+                role: role.to_string(),
+                content: merged,
+                ts: Some(ts),
+                usage: None,
+                duration_ms: None,
+                done_ts: None,
+                file_changes: None,
+                seq: None,
+            });
+        }
+        for block in blocks {
+            match block {
+                ContentBlock::ToolCall {
+                    name, arguments, ..
+                } => {
+                    let parsed: Option<serde_json::Value> = arguments.to_serde_json().ok();
+                    let arg = tool_call_arg(parsed.as_ref());
+                    out.push(types::ChatMessage {
+                        role: "tool".to_string(),
+                        content: tool_call_label(&name.clone().unwrap_or_default(), &arg),
+                        ts: Some(ts),
+                        usage: None,
+                        duration_ms: None,
+                        done_ts: None,
+                        file_changes: None,
+                        seq: None,
+                    });
+                }
+                ContentBlock::ToolResult {
+                    content, is_error, ..
+                } => {
+                    let head = if *is_error { "✗" } else { "✓" };
+                    out.push(types::ChatMessage {
+                        role: "tool".to_string(),
+                        content: format!("{head}\n{}", flatten_blocks(content)),
+                        ts: Some(ts),
+                        usage: None,
+                        duration_ms: None,
+                        done_ts: None,
+                        file_changes: None,
+                        seq: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+        return out;
+    }
     for block in blocks {
         match block {
             ContentBlock::Text(text) => out.push(types::ChatMessage {
@@ -1267,6 +1342,54 @@ pub(crate) fn project_trace_entries(
             continue;
         }
         let role = role_str(&message.role);
+        // Multimodal user input stays ONE user row (see display_pieces): each
+        // user row anchors a trajectory turn, so a split row would open a
+        // phantom turn per attachment. Tool blocks keep their own rows.
+        if role == "user" {
+            let mut merged = String::new();
+            for block in &message.content {
+                let piece = match block {
+                    ContentBlock::Text(text) => text.clone(),
+                    ContentBlock::Image { attachment } => {
+                        let text = if let Some(file_id) = attachment.as_str_at("fileId") {
+                            let media = attachment.as_str_at("mediaType").unwrap_or("image");
+                            format!("![图片 {media}]({file_id})")
+                        } else if let Some(url) = attachment.as_str_at("url") {
+                            format!("![image]({url})")
+                        } else {
+                            continue;
+                        };
+                        text
+                    }
+                    _ => continue,
+                };
+                if !merged.is_empty() {
+                    merged.push('\n');
+                }
+                merged.push_str(&piece);
+            }
+            if !merged.is_empty() {
+                let mut row = empty_row();
+                row.kind = "user".to_string();
+                row.text = merged;
+                base_fields(&mut row);
+                out.push(row);
+            }
+            for block in &message.content {
+                if let ContentBlock::ToolResult {
+                    content, is_error, ..
+                } = block
+                {
+                    let mut row = empty_row();
+                    row.kind = "tool_result".to_string();
+                    row.tool_output = Some(flatten_blocks(content));
+                    row.tool_ok = Some(!*is_error);
+                    base_fields(&mut row);
+                    out.push(row);
+                }
+            }
+            continue;
+        }
         for block in &message.content {
             match block {
                 ContentBlock::Text(text) => {
@@ -2305,6 +2428,7 @@ impl HostRuntime {
                         path: workspace.path,
                         title: workspace.title,
                         created_at: format_time(workspace.created_at / 1000),
+                        pinned_at: workspace.pinned_at,
                         session_ids: workspace.session_ids,
                     })
                     .collect()
@@ -2331,6 +2455,7 @@ impl HostRuntime {
                         path: workspace.path,
                         title: workspace.title,
                         created_at: format_time(workspace.created_at / 1000),
+                        pinned_at: workspace.pinned_at,
                         session_ids: workspace.session_ids,
                     })
             })
@@ -2373,6 +2498,28 @@ impl HostRuntime {
                     Some(runtime) => runtime
                         .host_store
                         .rename_workspace(&id, &title)
+                        .map_err(|e| anyhow::anyhow!(e)),
+                    None => Err(anyhow::anyhow!("runtime not loaded")),
+                }
+            })
+        })
+        .join()
+        .map_err(|_| anyhow::anyhow!("thread panicked"))?
+    }
+
+    /// Sidebar pin-to-top toggle: pinned workspaces sort above the rest
+    /// (newest pin first); the ordering lives in host_store's list query.
+    #[api_method("workspaces.pin", permissions = ["workspaces:write"])]
+    pub fn set_workspace_pinned(&self, workspace_id: String, pinned: bool) -> anyhow::Result<()> {
+        let inner = self.inner.clone();
+        let handle = self.runtime_handle.clone();
+        std::thread::spawn(move || {
+            handle.block_on(async {
+                let l = inner.lock().await;
+                match l.as_ref() {
+                    Some(runtime) => runtime
+                        .host_store
+                        .set_workspace_pinned(&workspace_id, pinned)
                         .map_err(|e| anyhow::anyhow!(e)),
                     None => Err(anyhow::anyhow!("runtime not loaded")),
                 }
@@ -2666,14 +2813,15 @@ mod projection_tests {
         };
         let out = project(vec![image_with_ref, legacy_inline]);
         let texts: Vec<&str> = out.iter().map(|m| m.content.as_str()).collect();
-        assert!(texts.contains(&"look at this"));
+        // 2026-11-13 phantom-turn fix: text + image merge into ONE user row —
+        // each user row anchors a turn, so a split row would open a phantom
+        // turn per attachment. The image ref must still survive in the row.
+        assert_eq!(out.len(), 1, "multimodal user input is a single row: {texts:?}");
         assert!(
-            texts
-                .iter()
-                .any(|t| *t == "![图片 image/png](sha256:abc123)"),
+            texts[0].starts_with("look at this")
+                && texts[0].contains("![图片 image/png](sha256:abc123)"),
             "{texts:?}"
         );
-        assert_eq!(out.len(), 2, "legacy inline block stays dropped: {texts:?}");
     }
 
     fn user_entry(time: u64) -> SurfaceEntry {
@@ -3887,5 +4035,83 @@ mod trace_snapshot_tests {
     fn open_turn_slice_without_user_message_is_none() {
         let entries = vec![entry("request/header", 1), entry("context/message", 2)];
         assert!(open_turn_slice(entries).is_none());
+    }
+}
+
+// Multimodal user input projects as ONE row per view (2026-11-13 phantom-turn
+// fix): text + image attachments merge into a single user row, because both
+// frontend views anchor a turn on every user row.
+#[cfg(test)]
+mod multimodal_user_row_tests {
+    use super::*;
+
+    fn user_entry(seq: u64, content_json: &str) -> SurfaceEntry {
+        let data = JsonValue::from_json_str(&format!(
+            r#"{{"id":"m{seq}","role":"user","source":{{"kind":"user"}},"content":{content_json}}}"#
+        ))
+        .expect("message json");
+        let message = KernelMessage::from_json(data).expect("decode message");
+        SurfaceEntry {
+            seq,
+            time: seq * 1000,
+            event_type: "user/message".into(),
+            data: JsonValue::Null,
+            usage: None,
+            message: Some(message),
+            meta: None,
+        }
+    }
+
+    fn entry(event_type: &str, seq: u64) -> SurfaceEntry {
+        SurfaceEntry {
+            seq,
+            time: seq * 1000,
+            event_type: event_type.into(),
+            data: JsonValue::Null,
+            usage: None,
+            message: None,
+            meta: None,
+        }
+    }
+
+    #[test]
+    fn chat_projection_merges_text_and_image_into_one_user_row() {
+        let e = user_entry(
+            9,
+            r#"[{"type":"text","text":"看看这个截图"},{"type":"image","attachment":{"fileId":"sha256:abc","mediaType":"image/webp"}}]"#,
+        );
+        let rows = display_pieces("user", &e.message.as_ref().unwrap().content, e.time);
+        assert_eq!(rows.len(), 1, "text + image must be one display row");
+        assert_eq!(rows[0].role, "user");
+        assert!(rows[0].content.starts_with("看看这个截图"));
+        assert!(rows[0].content.contains("![图片 image/webp](sha256:abc)"));
+    }
+
+    #[test]
+    fn trace_projection_merges_text_and_image_into_one_user_row() {
+        let e = user_entry(
+            9,
+            r#"[{"type":"text","text":"看看这个截图"},{"type":"image","attachment":{"fileId":"sha256:abc","mediaType":"image/webp"}}]"#,
+        );
+        let rows = project_trace_entries(vec![e], &HashMap::new());
+        let user_rows: Vec<_> = rows.iter().filter(|r| r.kind == "user").collect();
+        assert_eq!(user_rows.len(), 1, "one user row anchors exactly one turn");
+        assert!(user_rows[0].text.starts_with("看看这个截图"));
+        assert!(user_rows[0].text.contains("![图片 image/webp](sha256:abc)"));
+    }
+
+    #[test]
+    fn tool_result_feedback_rows_are_not_user_rows() {
+        // The kernel feeds tool results back as user-role messages; they carry
+        // ToolResult blocks only and must keep their tool rows (never anchor a
+        // turn, never render as user prose).
+        let e = user_entry(
+            12,
+            r#"[{"type":"tool-result","toolCallId":"c1","content":[{"type":"text","text":"out"}],"isError":false}]"#,
+        );
+        let rows = display_pieces("user", &e.message.as_ref().unwrap().content, e.time);
+        assert!(rows.iter().all(|r| r.role == "tool"), "no user prose row");
+        let rows = project_trace_entries(vec![e], &HashMap::new());
+        assert!(rows.iter().all(|r| r.kind != "user"), "no user trace row");
     }
 }

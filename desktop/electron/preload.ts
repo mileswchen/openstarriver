@@ -34,6 +34,19 @@ for (const [name, spec] of Object.entries(LEGACY_METHODS)) {
   };
 }
 
+// ── runtime:event fan-out ──
+// 单一持久 ipc 监听器把每个事件分发给两类消费者：当前回合处理器
+// （execute / executeStream，后到者替换前者，保留 re-arm 契约）和全部
+// 协议客户端订阅者（onEvent，各自按 subscription 过滤）。此前每个消费
+// 方都先 removeAllListeners —— 三方抢占唯一监听槽，最后注册者独占，
+// 其余饿死（2026-11-15：打开插件工作台后聊天转录冻结，切组才恢复）。
+let turnHandler: ((event: any) => void) | null = null;
+const eventSubscribers = new Set<(event: any) => void>();
+ipcRenderer.on('runtime:event', (_e: any, event: any) => {
+  if (turnHandler) turnHandler(event);
+  for (const cb of Array.from(eventSubscribers)) cb(event);
+});
+
 contextBridge.exposeInMainWorld('starriver', {
   ...apiMethods,
 
@@ -55,13 +68,13 @@ contextBridge.exposeInMainWorld('starriver', {
     // the previous one settles, and those events stream with no second
     // execute to re-arm a listener. Unsubscribing at the first terminal made
     // every driver-claimed turn invisible (queue card stuck, no Stop, no
-    // stream — 2026-10-05 session 85a4410f). The next execute() re-arms via
-    // the removeAllListeners below; a failed call removes the handler.
+    // stream — 2026-10-05 session 85a4410f). The next execute() re-arms by
+    // replacing turnHandler; a failed call clears it (only if still ours).
     const handler = (_e: any, event: any) => {
       callback(null, toLegacyEvent(event));
     };
-    ipcRenderer.removeAllListeners('runtime:event');
-    ipcRenderer.on('runtime:event', handler);
+    const wrapped = (event: any) => handler(null, event);
+    turnHandler = wrapped;
     void call('session.execute', {
       task,
       sessionId: sessionId ?? undefined,
@@ -75,18 +88,20 @@ contextBridge.exposeInMainWorld('starriver', {
       // retire by stamping the ledger seq.
       clientRequestId: clientRequestId ?? undefined,
     }).catch((err: any) => {
-      ipcRenderer.removeListener('runtime:event', handler);
+      // A failed execute must not keep painting into this dead callback —
+      // clear the slot only if a newer execute hasn't already taken it.
+      if (turnHandler === wrapped) turnHandler = null;
       callback(err?.message ?? String(err), null);
     });
   },
   executeStream: (task: string, callback: (event: any) => void) => {
-    ipcRenderer.removeAllListeners('runtime:event');
-    const handler = (_e: any, event: any) => callback(toLegacyEvent(event));
-    ipcRenderer.on('runtime:event', handler);
+    const wrapped = (event: any) => callback(toLegacyEvent(event));
+    turnHandler = wrapped;
     void call('session.execute', { task }).catch((err: any) => {
-      // A failed execute must not leave the channel listener registered
-      // forever (every later event double-fires into this dead callback).
-      ipcRenderer.removeListener('runtime:event', handler);
+      // A failed execute must not leave the turn slot bound forever
+      // (every later event double-fires into this dead callback) — clear
+      // it only if a newer execute hasn't already taken it.
+      if (turnHandler === wrapped) turnHandler = null;
       callback({ type: 'TaskFailed', error: err?.message ?? String(err) });
     });
   },
@@ -95,10 +110,10 @@ contextBridge.exposeInMainWorld('starriver', {
   invoke: (requestJson: string): Promise<string> =>
     ipcRenderer.invoke('runtime:invoke', requestJson),
   onEvent: (callback: (event: any) => void): (() => void) => {
-    const handler = (_e: any, event: any) => callback(event);
-    ipcRenderer.removeAllListeners('runtime:event');
-    ipcRenderer.on('runtime:event', handler);
-    return () => ipcRenderer.removeListener('runtime:event', handler);
+    // Subscriber in the fan-out set — does NOT steal the channel from the
+    // app's turn handler (see the fan-out comment above the dispatcher).
+    eventSubscribers.add(callback);
+    return () => eventSubscribers.delete(callback);
   },
   httpServerInfo: (): Promise<string | null> => ipcRenderer.invoke('runtime:httpServerInfo'),
   lanAddress: (): Promise<string> => ipcRenderer.invoke('runtime:lanAddress'),
@@ -138,8 +153,8 @@ contextBridge.exposeInMainWorld('starriver', {
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   saveTempFile: (name: string, base64Data: string): Promise<string> =>
     ipcRenderer.invoke('runtime:saveTempFile', name, base64Data),
-  fetchProviderModels: (baseUrl: string, apiKey?: string, engine?: 'ollama' | 'lmstudio') =>
-    ipcRenderer.invoke('runtime:fetchProviderModels', baseUrl, apiKey, engine),
+  fetchProviderModels: (baseUrl: string, apiKey?: string, engine?: 'ollama' | 'lmstudio', apiFormat?: string) =>
+    ipcRenderer.invoke('runtime:fetchProviderModels', baseUrl, apiKey, engine, apiFormat),
   // Open the workspace directory in the user's terminal / IDE (main-process
   // spawn; `command` = settings template with a {dir} placeholder).
   openTerminal: (cwd: string, command?: string): Promise<{ ok: boolean }> =>

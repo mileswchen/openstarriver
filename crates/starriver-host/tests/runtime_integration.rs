@@ -135,6 +135,46 @@ fn workspace_crud_roundtrip() {
     assert!(t.host.list_workspaces().is_empty());
 }
 
+/// WI-243 pin-to-top through the real HostRuntime dispatch wrapper
+/// (sessions.rs `set_workspace_pinned` → host_store), exercising the
+/// `pinned_at` mapping in `list_workspaces`/`workspace_info` end to end.
+#[test]
+fn workspace_pin_roundtrip() {
+    let t = test_host();
+    let a = t.workdir.join("alpha");
+    let b = t.workdir.join("beta");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    let wa = t.host.create_workspace(a.to_string_lossy().into_owned()).unwrap();
+    let wb = t.host.create_workspace(b.to_string_lossy().into_owned()).unwrap();
+
+    // Fresh workspaces are unpinned.
+    assert!(t.host.list_workspaces().iter().all(|w| w.pinned_at.is_none()));
+
+    // Pin beta → hoists to the top with a stamp.
+    t.host.set_workspace_pinned(wb.id.clone(), true).unwrap();
+    let listed = t.host.list_workspaces();
+    assert_eq!(listed[0].id, wb.id);
+    assert!(listed[0].pinned_at.is_some());
+
+    // Pin alpha later → newest pin on top, strictly greater stamp.
+    t.host.set_workspace_pinned(wa.id.clone(), true).unwrap();
+    let listed = t.host.list_workspaces();
+    assert_eq!(listed[0].id, wa.id);
+    assert!(listed[0].pinned_at.unwrap() > listed[1].pinned_at.unwrap());
+
+    // Unpin alpha → beta (still pinned) returns to the top; alpha unpinned.
+    t.host.set_workspace_pinned(wa.id.clone(), false).unwrap();
+    let listed = t.host.list_workspaces();
+    assert_eq!(listed[0].id, wb.id);
+    let alpha = listed.iter().find(|w| w.id == wa.id).unwrap();
+    assert!(alpha.pinned_at.is_none());
+
+    // Unknown id is an error, not a silent no-op (BUG-P1).
+    let err = t.host.set_workspace_pinned("no-such-ws".into(), true).unwrap_err();
+    assert!(err.to_string().contains("not found"), "{err}");
+}
+
 #[test]
 fn malformed_config_returns_err() {
     let dir = TempDir::new().expect("tempdir");

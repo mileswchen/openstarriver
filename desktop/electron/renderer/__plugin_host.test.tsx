@@ -78,6 +78,62 @@ describe('syncPluginTabs', () => {
     expect(getTab('plugin:skills-only:whatever')).toBeUndefined();
   });
 
+  it('prefers the shell dictionary label for a first-party plugin tab', async () => {
+    // starpaper/workbench carries translations in i18n en.json/zh.json
+    // (`pluginTabs.starpaper.workbench`); the manifest title stays Chinese and
+    // must not leak into the labelKey.
+    fakeStarriver([
+      {
+        name: 'starpaper',
+        ui: {
+          entry: 'index.html',
+          entryUrl: 'starriver-plugin://starpaper/ui/index.html',
+          tabs: [{ id: 'workbench', title: '论文工作台' }],
+          permissions: [],
+          theme: null,
+          themeCss: null,
+        },
+      },
+    ]);
+    await syncPluginTabs();
+    expect(getTab('plugin:starpaper:workbench')!.labelKey).toBe('pluginTabs.starpaper.workbench');
+  });
+
+  it('delivers manifest titles as registry labels (plugin-owned i18n wins)', async () => {
+    fakeStarriver([
+      {
+        name: 'starpaper',
+        ui: {
+          entry: 'index.html',
+          entryUrl: 'starriver-plugin://starpaper/ui/index.html',
+          tabs: [{ id: 'workbench', title: '论文工作台', titles: { en: 'Paper Workbench', zh: '论文工作台' } }],
+          permissions: [],
+          theme: null,
+          themeCss: null,
+        },
+      },
+    ]);
+    await syncPluginTabs();
+    const tab = getTab('plugin:starpaper:workbench');
+    expect(tab!.labels).toEqual({ en: 'Paper Workbench', zh: '论文工作台' });
+    // A title-less tab registers no labels (dictionary/raw-title fallback path).
+    fakeStarriver([
+      {
+        name: 'bare',
+        ui: {
+          entry: 'index.html',
+          entryUrl: 'starriver-plugin://bare/ui/index.html',
+          tabs: [{ id: 't', title: 'Raw' }],
+          permissions: [],
+          theme: null,
+          themeCss: null,
+        },
+      },
+    ]);
+    await syncPluginTabs();
+    expect(getTab('plugin:bare:t')!.labels).toBeUndefined();
+  });
+
   it('re-sync removes previously registered plugin tabs', async () => {
     fakeStarriver([
       {

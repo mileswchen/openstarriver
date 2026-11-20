@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { LanChatDialog, useLanChatUnread } from './app';
+import { LanChatDialog, useLanChatUnread, LAN_CHAT_IMAGE_MAX_BYTES } from './app';
 import { I18nProvider } from './i18n';
 
 const originalStarriver = (window as any).starriver;
@@ -197,5 +197,51 @@ describe('useLanChatUnread — 侧栏徽标数据', () => {
     }
     render(<I18nProvider><Probe /></I18nProvider>);
     await waitFor(() => expect(probe).toBe(0));
+  });
+});
+
+describe('LAN chat 图片大小门槛（20MiB，与 host attachment store 准入对齐）', () => {
+  it('上限常量为 20 MiB', () => {
+    expect(LAN_CHAT_IMAGE_MAX_BYTES).toBe(20 * 1024 * 1024);
+  });
+
+  it('超过上限的文件被拒：本地化 20MB 文案且不发送', async () => {
+    await renderDialog();
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([new Uint8Array([1, 2, 3])], 'huge.png', { type: 'image/png' });
+    // 仅覆盖声明大小以触发门槛（门槛在读取/解码之前），避免分配 20MB。
+    Object.defineProperty(file, 'size', { value: LAN_CHAT_IMAGE_MAX_BYTES + 1 });
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() =>
+      expect(screen.getByTestId('lan-chat-error').textContent).toContain('under 20MB'),
+    );
+    expect(sends.length).toBe(0);
+  });
+
+  it('恰好等于上限（==20MiB）放行并发送（门槛为严格大于）', async () => {
+    // jsdom 不解码图片：stub Image 使选择器的 onload 立即完成。
+    const pngBytes = Uint8Array.from(atob(TINY_PNG_BASE64), (c) => c.charCodeAt(0));
+    class MockImage {
+      width = 10;
+      height = 10;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_v: string) {
+        setTimeout(() => this.onload?.(), 0);
+      }
+    }
+    vi.stubGlobal('Image', MockImage);
+    try {
+      await renderDialog();
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const file = new File([pngBytes], 'ok.png', { type: 'image/png' });
+      Object.defineProperty(file, 'size', { value: LAN_CHAT_IMAGE_MAX_BYTES });
+      fireEvent.change(input, { target: { files: [file] } });
+      await waitFor(() => expect(sends.length).toBe(1));
+      expect(sends[0]).toMatchObject({ peerId: 'peer-dev', kind: 'image', mime: 'image/png' });
+      expect(screen.queryByTestId('lan-chat-error')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -5,6 +5,7 @@
 import React, { useEffect, useRef } from 'react';
 import { createIpcClient, EventEnvelope, ProtocolClient } from '../client/client';
 import { PROTOCOL_METHODS } from '../client/client.gen';
+import { hasTranslation } from '../i18n';
 import {
   registerShellReplacement,
   registerTab,
@@ -30,6 +31,8 @@ function getClient(): ProtocolClient {
 export interface PluginUiTabInfo {
   id: string;
   title: string;
+  /** Per-language titles from the manifest — the plugin's own i18n for its tab. */
+  titles?: Record<string, string>;
 }
 
 export interface PluginUiInfo {
@@ -39,6 +42,8 @@ export interface PluginUiInfo {
   permissions: string[];
   theme: string | null;
   themeCss: string | null;
+  /** Full `<svg>` markup served from the plugin's manifest icon file; sidebar renders it at 16px with currentColor. */
+  iconSvg?: string | null;
 }
 
 export interface PluginUiContribution {
@@ -47,7 +52,7 @@ export interface PluginUiContribution {
 }
 
 const GENERIC_PLUGIN_ICON =
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M3 3h3.5a1.5 1.5 0 0 1 3 0H13v3.5a1.5 1.5 0 0 1 0 3V13H9.5a1.5 1.5 0 0 1-3 0H3V9.5a1.5 1.5 0 0 1 0-3z"/></svg>';
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5.8 2.2v3.3M10.2 2.2v3.3"/><path d="M4.4 5.5h7.2v1.9a3.6 3.6 0 0 1-7.2 0z"/><path d="M8 11.6v2.2"/></svg>';
 
 /** Methods a plugin frame may call = manifest permissions ⊆ required permissions. */
 export function canInvoke(permissions: string[], method: string): boolean {
@@ -199,10 +204,18 @@ export async function syncPluginTabs(): Promise<void> {
       if (tab.id === '__shell') continue;
       const id = `plugin:${plugin.name}:${tab.id}`;
       registeredPluginTabIds.push(id);
+      // Sidebar label precedence: ① manifest `titles` (plugin-owned i18n, passed
+      // as `labels`); ② shell dictionary key `pluginTabs.<plugin>.<tabId>` in
+      // en.json/zh.json (fallback for first-party plugins whose manifests don't
+      // carry translations yet); ③ raw manifest `title` (t() renders it verbatim).
+      // No re-sync needed on language switch — the sidebar re-renders via i18n
+      // context and picks the language from `labels` at render time.
+      const labelKey = `pluginTabs.${plugin.name}.${tab.id}`;
       registerTab({
         id,
-        labelKey: tab.title,
-        icon: GENERIC_PLUGIN_ICON,
+        labelKey: hasTranslation(labelKey) ? labelKey : tab.title,
+        labels: tab.titles && Object.keys(tab.titles).length > 0 ? tab.titles : undefined,
+        icon: ui.iconSvg || GENERIC_PLUGIN_ICON,
         render: () => <PluginTab plugin={plugin} tab={tab} />,
       });
     }

@@ -199,6 +199,10 @@ export const LEGACY_METHODS: Record<string, LegacySpec> = {
     method: 'workspaces.rename',
     params: ([workspaceId, title]) => ({ workspaceId, title }),
   },
+  pinWorkspace: {
+    method: 'workspaces.pin',
+    params: ([workspaceId, pinned]) => ({ workspaceId, pinned }),
+  },
   deleteWorkspace: {
     method: 'workspaces.delete',
     params: ([workspaceId]) => ({ workspaceId }),

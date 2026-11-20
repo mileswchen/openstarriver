@@ -162,6 +162,7 @@ pub fn build() -> MethodRegistry<HostRuntime> {
         workspaces_rename(),
         workspaces_active(),
         HostRuntime::__api_workspaces_delete(),
+        HostRuntime::__api_workspaces_pin(),
         workspaces_activate(),
     ])
 }
@@ -3063,6 +3064,7 @@ fn workspace_info_json(w: &types::WorkspaceInfo) -> Value {
         "path": w.path,
         "title": w.title,
         "createdAt": w.created_at,
+        "pinnedAt": w.pinned_at,
         "sessionIds": w.session_ids,
     })
 }
@@ -3108,13 +3110,37 @@ fn plugin_entry_json(p: &types::PluginEntry) -> Value {
                 .ok()
                 .filter(|css| css.len() <= 64 * 1024)
         });
+        // Tab icon SVG, same pipeline as theme_css: small file read from the
+        // installed plugin's ui/ dir, delivered inline with plugins.list.
+        let icon_svg = ui.icon.as_deref().and_then(|icon| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            let path = std::path::Path::new(&home)
+                .join(".starriver")
+                .join("plugins")
+                .join(&p.name)
+                .join("ui")
+                .join(icon);
+            std::fs::read_to_string(&path)
+                .ok()
+                .filter(|svg| svg.len() <= 8 * 1024)
+        });
+        // Tab titles: manifest `titles` (per-language, self-contained plugin i18n)
+        // is delivered only when present so old manifests keep the same shape.
         json!({
             "entry": ui.entry,
             "entryUrl": entry_url,
-            "tabs": ui.tabs.iter().map(|t| json!({ "id": t.id, "title": t.title })).collect::<Vec<_>>(),
+            "tabs": ui.tabs.iter().map(|t| {
+                let mut tab = json!({ "id": t.id, "title": t.title });
+                if !t.titles.is_empty() {
+                    tab["titles"] = json!(t.titles);
+                }
+                tab
+            }).collect::<Vec<_>>(),
             "permissions": ui.permissions,
             "theme": ui.theme,
             "themeCss": theme_css,
+            "icon": ui.icon,
+            "iconSvg": icon_svg,
         })
     });
     json!({
@@ -3215,6 +3241,93 @@ mod tests {
         ] {
             assert!(registry.get(name).is_some(), "missing method {name}");
         }
+    }
+
+    /// Plugin icon plumbing: manifest `ui.icon` (path relative to `ui/`) is
+    /// read from the installed plugin dir and delivered inline as `iconSvg`;
+    /// a missing/unreadable file degrades to null (renderer falls back to the
+    /// generic plugin icon).
+    #[test]
+    fn plugin_entry_json_delivers_icon_svg() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        let dir = std::path::Path::new(&home)
+            .join(".starriver")
+            .join("plugins")
+            .join("icon-probe-test")
+            .join("ui");
+        std::fs::create_dir_all(&dir).unwrap();
+        let svg = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\"><path d=\"M1 1h14v14H1z\"/></svg>";
+        std::fs::write(dir.join("icon.svg"), svg).unwrap();
+
+        let ui = types::PluginUiEntry {
+            entry: "index.html".into(),
+            tabs: vec![types::PluginUiTab { id: "w".into(), title: "t".into(), titles: Default::default() }],
+            permissions: vec![],
+            theme: None,
+            icon: Some("icon.svg".into()),
+        };
+        let entry = types::PluginEntry {
+            name: "icon-probe-test".into(),
+            description: String::new(),
+            version: String::new(),
+            skills: vec![],
+            ui: Some(ui),
+            source_url: String::new(),
+            installed_at: String::new(),
+        };
+        let out = plugin_entry_json(&entry);
+        let ui_json = out["ui"].as_object().unwrap();
+        assert_eq!(ui_json["icon"], "icon.svg");
+        assert_eq!(ui_json["iconSvg"], serde_json::Value::String(svg.into()));
+
+        // Unreadable icon (declared but absent) → null, not an error.
+        let mut broken = entry.clone();
+        broken.ui.as_mut().unwrap().icon = Some("missing.svg".into());
+        let out = plugin_entry_json(&broken);
+        assert!(out["ui"]["iconSvg"].is_null());
+
+        std::fs::remove_dir_all(dir.parent().unwrap()).ok();
+    }
+
+    /// Manifest-level i18n: `tabs[].titles` (per-language) flows through
+    /// `plugins.list`; tabs without `titles` keep the exact legacy shape.
+    #[test]
+    fn plugin_entry_json_delivers_tab_titles() {
+        let make = |titles: std::collections::BTreeMap<String, String>| {
+            types::PluginEntry {
+                name: "i18n-probe".into(),
+                description: String::new(),
+                version: String::new(),
+                skills: vec![],
+                ui: Some(types::PluginUiEntry {
+                    entry: "index.html".into(),
+                    tabs: vec![types::PluginUiTab {
+                        id: "workbench".into(),
+                        title: "论文工作台".into(),
+                        titles,
+                    }],
+                    permissions: vec![],
+                    theme: None,
+                    icon: None,
+                }),
+                source_url: String::new(),
+                installed_at: String::new(),
+            }
+        };
+
+        let localized = make(std::collections::BTreeMap::from([
+            ("en".to_string(), "Paper Workbench".to_string()),
+            ("zh".to_string(), "论文工作台".to_string()),
+        ]));
+        let tab = &plugin_entry_json(&localized)["ui"]["tabs"][0];
+        assert_eq!(tab["titles"]["en"], "Paper Workbench");
+        assert_eq!(tab["titles"]["zh"], "论文工作台");
+
+        let bare = make(Default::default());
+        let tab = &plugin_entry_json(&bare)["ui"]["tabs"][0];
+        assert_eq!(tab["title"], "论文工作台");
+        // Legacy shape: no titles key at all when the manifest has none.
+        assert!(tab.get("titles").is_none());
     }
 
     /// WI-31 regression: `settings.update` must accept a real patch object —
@@ -3330,6 +3443,7 @@ mod tests {
             "workspaces.create",
             "workspaces.rename",
             "workspaces.delete",
+            "workspaces.pin",
             "workspace.diffStat",
             "workspaces.activate",
             "project.agents.init",
@@ -3507,6 +3621,120 @@ mod tests {
         assert!(response.ok, "{response:?}");
         let skills = response.result.unwrap();
         assert!(skills.is_array(), "skills.delete result must be an array");
+    }
+
+    /// WI-243 pin-to-top through the protocol catalog: the `#[api_method]`
+    /// entry (`__api_workspaces_pin`) enforces `workspaces:write`, validates
+    /// params, maps host errors, and `workspaces.list` serializes `pinnedAt`
+    /// with newest-pin-first ordering. Two distinct callers (a whitelisted
+    /// plugin frame and the builtin client) drive the same shared registry.
+    #[test]
+    fn workspaces_pin_dispatch_permissions_and_ordering() {
+        use starriver_protocol::permission::CallerScope;
+        use tempfile::TempDir;
+
+        // Pin HOME to a writable tempdir BEFORE booting: the host installs a
+        // process-global tracing file appender under $HOME/.starriver/logs
+        // (logging.rs, OnceLock — first boot wins the init race). The sandbox
+        // denies writes to the real home, so rolling::daily panics otherwise
+        // (the pre-existing macro_generated test hits the same wall). Leak the
+        // tempdir so the global appender outlives this test.
+        let home = tempfile::tempdir().expect("temp home");
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("STARRIVER_DISABLE_KEYCHAIN", "1");
+        std::mem::forget(home);
+
+        let dir = TempDir::new().expect("tempdir");
+        let db = dir.path().join("test.db");
+        let config = format!(
+            "version: 1\nmode: offline\ninference: {{ engines: [] }}\nagent: {{}}\nserver: {{ http: {{ enabled: false, bind: \"127.0.0.1:0\" }} }}\nsession: {{ db_path: \"{}\" }}\n",
+            db.display().to_string().replace('\\', "/")
+        );
+        let host = std::sync::Arc::new(
+            starriver_host::HostRuntime::new(Some(config)).expect("host boots"),
+        );
+        let registry = build();
+
+        let alpha = dir.path().join("alpha");
+        let beta = dir.path().join("beta");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&beta).unwrap();
+        let wa = host.create_workspace(alpha.to_string_lossy().into_owned()).unwrap();
+        let wb = host.create_workspace(beta.to_string_lossy().into_owned()).unwrap();
+
+        // A plugin caller WITHOUT workspaces:write is denied (FORBIDDEN).
+        let denied = CallerScope::plugin("demo", vec![]);
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id("pin-denied", "workspaces.pin", json!({ "workspaceId": wb.id, "pinned": true })),
+                Some(&denied),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "FORBIDDEN");
+
+        // Missing required `pinned` → schema validation intercepts first.
+        let bad = registry
+            .dispatch(
+                &host,
+                &request_with_id("pin-bad", "workspaces.pin", json!({ "workspaceId": wb.id })),
+                None,
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(bad.code, "INVALID_PARAMS");
+
+        // A plugin caller WITH workspaces:write may pin beta.
+        let granted = CallerScope::plugin("demo", vec![PERM_WORKSPACES_WRITE.into()]);
+        let ok = registry
+            .dispatch(
+                &host,
+                &request_with_id("pin-beta", "workspaces.pin", json!({ "workspaceId": wb.id, "pinned": true })),
+                Some(&granted),
+                None,
+            )
+            .unwrap();
+        assert!(ok.ok, "{ok:?}");
+
+        // workspaces.list reflects the pin: beta on top, pinnedAt non-null.
+        let list = registry
+            .dispatch(&host, &request_with_id("list-1", "workspaces.list", json!({})), None, None)
+            .unwrap();
+        let arr = list.result.unwrap();
+        let arr = arr.as_array().unwrap();
+        assert_eq!(arr[0]["id"], json!(wb.id));
+        assert!(arr[0]["pinnedAt"].is_i64(), "pinnedAt must serialize: {arr:?}");
+
+        // A second client (builtin) pins alpha → newest pin hoists above beta.
+        let ok2 = registry
+            .dispatch(
+                &host,
+                &request_with_id("pin-alpha", "workspaces.pin", json!({ "workspaceId": wa.id, "pinned": true })),
+                Some(&CallerScope::builtin()),
+                None,
+            )
+            .unwrap();
+        assert!(ok2.ok);
+        let list2 = registry
+            .dispatch(&host, &request_with_id("list-2", "workspaces.list", json!({})), None, None)
+            .unwrap();
+        let arr2 = list2.result.unwrap();
+        let arr2 = arr2.as_array().unwrap();
+        assert_eq!(arr2[0]["id"], json!(wa.id));
+        assert!(arr2[0]["pinnedAt"].as_i64().unwrap() > arr2[1]["pinnedAt"].as_i64().unwrap());
+
+        // Unknown id → host error mapped to INTERNAL with the store message.
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id("pin-unknown", "workspaces.pin", json!({ "workspaceId": "no-such-ws", "pinned": true })),
+                None,
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "INTERNAL");
+        assert!(err.message.contains("not found"), "{err:?}");
     }
 
     /// FPM acceptance #5: two HTTP clients operate on the same session

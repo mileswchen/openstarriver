@@ -42,6 +42,7 @@ desktop/electron/main.js
 desktop/electron/preload.js
 desktop/electron/daemon.js
 desktop/electron/legacyBridge.js
+desktop/electron/providerProbe.js
 desktop/electron/*.js.map
 desktop/electron/renderer/bundle.js
 

@@ -18,6 +18,9 @@ pub struct WorkspaceView {
     pub title: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Pin stamp (ms epoch): Some = pinned, newer pins sort first; None =
+    /// unpinned (legacy created_at order). WI: workspace pin-to-top.
+    pub pinned_at: Option<i64>,
     pub session_ids: Vec<String>,
 }
 
@@ -54,6 +57,34 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Additive column migration tolerant of concurrent openers (BUG-P3):
+/// daemon + TUI can both observe the column missing and both issue the
+/// ALTER; the loser's "duplicate column name" is benign and ignored.
+/// Table/column names are internal constants, never user input.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> anyhow::Result<()> {
+    let has = conn
+        .prepare(&format!(
+            "SELECT 1 FROM pragma_table_info('{table}') WHERE name = '{column}'"
+        ))?
+        .exists([])?;
+    if has {
+        return Ok(());
+    }
+    match conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+        [],
+    ) {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_string().contains("duplicate column name") => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 impl HostStore {
     /// Open (or create) the host store and register the bus projection
     /// listener for `session/event` occurrences.
@@ -64,13 +95,18 @@ impl HostStore {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        let init = || -> anyhow::Result<Connection> {
         let db = Connection::open(&path)?;
         db.execute_batch(
-            "PRAGMA journal_mode = WAL;
+            "PRAGMA busy_timeout = 5000;
+             -- busy_timeout FIRST: it is per-connection and must be active
+             -- before journal_mode=WAL / CREATE TABLE take write locks, so
+             -- concurrent opens of a legacy DB wait for the lock instead of
+             -- failing 'database is locked' (BUG-P3).
+             PRAGMA journal_mode = WAL;
              -- WAL + NORMAL: consistent, and commits stop fsync-per-write
              -- (durability window widens to checkpoint intervals only).
              PRAGMA synchronous = NORMAL;
-             PRAGMA busy_timeout = 5000;
              -- Members cascade on group delete; do not rely on the
              -- SQLITE_DEFAULT_FOREIGN_KEYS build default.
              PRAGMA foreign_keys = ON;
@@ -108,36 +144,42 @@ impl HostStore {
              );",
         )?;
         // Additive migration for DBs created before the per-session execution
-        // mode: ALTER on open (idempotent check via table_info).
+        // mode: ALTER on open (idempotent, concurrent-open safe — BUG-P3).
         {
             let conn = Connection::open(&path)?;
-            let has_col = conn
-                .prepare("SELECT 1 FROM pragma_table_info('session_projcache') WHERE name = 'execution_mode'")?
-                .exists([])?;
-            if !has_col {
-                conn.execute(
-                    "ALTER TABLE session_projcache ADD COLUMN execution_mode TEXT",
-                    [],
-                )?;
-            }
-            let has_agent = conn
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('session_projcache') WHERE name = 'agent'",
-                )?
-                .exists([])?;
-            if !has_agent {
-                conn.execute("ALTER TABLE session_projcache ADD COLUMN agent TEXT", [])?;
-            }
+            // BUG-P3: busy_timeout is per-connection (not sticky like WAL), so
+            // this migration connection must set it too. Without it, concurrent
+            // opens of a legacy DB race on ALTER TABLE and fail immediately with
+            // "database is locked" instead of waiting for the write lock.
+            conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
+            add_column_if_missing(&conn, "session_projcache", "execution_mode", "TEXT")?;
+            add_column_if_missing(&conn, "session_projcache", "agent", "TEXT")?;
             // WI-152: scheduled-run origin stamp (Tasks → Scheduled runs grouping).
-            let has_origin = conn
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('session_projcache') WHERE name = 'origin'",
-                )?
-                .exists([])?;
-            if !has_origin {
-                conn.execute("ALTER TABLE session_projcache ADD COLUMN origin TEXT", [])?;
-            }
+            add_column_if_missing(&conn, "session_projcache", "origin", "TEXT")?;
+            // Workspace pin-to-top: NULL = unpinned; a pin stamps ms epoch so
+            // the pinned group sorts newest-pin-first without a second column.
+            add_column_if_missing(&conn, "workspaces", "pinned_at", "INTEGER")?;
         }
+        Ok(db)
+        };
+        // BUG-P3: schema init + migration are idempotent, but simultaneous
+        // opens of a legacy DB can hit a transient "database is locked" that
+        // busy_timeout does not retry (WAL journal-mode conversion / snapshot
+        // races). Retry with backoff so concurrent opens converge instead of
+        // failing the boot.
+        let db = {
+            let mut attempt: u64 = 0;
+            loop {
+                match init() {
+                    Ok(db) => break db,
+                    Err(e) if attempt < 40 && e.to_string().contains("database is locked") => {
+                        attempt += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(10 * attempt));
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        };
         let db = Arc::new(Mutex::new(db));
 
         let projection_db = Arc::clone(&db);
@@ -275,6 +317,39 @@ impl HostStore {
         Ok(())
     }
 
+    /// Pin/unpin a workspace (sidebar pin-to-top). Pinning stamps `pinned_at`
+    /// with a strictly monotonic ms stamp so the pinned group sorts
+    /// newest-pin-first; unpinning clears it back to the legacy created_at
+    /// order.
+    pub fn set_workspace_pinned(&self, id: &str, pinned: bool) -> Result<(), String> {
+        let conn = self.db.lock().expect("host store poisoned");
+        let now = now_ms();
+        // BUG-P1: raw now_ms() ties (two pins in the same millisecond) or
+        // goes backwards (NTP step), and the created_at tiebreak then sinks
+        // a fresh re-pin below older pins. Outrank every incumbent stamp so
+        // "newest pin on top" holds regardless of the wall clock. The MAX is
+        // folded into the UPDATE itself: one atomic statement, so even two
+        // processes pinning the same db concurrently cannot share a stamp.
+        // typeof guard: a corrupt TEXT stamp must not poison MAX (BUG-P2).
+        let sql = if pinned {
+            "UPDATE workspaces
+             SET pinned_at = MAX(?2, (SELECT COALESCE(MAX(pinned_at), 0) + 1
+                                      FROM workspaces
+                                      WHERE typeof(pinned_at) = 'integer')),
+                 updated_at = ?3
+             WHERE id = ?1"
+        } else {
+            "UPDATE workspaces SET pinned_at = NULL, updated_at = ?3 WHERE id = ?1"
+        };
+        let updated = conn
+            .execute(sql, rusqlite::params![id, now, now])
+            .map_err(|e| e.to_string())?;
+        if updated == 0 {
+            return Err("workspace not found".into());
+        }
+        Ok(())
+    }
+
     pub fn delete_workspace(&self, id: &str) -> Result<(), String> {
         let conn = self.db.lock().expect("host store poisoned");
         conn.execute("DELETE FROM workspaces WHERE id = ?1", [id])
@@ -294,14 +369,22 @@ impl HostStore {
         let mut stmt = conn
             .prepare(
                 "SELECT w.id, w.path, w.title, w.created_at, w.updated_at,
-                        m.session_id
+                        m.session_id, w.pinned_at
                  FROM workspaces w
                  LEFT JOIN workspace_members m ON m.workspace_id = w.id
-                 ORDER BY w.created_at, m.position",
+                 ORDER BY (typeof(w.pinned_at) <> 'integer'), w.pinned_at DESC, w.created_at, m.position",
             )
             .expect("prepare workspaces");
         let rows = stmt
             .query_map([], |row| {
+                // BUG-P2: a corrupt non-integer pinned_at must degrade to
+                // "unpinned", not error the row out of existence —
+                // rows.flatten() below would silently hide the workspace.
+                let pinned_at = match row.get::<_, rusqlite::types::Value>(6)? {
+                    rusqlite::types::Value::Integer(v) => Some(v),
+                    rusqlite::types::Value::Text(s) => s.parse::<i64>().ok(),
+                    _ => None,
+                };
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -309,12 +392,13 @@ impl HostStore {
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, Option<String>>(5)?,
+                    pinned_at,
                 ))
             })
             .expect("query workspaces");
         let mut by_id: Vec<(WorkspaceView, Vec<String>)> = Vec::new();
         for row in rows.flatten() {
-            let (id, path, title, created_at, updated_at, session_id) = row;
+            let (id, path, title, created_at, updated_at, session_id, pinned_at) = row;
             if let Some(entry) = by_id.iter_mut().find(|(w, _)| w.id == id) {
                 if let Some(session_id) = session_id {
                     entry.1.push(session_id);
@@ -327,6 +411,7 @@ impl HostStore {
                         title,
                         created_at,
                         updated_at,
+                        pinned_at,
                         session_ids: Vec::new(),
                     },
                     session_id.into_iter().collect(),
@@ -854,6 +939,221 @@ mod tests {
         assert!(store
             .resolve_workspace(dir.path().join("nope").to_str().unwrap())
             .is_err());
+    }
+
+    /// Pin-to-top: pinned workspaces sort above the rest, newest pin first;
+    /// unpinning drops back to the legacy created_at order.
+    #[test]
+    fn workspace_pin_sorts_pinned_first_newest_on_top() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HostStore::open(dir.path().join("host.db"), EventBus::new()).unwrap();
+        let mut ids = Vec::new();
+        for name in ["alpha", "beta", "gamma"] {
+            let path = dir.path().join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            let (id, _) = store.resolve_workspace(path.to_str().unwrap()).unwrap();
+            ids.push(id);
+            // created_at is ms-granular; space the births so the unpinned
+            // order is deterministic.
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let titles = || -> Vec<String> {
+            store.list_workspaces().into_iter().map(|w| w.title).collect()
+        };
+        assert_eq!(titles(), vec!["alpha", "beta", "gamma"]);
+
+        store.set_workspace_pinned(&ids[1], true).unwrap();
+        assert_eq!(titles(), vec!["beta", "alpha", "gamma"]);
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        store.set_workspace_pinned(&ids[0], true).unwrap();
+        assert_eq!(titles(), vec!["alpha", "beta", "gamma"]); // newest pin on top
+        assert!(store.list_workspaces()[0].pinned_at.is_some());
+
+        // Rename keeps the pin.
+        store.rename_workspace(&ids[0], "alpha-renamed").unwrap();
+        assert_eq!(titles()[0], "alpha-renamed");
+        assert!(store.list_workspaces()[0].pinned_at.is_some());
+
+        store.set_workspace_pinned(&ids[0], false).unwrap();
+        assert_eq!(titles(), vec!["beta", "alpha-renamed", "gamma"]);
+        store.set_workspace_pinned(&ids[1], false).unwrap();
+        assert_eq!(titles(), vec!["alpha-renamed", "beta", "gamma"]);
+        assert!(store.list_workspaces().iter().all(|w| w.pinned_at.is_none()));
+    }
+
+    #[test]
+    fn workspace_pin_unknown_id_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HostStore::open(dir.path().join("host.db"), EventBus::new()).unwrap();
+        let err = store.set_workspace_pinned("/no/such/ws", true).unwrap_err();
+        assert_eq!(err, "workspace not found");
+    }
+
+    /// The pinned_at ALTER is idempotent: reopening an already-migrated (and
+    /// already-pinned) store keeps the pin and does not fail on the column.
+    #[test]
+    fn workspace_pin_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("host.db");
+        let path = dir.path().join("proj");
+        std::fs::create_dir_all(&path).unwrap();
+        let id = {
+            let store = HostStore::open(db.clone(), EventBus::new()).unwrap();
+            let (id, _) = store.resolve_workspace(path.to_str().unwrap()).unwrap();
+            store.set_workspace_pinned(&id, true).unwrap();
+            id
+        };
+        let store = HostStore::open(db, EventBus::new()).unwrap();
+        let views = store.list_workspaces();
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].id, id);
+        assert!(views[0].pinned_at.is_some());
+    }
+
+    /// BUG-P1 regression: re-pinning must ALWAYS hoist the workspace to the
+    /// top of the pinned group. Raw `now_ms()` stamps broke "newest pin on
+    /// top" whenever the wall clock tied an existing stamp (two pins in the
+    /// same millisecond) or stepped backwards (NTP correction): the re-pin
+    /// then stamped a value <= the incumbent and the row sank instead of
+    /// rising. The skew below stands in for both cases deterministically.
+    #[test]
+    fn workspace_pin_repin_always_hoists_even_with_skewed_stamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HostStore::open(dir.path().join("host.db"), EventBus::new()).unwrap();
+        let mut ids = Vec::new();
+        for name in ["alpha", "beta"] {
+            let path = dir.path().join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            let (id, _) = store.resolve_workspace(path.to_str().unwrap()).unwrap();
+            ids.push(id);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        store.set_workspace_pinned(&ids[0], true).unwrap();
+        store.set_workspace_pinned(&ids[1], true).unwrap();
+        // Existing stamps ahead of the wall clock (same-ms tie / clock step).
+        let future = now_ms() + 10_000;
+        store
+            .db
+            .lock()
+            .unwrap()
+            .execute("UPDATE workspaces SET pinned_at = ?1", [future])
+            .unwrap();
+        store.set_workspace_pinned(&ids[1], true).unwrap();
+        let views = store.list_workspaces();
+        assert_eq!(views[0].id, ids[1], "re-pinned workspace must hoist to top");
+        assert!(
+            views[0].pinned_at.unwrap() > future,
+            "fresh stamp must outrank every incumbent stamp"
+        );
+    }
+
+    /// BUG-P1 companion: rapid successive pins must never share a stamp,
+    /// otherwise the created_at tiebreak silently reorders the pinned group.
+    #[test]
+    fn workspace_pin_stamps_are_strictly_monotonic() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HostStore::open(dir.path().join("host.db"), EventBus::new()).unwrap();
+        let mut stamps = Vec::new();
+        for i in 0..6 {
+            let path = dir.path().join(format!("ws{i}"));
+            std::fs::create_dir_all(&path).unwrap();
+            let (id, _) = store.resolve_workspace(path.to_str().unwrap()).unwrap();
+            store.set_workspace_pinned(&id, true).unwrap();
+            stamps.push(store.list_workspaces()[0].pinned_at.unwrap());
+        }
+        for pair in stamps.windows(2) {
+            assert!(pair[1] > pair[0], "pin stamps must strictly increase: {stamps:?}");
+        }
+    }
+
+    /// BUG-P2 regression: a non-integer pinned_at (corrupt row, hand-edited
+    /// db, future schema drift) must not make the whole workspace vanish
+    /// from the sidebar — rows.flatten() silently dropped the errored row.
+    /// It must also degrade to the UNPINNED group in the sort order, not
+    /// hijack the top slot (TEXT sorts above INTEGER in SQLite DESC).
+    #[test]
+    fn workspace_pin_corrupt_stamp_does_not_hide_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HostStore::open(dir.path().join("host.db"), EventBus::new()).unwrap();
+        let mut ids = Vec::new();
+        for name in ["proj", "other"] {
+            let path = dir.path().join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            let (id, _) = store.resolve_workspace(path.to_str().unwrap()).unwrap();
+            ids.push(id);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        store.set_workspace_pinned(&ids[0], true).unwrap();
+        store.set_workspace_pinned(&ids[1], true).unwrap();
+        store
+            .db
+            .lock()
+            .unwrap()
+            .execute("UPDATE workspaces SET pinned_at = 'garbage' WHERE id = ?1", [&ids[0]])
+            .unwrap();
+        let views = store.list_workspaces();
+        assert_eq!(views.len(), 2, "corrupt stamp must not drop the workspace");
+        // The intact pin stays on top; the corrupt row falls back to the
+        // unpinned group (created_at order) instead of sorting above it.
+        assert_eq!(views[0].id, ids[1]);
+        assert_eq!(views[1].id, ids[0]);
+        assert!(views[1].pinned_at.is_none());
+    }
+
+    /// BUG-P3 regression: the check-then-ALTER migration races when two
+    /// processes open the same legacy db at once (daemon + TUI): both see
+    /// the column missing, both ALTER, the loser dies with "duplicate
+    /// column name" and the store fails to open.
+    #[test]
+    fn workspace_pin_migration_survives_concurrent_open() {
+        use std::sync::{Arc, Barrier};
+        for round in 0..8 {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("host.db");
+            // Legacy schema: workspaces without pinned_at, projcache without
+            // execution_mode — every racer must run the additive ALTERs.
+            Connection::open(&db)
+                .unwrap()
+                .execute_batch(
+                    "CREATE TABLE workspaces (
+                       id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE,
+                       title TEXT NOT NULL, created_at INTEGER NOT NULL,
+                       updated_at INTEGER NOT NULL);
+                     CREATE TABLE session_projcache (
+                       session_id TEXT PRIMARY KEY, title TEXT, title_source TEXT,
+                       workspace_id TEXT, archived_at INTEGER,
+                       message_count INTEGER NOT NULL DEFAULT 0,
+                       seq_watermark INTEGER NOT NULL DEFAULT 0);",
+                )
+                .unwrap();
+            let barrier = Arc::new(Barrier::new(4));
+            let mut handles = Vec::new();
+            for _ in 0..4 {
+                let db = db.clone();
+                let b = Arc::clone(&barrier);
+                handles.push(std::thread::spawn(move || {
+                    b.wait();
+                    HostStore::open(db, EventBus::new())
+                }));
+            }
+            let errs: Vec<String> = handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .filter_map(|r| r.err().map(|e| e.to_string()))
+                .collect();
+            assert!(errs.is_empty(), "round {round}: concurrent open failed: {errs:?}");
+        }
+    }
+
+    /// BUG-P3: the open retry loop must only swallow transient lock errors.
+    /// A non-lock failure (here: the path is a directory, not a SQLite file)
+    /// propagates immediately instead of being retried or masked.
+    #[test]
+    fn open_propagates_non_lock_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = HostStore::open(dir.path().to_path_buf(), EventBus::new());
+        assert!(result.is_err(), "opening a directory as a DB must fail");
     }
 
     /// BUG-44 regression: `stamp_execution_mode` is documented write-once

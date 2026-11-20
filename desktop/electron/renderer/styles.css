@@ -269,6 +269,23 @@ button { font-family: inherit; }
   align-items: center; transition: color 0.12s; border-radius: 4px;
 }
 .sb-ws-icon-btn:hover { color: var(--accent); }
+/* Pin-to-top: the badge beside the name is the always-visible pinned
+   marker; the action button follows the normal hover reveal and wears
+   the accent color while pinned. */
+.sb-ws-pin-badge {
+  display: inline-flex; align-items: center; flex-shrink: 0;
+  color: var(--accent); opacity: 0.85;
+}
+/* Hover/focus swaps the badge for the pin action button (and vice versa),
+   so the pinned row's width budget stays the same as an unpinned row —
+   otherwise badge + pin button together steal ~40px from the name and
+   long workspace titles truncate ("openst…"). */
+.sb-ws-group:hover .sb-ws-pin-badge,
+.sb-ws-group:focus-within .sb-ws-pin-badge { display: none; }
+.sb-ws-pin { display: none; }
+.sb-ws-group:hover .sb-ws-pin,
+.sb-ws-group:focus-within .sb-ws-pin { display: inline-flex; }
+.sb-ws-pin.is-pinned { color: var(--accent); }
 .sb-ws-session .sb-ws-icon-btn,
 .sb-ws-archived-row .sb-ws-icon-btn {
   opacity: 0; transition: opacity 0.12s;
@@ -2582,6 +2599,7 @@ button[data-tip]:hover::after,
 .sb-ws-group.is-active .sb-ws-chevron,
 .sb-ws-group.is-active .sb-ws-folder,
 .sb-ws-group.is-active .sb-ws-icon-btn,
+.sb-ws-group.is-active .sb-ws-pin-badge,
 .sb-ws-group.is-active .coding-group-delete { color: #ffffff; }
 
 /* ─── 侧栏当前会话：浅蓝色高亮（所在态）───

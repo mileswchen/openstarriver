@@ -3040,6 +3040,30 @@
       "streaming": false
     },
     {
+      "name": "workspaces.pin",
+      "params": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "workspaceId",
+          "pinned"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "workspaces:write"
+      ],
+      "streaming": false
+    },
+    {
       "name": "workspaces.activate",
       "params": {
         "type": "object",

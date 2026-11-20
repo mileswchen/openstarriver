@@ -23,8 +23,11 @@ module.exports = async function afterPack(context) {
   const iconDoc = path.join(__dirname, "..", "assets", "AppIcon.icon");
   if (!fs.existsSync(iconDoc)) return;
 
-  const outDir = fs.mkdtempSync("/tmp/starriver-icon-");
+  let outDir;
   try {
+    // os.tmpdir() respects $TMPDIR (sandboxed/CI builds redirect it); a
+    // hardcoded /tmp breaks packaging where /tmp is not writable.
+    outDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "starriver-icon-"));
     execFileSync("xcrun", [
       "actool", "--compile", outDir,
       "--platform", "macosx",
@@ -46,8 +49,16 @@ module.exports = async function afterPack(context) {
     }
     console.log(`  • modern icon: ${iconDoc} → Assets.car + CFBundleIconName (macOS 26+ borderless rendering)`);
   } catch (err) {
-    console.warn(`  • modern icon skipped: ${err.message || err}`);
+    // BUG-P21: execFileSync attaches the child's stderr as err.stderr —
+    // without it the warning only says "Command failed" and the real actool
+    // diagnostic is lost, making icon failures impossible to debug.
+    const detail = err && err.stderr ? String(err.stderr).trim() : "";
+    console.warn(`  • modern icon skipped: ${err.message || err}${detail ? ` — ${detail}` : ""}`);
   } finally {
-    fs.rmSync(outDir, { recursive: true, force: true });
+    // BUG-P20: cleanup is best-effort — a failing rmSync (EBUSY/EPERM on a
+    // locked temp dir) must never reject afterPack and break packaging.
+    if (outDir) {
+      try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
   }
 };

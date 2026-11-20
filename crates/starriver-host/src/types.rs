@@ -86,12 +86,16 @@ pub struct PluginUiEntry {
     pub tabs: Vec<PluginUiTab>,
     pub permissions: Vec<String>,
     pub theme: Option<String>,
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PluginUiTab {
     pub id: String,
     pub title: String,
+    /// Per-language titles from the manifest (`titles`); empty when the manifest
+    /// declares none (sidebar then falls back to dictionary/raw title).
+    pub titles: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -266,6 +270,9 @@ pub struct WorkspaceInfo {
     pub path: String,
     pub title: String,
     pub created_at: String,
+    /// Pin stamp (ms epoch); None = unpinned. The list arrives pre-sorted:
+    /// pinned first (newest pin on top), then created_at order.
+    pub pinned_at: Option<i64>,
     pub session_ids: Vec<String>,
 }
 

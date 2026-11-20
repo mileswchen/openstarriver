@@ -3768,6 +3768,9 @@ interface WorkspaceInfo {
   path: string;
   title: string;
   createdAt: string;
+  /** Pin stamp (ms epoch); null/undefined = unpinned. The backend returns
+   *  the list pre-sorted: pinned first (newest pin on top). */
+  pinnedAt?: number | null;
   sessionIds: string[];
 }
 
@@ -4008,12 +4011,13 @@ interface StarriverBridge {
   unarchiveSession(id: string): Promise<void>;
   assignSessionWorkspace(id: string, workspaceId: string): Promise<void>;
   listArchivedSessions(): Promise<SessionInfo[]>;
-  fetchProviderModels(baseUrl: string, apiKey?: string, engine?: 'ollama' | 'lmstudio'): Promise<{ ok: boolean; error?: string; models: { id: string; name: string; contextLength?: number }[] }>;
+  fetchProviderModels(baseUrl: string, apiKey?: string, engine?: 'ollama' | 'lmstudio', apiFormat?: string): Promise<{ ok: boolean; error?: string; models: { id: string; name: string; contextLength?: number }[] }>;
 
  // Workspaces (registry — pick an existing directory, no mkdir)
   listWorkspaces(): Promise<WorkspaceInfo[]>;
   createWorkspace(path: string): Promise<WorkspaceInfo>;
   renameWorkspace(workspaceId: string, title: string): Promise<void>;
+  pinWorkspace(workspaceId: string, pinned: boolean): Promise<void>;
   deleteWorkspace(workspaceId: string): Promise<void>;
   setActiveWorkspace(workspaceId: string | null, agent?: string): Promise<void>;
   getActiveWorkspace(agent?: string): Promise<string | null>;
@@ -4327,7 +4331,7 @@ function CreateSkillModal({ onClose, onSaved, initial }: {
 
 /* ─── PluginsTab ─── */
 
-function PluginsTab() {
+export function PluginsTab() {
   const [plugins, setPlugins] = useState<PluginEntry[]>([]);
   const [segment, setSegment] = useState<'installed' | 'market'>('installed');
   const [market, setMarket] = useState<any[]>([]);
@@ -4387,6 +4391,14 @@ function PluginsTab() {
           <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
             <input value={installUrl} onChange={(e) => setInstallUrl(e.target.value)} placeholder="Install from local dir or git URL"
               style={{ flex: 1, padding: '6px 10px', border: '1px solid var(--border-strong)', borderRadius: 5, fontSize: 13, outline: 'none' }} />
+            {/* Browse: pick the plugin directory from the filesystem dialog
+                instead of typing the path by hand (fills the input; the user
+                still presses Install to confirm). */}
+            <button className="btn btn-secondary btn-small" disabled={busy} title="Choose a local plugin directory"
+              onClick={async () => {
+                const dir = await window.starriver.selectDirectory?.();
+                if (dir) setInstallUrl(dir);
+              }}>Browse…</button>
             <button className="btn btn-primary btn-small" disabled={busy} onClick={() => handleInstall(installUrl)}>{busy ? 'Installing...' : 'Install'}</button>
           </div>
           {plugins.length === 0 && <p className="empty-text">No plugins installed. Install from the Market or a URL above.</p>}
@@ -4519,7 +4531,7 @@ function CredentialDot({ state }: { state: 'configured' | 'missing' | undefined 
 }
 
 /** What the fetch-available-models probe sends: the form's live endpoint facts. */
-interface CatalogProbe { baseUrl: string; apiKey: string; engine?: 'ollama' | 'lmstudio' }
+interface CatalogProbe { baseUrl: string; apiKey: string; engine?: 'ollama' | 'lmstudio'; apiFormat?: string }
 
 /** Per-field editing-buffer key (row index + field), so keystrokes survive re-renders. */
 const capBufferKey = (index: number) => `${index}:contextLength`;
@@ -4608,7 +4620,7 @@ export function ModelCatalogEditor(props: {
         return;
       }
       const result = await window.starriver.fetchProviderModels(
-        props.probe.baseUrl.trim(), props.probe.apiKey.trim() || undefined, props.probe.engine);
+        props.probe.baseUrl.trim(), props.probe.apiKey.trim() || undefined, props.probe.engine, props.probe.apiFormat);
       if (!result.ok) { setFetchError(result.error || t('models.fetchEmpty')); return; }
       if (result.models.length === 0) { setFetchError(t('models.fetchEmpty')); return; }
       // Everything already configured starts unchecked, so adopting a
@@ -4830,7 +4842,7 @@ const fieldLabelStyle: React.CSSProperties = {
 /**
  * One provider's edit card: the only primary field is the API key
  * input (saving it empty keeps the stored reference); the collapsed "custom settings" holds on-demand extras (API
- * URL, custom-route display name/protocol, Ollama model paths) and the model catalog; generation knobs
+ * format above the base URL, custom-route display name/protocol, Ollama model paths) and the model catalog; generation knobs
  * like reasoning effort live under "advanced". Saving goes through the models.add registry merge.
  */
 export function ProviderEditorCard({ entry, preset, hideTitle, onClose }: {
@@ -5024,6 +5036,17 @@ export function ProviderEditorCard({ entry, preset, hideTitle, onClose }: {
                 placeholder={id} onChange={(e) => setDisplayName(e.target.value)} style={inputStyle} />
             </div>
           )}
+          {/* API Format sits right above Base URL: the wire protocol and the
+              endpoint belong together (GLM protocol switches jump the URL). */}
+          <div>
+            <label style={fieldLabelStyle}>{t('models.apiFormat')}</label>
+            <select value={apiFormat} aria-label={t('models.apiFormat')} disabled={saving}
+              onChange={(e) => onApiFormatChange(e.target.value)} style={inputStyle}>
+              <option value="openai-chat">OpenAI Chat</option>
+              <option value="openai-responses">OpenAI Responses</option>
+              <option value="anthropic">Anthropic Messages</option>
+            </select>
+          </div>
           <div>
             <label style={fieldLabelStyle}>{t('models.baseUrl')}</label>
             <input value={baseUrl} aria-label={t('models.baseUrl')} disabled={saving}
@@ -5043,7 +5066,7 @@ export function ProviderEditorCard({ entry, preset, hideTitle, onClose }: {
             presetModels={preset?.models}
             defaultVariant={defaultVariant}
             disabled={saving}
-            probe={{ baseUrl, apiKey: keyDraft, engine }}
+            probe={{ baseUrl, apiKey: keyDraft, engine, apiFormat }}
             onChange={setVariants}
             onReset={() => setVariants((preset?.models ?? []).map((mid) => ({ id: mid, name: mid })))}
             onDefaultChange={setDefaultVariant}
@@ -5074,15 +5097,6 @@ export function ProviderEditorCard({ entry, preset, hideTitle, onClose }: {
             <label style={fieldLabelStyle}>{t('models.concurrency')}</label>
             <input type="number" placeholder="4" value={concurrency} aria-label={t('models.concurrency')}
               disabled={saving} onChange={(e) => setConcurrency(e.target.value)} style={inputStyle} />
-          </div>
-          <div>
-            <label style={fieldLabelStyle}>{t('models.apiFormat')}</label>
-            <select value={apiFormat} aria-label={t('models.apiFormat')} disabled={saving}
-              onChange={(e) => onApiFormatChange(e.target.value)} style={inputStyle}>
-              <option value="openai-chat">OpenAI Chat</option>
-              <option value="openai-responses">OpenAI Responses</option>
-              <option value="anthropic">Anthropic Messages</option>
-            </select>
           </div>
           <div>
             <label style={fieldLabelStyle}>{t('models.reasoningLabel')}</label>
@@ -5242,7 +5256,7 @@ export function CustomProviderForm({ taken, onClose }: {
         presetModels={undefined}
         defaultVariant={defaultVariant}
         disabled={saving}
-        probe={{ baseUrl, apiKey: keyDraft }}
+        probe={{ baseUrl, apiKey: keyDraft, apiFormat }}
         onChange={setVariants}
         onReset={() => {}}
         onDefaultChange={setDefaultVariant}
@@ -8070,6 +8084,56 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     setTimeout(() => setErrorMsg(null), 4000);
   }, []);
 
+  // 2026-11-13 self-heal backfill: the archive snapshot loads once per open,
+  // and mid-turn content rides the live event tail. When that tail breaks
+  // (stop watchdog fires, "no live agent" reset, or the 10s liveness probe
+  // finds the backend already finished), the ledger holds turns this view
+  // never rendered — re-fetch the snapshot and TRUST it: live rows carry no
+  // server seq and cannot be reconciled, so they are dropped in favour of
+  // the authoritative projection.
+  const reloadArchive = useCallback((sid: string) => {
+    if (!sid) return;
+    window.starriver.getSessionArchiveMessages?.(sid)
+      .then((msgs: any[]) => {
+        if (sessionIdRef2.current !== sid || !Array.isArray(msgs)) return;
+        setArchiveMessages(msgs.map((m: any) => ({
+          id: crypto.randomUUID(), role: m.role as Message['role'], content: m.content,
+          seq: m.seq ?? undefined,
+          ts: m.ts ?? undefined,
+          usage: m.usage ?? undefined,
+          durationMs: m.durationMs ?? undefined,
+          doneTs: m.doneTs ?? undefined,
+          fileChanges: m.fileChanges ?? undefined,
+        })));
+        setMessages([]);
+        messagesRef.current = [];
+      })
+      .catch(() => { /* snapshot refetch is best-effort */ });
+  }, []);
+
+  // 10s liveness probe while a turn is running: if the backend finished the
+  // turn but the terminal event never arrived (dead event tail), converge the
+  // UI exactly like a terminal event would — drop the run state and backfill
+  // from the archive. `cancel` is deliberately NOT used as the probe: on a
+  // live turn it would actually cancel.
+  useEffect(() => {
+    if (!sending) return;
+    const iv = setInterval(() => {
+      const sid = sessionIdRef2.current;
+      if (!sid) return;
+      void window.starriver.listRunningSessions?.().then((ids: string[]) => {
+        if (Array.isArray(ids) && !ids.includes(sid) && sessionIdRef2.current === sid) {
+          sendingRef.current = false;
+          setSending(false);
+          setStaleBusy(false);
+          assistantIdRef.current = null;
+          reloadArchive(sid);
+        }
+      }).catch(() => {});
+    }, 10000);
+    return () => clearInterval(iv);
+  }, [sending, reloadArchive]);
+
   // Chat archive (session.archiveMessages): fetched once per session on
   // open; the transcript always shows the full ledger plus the live tail.
   // The fetch effect owns the archive lifecycle: entering a session drops
@@ -8579,14 +8643,18 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // session, so the composer's Stop state is stale (the turn's terminal event
   // never reached this view). Drop the run state and flip back to Send
   // instead of wedging until the user clicks 新建 task (2026-10-12 report).
+  // Both callbacks also backfill from the archive (2026-11-13): a dead event
+  // tail means the ledger holds turns this view never rendered.
   const stopControl = useTaskStop(sessionIdRef, useCallback((text: string) => {
     addMessage('tool', text, false);
-  }, [addMessage]), sessionIdRef2, useCallback(() => {
+    reloadArchive(sessionIdRef2.current);
+  }, [addMessage, reloadArchive]), sessionIdRef2, useCallback(() => {
     sendingRef.current = false;
     setSending(false);
     setStaleBusy(false);
     addMessage('tool', t('common.turnAlreadyEnded'), false);
-  }, [addMessage, t]));
+    reloadArchive(sessionIdRef2.current);
+  }, [addMessage, t, reloadArchive]));
 
   // BUG-96: recover a session whose previous turn still holds the single
   // input slot (renderer lost its run state or the turn hung). Cancel the
@@ -11271,6 +11339,9 @@ interface WorkspaceCtx {
   handleUnarchive: (sessionId: string) => Promise<void>;
   handleRenameSession: (sessionId: string) => Promise<void>;
   handleRenameSubmit: (workspaceId: string) => Promise<void>;
+  /** Pin-to-top toggle: pinned workspaces sort first (newest pin on top);
+   *  the backend owns the order, the provider refetches after the write. */
+  handleTogglePin: (workspaceId: string) => Promise<void>;
   handleCreateWorkspace: (path: string) => Promise<void>;
   handleDeleteWorkspace: (workspaceId: string, e: React.MouseEvent) => void;
   handleConfirmDelete: () => Promise<void>;
@@ -11364,8 +11435,16 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     try { viewNotifierRef.current?.(text, kind); } catch { /* view raced unmount */ }
   }, []);
 
+  // BUG-P14: overlapping refetches (every pin/rename/delete triggers one)
+  // can settle out of order; without a sequence guard a slow OLD snapshot
+  // lands last and silently erases a newer pin. Only the newest call wins.
+  const wsLoadSeq = useRef(0);
   const loadWorkspaces = useCallback(async () => {
-    try { setWorkspaces(await window.starriver.listWorkspaces()); } catch (e) { console.error(e); }
+    const seq = ++wsLoadSeq.current;
+    try {
+      const list = await window.starriver.listWorkspaces();
+      if (seq === wsLoadSeq.current) setWorkspaces(list);
+    } catch (e) { console.error(e); }
   }, []);
 
   const loadSessions = useCallback(async () => {
@@ -11393,6 +11472,37 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setWorkspaces(prev => prev.map(w => w.id === workspaceId ? { ...w, title } : w));
     } catch (e) { showError('Failed to rename workspace'); }
   }, [renameValue, showError]);
+
+  // BUG-P23: serialize pin writes per workspace. Rapid successive toggles
+  // otherwise race in flight (daemon/LAN): an older request can land after a
+  // newer one and leave the host diverged from the user's newest intent.
+  const pinChainRef = useRef<Record<string, Promise<void>>>({});
+  // Pin-to-top: flip the stamp optimistically (a fresh pin hoists to the
+  // top immediately), then let the authoritative refetch settle the full
+  // order — pinned first, newest pin on top; unpin falls back to created_at.
+  const handleTogglePin = useCallback(async (workspaceId: string) => {
+    const target = workspaces.find(w => w.id === workspaceId);
+    if (!target) return;
+    const pinned = target.pinnedAt == null;
+    setWorkspaces(prev => {
+      const next = prev.map(w => w.id === workspaceId ? { ...w, pinnedAt: pinned ? Date.now() : null } : w);
+      if (!pinned) return next;
+      const row = next.find(w => w.id === workspaceId);
+      return row ? [row, ...next.filter(w => w.id !== workspaceId)] : next;
+    });
+    const prevChain = pinChainRef.current[workspaceId] ?? Promise.resolve();
+    const run = prevChain.catch(() => {}).then(async () => {
+      try {
+        await window.starriver.pinWorkspace(workspaceId, pinned);
+        await loadWorkspaces();
+      } catch (e) {
+        showError(t('workspace.pinFailed'));
+        await loadWorkspaces();
+      }
+    });
+    pinChainRef.current[workspaceId] = run;
+    await run;
+  }, [workspaces, loadWorkspaces, showError, t]);
 
   const activateWorkspace = useCallback(async (workspaceId: string) => {
     await window.starriver.setActiveWorkspace(workspaceId, CODING_AGENT_NAME);
@@ -11635,7 +11745,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     loadSessions, toggleWorkspace, activateWorkspace, requestNewConversation, archiveSession,
     handleDeleteSession,
     runningSessionIds, refreshRunningSessions,
-    handleUnarchive, handleRenameSession, handleRenameSubmit, handleCreateWorkspace,
+    handleUnarchive, handleRenameSession, handleRenameSubmit, handleTogglePin, handleCreateWorkspace,
     handleDeleteWorkspace, handleConfirmDelete,
     newConvSeq, wsError, showError, registerNotifier, registerIsolationReset, isolationResetRef,
   };
@@ -11727,8 +11837,28 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
                         {w.title}
                       </span>
                     )}
+                    {w.pinnedAt != null && (
+                      <span className="sb-ws-pin-badge" role="img" aria-label={t('workspace.pinnedState')}>
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 17v5" />
+                          <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+                        </svg>
+                      </span>
+                    )}
                   </div>
                   <div className="sb-ws-actions">
+                    <button
+                      className={`sb-ws-icon-btn sb-ws-pin${w.pinnedAt != null ? ' is-pinned' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); void ws.handleTogglePin(w.id); }}
+                      onMouseDown={(e) => e.preventDefault()}
+                      aria-pressed={w.pinnedAt != null}
+                      data-tip={t(w.pinnedAt != null ? 'workspace.unpin' : 'workspace.pin')}
+                      aria-label={t(w.pinnedAt != null ? 'workspace.unpin' : 'workspace.pin')}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 17v5" />
+                        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+                      </svg>
+                    </button>
                     <button
                       className="sb-ws-icon-btn"
                       onClick={(e) => {
@@ -12356,7 +12486,11 @@ async function lanInvoke<T = any>(method: string, params: Record<string, unknown
   return response.result as T;
 }
 
-const LAN_CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+/** Input acceptance cap, aligned with the host attachment store's
+ *  DEFAULT_MAX_IMAGE_BYTES (20 MiB). The downscale below bounds the wire
+ *  payload well under the LAN transport's 6 MiB body cap, so accepting larger
+ *  source files needs no transport change. Exported for regression tests. */
+export const LAN_CHAT_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
 const LAN_CHAT_IMAGE_MAX_EDGE = 2000;
 /** Pick + downscale one image for sending: canvas-resize over 2000px edge,
  *  re-encode JPEG when the payload is heavy. Throws 'too-large' over the cap. */
@@ -13408,12 +13542,12 @@ const tabIcons: Record<string, string> = {
   skills: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
   models: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M14 10.4V5.6a1.3 1.3 0 0 0-.65-1.13l-5-2.87a1.3 1.3 0 0 0-1.3 0l-5 2.87A1.3 1.3 0 0 0 1.35 5.6v4.8a1.3 1.3 0 0 0 .65 1.13l5 2.87a1.3 1.3 0 0 0 1.3 0l5-2.87a1.3 1.3 0 0 0 .65-1.13z"/><path d="M2.2 4.8 8 8.05l5.8-3.25M8 8.05v6.1"/></svg>',
   settings: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
-  plugins: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M3 3h3.5a1.5 1.5 0 0 1 3 0H13v3.5a1.5 1.5 0 0 1 0 3V13H9.5a1.5 1.5 0 0 1-3 0H3V9.5a1.5 1.5 0 0 1 0-3z"/></svg>',
+  plugins: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5.8 2.2v3.3M10.2 2.2v3.3"/><path d="M4.4 5.5h7.2v1.9a3.6 3.6 0 0 1-7.2 0z"/><path d="M8 11.6v2.2"/></svg>',
   mcp: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5" r="3"/><path d="M8 8v4M5.5 12h5M6 14h4"/></svg>',
   file: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.2L13 5.3v9.2H4z"/><path d="M9.2 1.5V5.3H13"/></svg>',
   scheduled: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5V8l2 2M5 2l1 1.5M11 2L10 3.5M3.5 5.5L5 6.5"/></svg>',
   knowledge: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h3.5a1.5 1.5 0 0 1 3 0H14v10H2V3z"/><rect x="4" y="4" width="4" height="2" rx="0.5"/><path d="M6 5v4"/></svg>',
-  memory: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2"/><path d="M8 3v1.5M8 11.5V13M3 8h1.5M11.5 8H13M4.5 4.5l1 1M10.5 10.5l1 1M4.5 11.5l1-1M10.5 5.5l1-1"/></svg>',
+  memory: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 14.2 5 8 8.2 1.8 5z"/><path d="M1.8 8.6 8 11.8l6.2-3.2"/><path d="M1.8 11.6 8 14.8l6.2-3.2"/></svg>',
   hooks: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-2.9a4 4 0 0 1 6.89-4.2"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/></svg>',
 };
 
@@ -13713,20 +13847,22 @@ registerTab({ id: 'memory', labelKey: 'nav.memory', icon: tabIcons.memory, rende
 // Sidebar groups: Agent is the daily driver (tasks + schedules + the
 // workspace tree); Hub is capability management. Fixed order per group —
 // the registry's registration order is an implementation detail. Unknown
-// tabs (plugin contributions) append to Hub so they stay reachable.
+// tabs (plugin contributions) append to Agent — the daily-driver group —
+// so an installed plugin's tab is immediately visible without a group
+// switch (user request 2026-11-13; applies to every plugin).
 const SIDEBAR_GROUPS: Record<'agent' | 'hub', string[]> = {
   agent: ['coding', 'scheduled'],
   hub: ['models', 'skills', 'plugins', 'hooks', 'mcp', 'memory'],
 };
 
 export function SidebarNavItems({ tab, onNavigate, group = 'agent' }: { tab: TabId; onNavigate: (id: TabId) => void; group?: 'agent' | 'hub' }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const ws = useWorkspaces();
   const fixed = SIDEBAR_GROUPS[group];
-  // Hub appends only unknown tabs (plugin contributions) — the Agent group's
-  // fixed tabs never leak into the Hub list.
+  // Agent appends only unknown tabs (plugin contributions); each group shows
+  // its own fixed list — no fixed tab leaks across groups.
   const known = new Set([...SIDEBAR_GROUPS.agent, ...SIDEBAR_GROUPS.hub]);
-  const ids = group === 'hub'
+  const ids = group === 'agent'
     ? [...fixed, ...listTabs().map(item => item.id).filter(id => !known.has(id))]
     : fixed;
   return (
@@ -13754,7 +13890,8 @@ export function SidebarNavItems({ tab, onNavigate, group = 'agent' }: { tab: Tab
             }}
           >
             <span className="nav-icon" dangerouslySetInnerHTML={{ __html: item.icon || tabIcons[item.id] || "" }} />
-            {t(item.labelKey)}
+            {/* Plugin manifest labels (item.labels) win over the dictionary; both track the UI language. */}
+            {item.labels?.[lang] ?? t(item.labelKey)}
           </button>
         );
       })}

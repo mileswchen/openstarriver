@@ -14,6 +14,7 @@ import {
   parseProtocolResponse,
   protocolRequest,
 } from '../legacyBridge.ts';
+import { PROTOCOL_METHODS } from './client/client.gen.ts';
 
 /** The committed preload.js must stay an esbuild self-contained bundle: the
  *  sandboxed preload cannot load relative modules, and any tsc-emitted output
@@ -36,7 +37,7 @@ const UI_SURFACE = [
   'setAgentActiveModel', 'listSessions', 'getSessionMessages',
   'getSessionTimeline', 'forkSession', 'deleteSession', 'renameSession',
   'archiveSession', 'unarchiveSession', 'listArchivedSessions',
-  'listWorkspaces', 'createWorkspace', 'renameWorkspace', 'deleteWorkspace',
+  'listWorkspaces', 'createWorkspace', 'renameWorkspace', 'pinWorkspace', 'deleteWorkspace',
   'setActiveWorkspace', 'getWorktreeStatus',
   'listMemories', 'deleteMemory', 'clearMemories', 'startCodeReview',
   'listMcpServers', 'addMcpServer', 'removeMcpServer', 'refreshMcpTools',
@@ -135,5 +136,33 @@ describe('protocol envelope helpers', () => {
         error: { code: 'SESSION_BUSY', message: 'busy' },
       })),
     ).toThrowError(/busy/);
+  });
+});
+
+// WI-243 pin-to-top: the legacy bridge mapping and the generated typed-client
+// schema must agree on method, params and permissions (both paths reach the
+// same `workspaces.pin` host handler).
+describe('pinWorkspace — legacy bridge ↔ typed client parity', () => {
+  it('maps positional args to workspaces.pin {workspaceId, pinned}', () => {
+    const spec = LEGACY_METHODS.pinWorkspace;
+    expect(spec.method).toBe('workspaces.pin');
+    expect(spec.params!(['ws-1', true])).toEqual({ workspaceId: 'ws-1', pinned: true });
+    expect(spec.params!(['ws-2', false])).toEqual({ workspaceId: 'ws-2', pinned: false });
+    // No result mapping: the protocol `{}` passes through unchanged.
+    expect(spec.result).toBeUndefined();
+  });
+
+  it('agrees with the generated typed-client schema', () => {
+    const meta = PROTOCOL_METHODS['workspaces.pin'];
+    expect(meta, 'workspaces.pin must exist in the typed client').toBeDefined();
+    expect(meta.permissions).toEqual(['workspaces:write']);
+    expect(meta.streaming).toBe(false);
+    const params = meta.params as any;
+    expect(params.required).toEqual(['workspaceId', 'pinned']);
+    expect(params.properties.workspaceId.type).toBe('string');
+    expect(params.properties.pinned.type).toBe('boolean');
+    // The legacy mapping emits exactly the schema's required keys.
+    const mapped = LEGACY_METHODS.pinWorkspace.params!(['ws-1', true]) as Record<string, unknown>;
+    expect(Object.keys(mapped).sort()).toEqual([...params.required].sort());
   });
 });
