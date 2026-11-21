@@ -15,8 +15,8 @@ use starriver_protocol::permission::{
     PERM_MEMORY_READ, PERM_MEMORY_WRITE, PERM_MODELS_READ, PERM_MODELS_WRITE, PERM_PLUGINS_READ,
     PERM_PLUGINS_WRITE, PERM_PROJECT_WRITE, PERM_REVIEW_START, PERM_SCHEDULED_READ,
     PERM_SCHEDULED_WRITE, PERM_SESSION_EXECUTE, PERM_SESSION_READ, PERM_SESSION_WRITE,
-    PERM_SKILLS_READ, PERM_SKILLS_WRITE, PERM_TOOLS_READ, PERM_WORKSPACES_READ,
-    PERM_WORKSPACES_WRITE,
+    PERM_SKILLS_READ, PERM_SKILLS_WRITE, PERM_TASK_READ, PERM_TASK_RUN, PERM_TOOL_CALL,
+    PERM_TOOLS_READ, PERM_WORKSPACES_READ, PERM_WORKSPACES_WRITE,
 };
 use starriver_protocol::schema::{
     any_schema, array_schema, boolean_schema, integer_schema, number_schema, object, string_schema,
@@ -88,6 +88,14 @@ pub fn build() -> MethodRegistry<HostRuntime> {
         agent_presets_list(),
         // ── Read-only catalogs ──
         tools_list(),
+        tools_call(),
+        // ── Plugin tasks (P2): chat-surface-sessionless execution ──
+        plugin_task_run(),
+        plugin_task_wait(),
+        plugin_task_messages(),
+        plugin_task_cancel(),
+        plugin_task_approve(),
+        plugin_task_list(),
         agents_list(),
         agents_scan(),
         agents_create(),
@@ -170,15 +178,32 @@ pub fn build() -> MethodRegistry<HostRuntime> {
 fn session_list() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
         "session.list",
-        object(&[("workspaceId", string_schema())], &[]),
+        object(
+            &[("workspaceId", string_schema()), ("origin", string_schema())],
+            &[],
+        ),
         array_schema(any_schema()),
         &[PERM_SESSION_READ],
         false,
         |call: HostCall<'_>| {
             let workspace_id = call.params.get("workspaceId").and_then(Value::as_str);
+            // Plugin platform P1: exact-match origin filter (e.g.
+            // `plugin:starpaper`) — the explicit audit path.
+            // Plugin platform P2: with NO origin filter, plugin task runs
+            // are invisible on the chat surface (they are not chats). The
+            // filter itself still matches them exactly, so audit callers
+            // keep full access; nothing is deleted or hidden silently.
+            let origin = call.params.get("origin").and_then(Value::as_str);
             let sessions = call.host.list_sessions(workspace_id.map(String::from));
             Ok(Value::Array(
-                sessions.iter().map(session_info_json).collect(),
+                sessions
+                    .iter()
+                    .filter(|s| match origin {
+                        Some(o) => s.origin.as_deref() == Some(o),
+                        None => !is_plugin_origin(s.origin.as_deref()),
+                    })
+                    .map(session_info_json)
+                    .collect(),
             ))
         },
     )
@@ -300,8 +325,14 @@ fn session_list_archived() -> MethodSpec<HostRuntime> {
         false,
         |call: HostCall<'_>| {
             let sessions = call.host.list_archived_sessions();
+            // Plugin platform P2: plugin task runs never auto-archive, and
+            // even a manually archived one stays off the chat surface.
             Ok(Value::Array(
-                sessions.iter().map(session_info_json).collect(),
+                sessions
+                    .iter()
+                    .filter(|s| !is_plugin_origin(s.origin.as_deref()))
+                    .map(session_info_json)
+                    .collect(),
             ))
         },
     )
@@ -988,6 +1019,302 @@ fn tools_list() -> MethodSpec<HostRuntime> {
     )
 }
 
+/// Plugin platform P1 (design/plugin-platform.md §3.1): direct tool invocation.
+/// Runs one registered tool through the full ToolRuntime pipeline WITHOUT a
+/// session/turn/LLM — the channel plugin UIs use for data operations instead of
+/// spawning host sessions. `sessionId` only borrows cwd/sandbox context.
+fn tools_call() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "tools.call",
+        object(
+            &[
+                ("name", string_schema()),
+                ("arguments", any_schema()),
+                ("sessionId", string_schema()),
+                ("timeoutMs", integer_schema()),
+            ],
+            &["name"],
+        ),
+        object(
+            &[
+                ("ok", boolean_schema()),
+                ("value", any_schema()),
+                ("content", array_schema(any_schema())),
+                ("meta", any_schema()),
+                ("error", any_schema()),
+            ],
+            &["ok", "content"],
+        ),
+        &[PERM_TOOL_CALL],
+        false,
+        |call: HostCall<'_>| {
+            let name = required_string(&call.params, "name")?;
+            let arguments = call
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let session_id = optional_string(&call.params, "sessionId");
+            let timeout_ms = optional_u32(&call.params, "timeoutMs").map(u64::from);
+            let outcome = call
+                .host
+                .call_tool(name, arguments, session_id, timeout_ms)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            serde_json::to_value(outcome).map_err(|e| ApiError::internal(e.to_string()))
+        },
+    )
+}
+
+/// Plugin platform P2: chat-surface visibility predicate for session rows.
+fn is_plugin_origin(origin: Option<&str>) -> bool {
+    origin.is_some_and(|o| o.starts_with("plugin:"))
+}
+
+/// Plugin platform P2: map facade errors to stable wire codes. `Host`
+/// errors apply the same `SESSION_BUSY:` prefix split as `session.execute`.
+fn plugin_task_api_err(e: starriver_host::plugin_task::PluginTaskError) -> ApiError {
+    use starriver_host::plugin_task::PluginTaskError as E;
+    match e {
+        E::Forbidden(m) => ApiError::forbidden(m),
+        E::NotFound(m) => ApiError::new("NOT_FOUND", m),
+        E::InvalidParams(m) => ApiError::invalid_params(m),
+        E::Host(e) => {
+            let msg = e.to_string();
+            if let Some(rest) = msg.strip_prefix("SESSION_BUSY:") {
+                ApiError::session_busy(rest.trim())
+            } else {
+                ApiError::internal(msg)
+            }
+        }
+    }
+}
+
+/// Plugin platform P2: start/continue a plugin task. Streaming — returns
+/// `{runId, subscription}`; the subscription relays the run's UiEvents
+/// (including `approvalRequested`, which the plugin UI answers via
+/// `pluginTask.approve`). The `plugin` identity is injected by the renderer
+/// bridge from the manifest (frames cannot claim another plugin); direct
+/// daemon callers pass it explicitly and are trusted like any admin caller.
+fn plugin_task_run() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "pluginTask.run",
+        object(
+            &[
+                ("plugin", string_schema()),
+                ("task", string_schema()),
+                ("runId", string_schema()),
+                ("permissionPreset", string_schema()),
+                ("agent", string_schema()),
+                ("agentPreset", string_schema()),
+                ("clientRequestId", string_schema()),
+            ],
+            &["plugin", "task"],
+        ),
+        object(
+            &[("runId", string_schema()), ("subscription", string_schema())],
+            &["runId", "subscription"],
+        ),
+        &[PERM_TASK_RUN],
+        true,
+        |call: HostCall<'_>| {
+            let plugin = required_string(&call.params, "plugin")?;
+            let task = required_string(&call.params, "task")?;
+            let (run_id, receiver) = call
+                .host
+                .plugin_task_run(
+                    plugin,
+                    task,
+                    optional_string(&call.params, "runId"),
+                    optional_string(&call.params, "permissionPreset"),
+                    optional_string(&call.params, "agent"),
+                    optional_string(&call.params, "agentPreset"),
+                    optional_string(&call.params, "clientRequestId"),
+                )
+                .map_err(plugin_task_api_err)?;
+            let subscription = call.host.spawn_event_relay(receiver, call.emit.clone());
+            Ok(json!({ "runId": run_id, "subscription": subscription }))
+        },
+    )
+}
+
+/// Plugin platform P2: block until the run's turn ends. Same outcome shape
+/// as `session.waitTurn` (`completed` / `timeout` / `session_not_running`).
+fn plugin_task_wait() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "pluginTask.wait",
+        object(
+            &[
+                ("plugin", string_schema()),
+                ("runId", string_schema()),
+                ("timeoutMs", integer_schema()),
+            ],
+            &["plugin", "runId"],
+        ),
+        object(
+            &[
+                ("ended", boolean_schema()),
+                ("reason", string_schema()),
+                ("finalAssistant", any_schema()),
+            ],
+            &["ended", "reason"],
+        ),
+        &[PERM_TASK_READ],
+        false,
+        |call: HostCall<'_>| {
+            let plugin = required_string(&call.params, "plugin")?;
+            let run_id = required_string(&call.params, "runId")?;
+            let timeout_ms = optional_u32(&call.params, "timeoutMs").map(u64::from);
+            let outcome = call
+                .host
+                .plugin_task_wait(plugin, run_id.clone(), timeout_ms)
+                .map_err(plugin_task_api_err)?;
+            let (ended, reason) = match outcome {
+                starriver_host::runtime::WaitTurnOutcome::Completed => (true, "completed"),
+                starriver_host::runtime::WaitTurnOutcome::Timeout => (false, "timeout"),
+                starriver_host::runtime::WaitTurnOutcome::NotRunning => {
+                    (false, "session_not_running")
+                }
+            };
+            let final_assistant = if ended {
+                call.host
+                    .get_session_messages(run_id)
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "assistant")
+                    .map(chat_message_json)
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            Ok(json!({ "ended": ended, "reason": reason, "finalAssistant": final_assistant }))
+        },
+    )
+}
+
+/// Plugin platform P2: read a run's message history (paged shape always).
+fn plugin_task_messages() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "pluginTask.messages",
+        object(
+            &[
+                ("plugin", string_schema()),
+                ("runId", string_schema()),
+                ("limit", integer_schema()),
+                ("before", integer_schema()),
+            ],
+            &["plugin", "runId"],
+        ),
+        object(
+            &[
+                ("messages", array_schema(any_schema())),
+                ("total", integer_schema()),
+                ("hasMore", boolean_schema()),
+            ],
+            &["messages", "total", "hasMore"],
+        ),
+        &[PERM_TASK_READ],
+        false,
+        |call: HostCall<'_>| {
+            let plugin = required_string(&call.params, "plugin")?;
+            let run_id = required_string(&call.params, "runId")?;
+            let limit = optional_u32(&call.params, "limit").map(|l| l as usize);
+            let before = optional_u32(&call.params, "before").map(u64::from);
+            let (messages, total, has_more) = call
+                .host
+                .plugin_task_messages(plugin, run_id, limit, before)
+                .map_err(plugin_task_api_err)?;
+            Ok(json!({
+                "messages": messages.iter().map(chat_message_json).collect::<Vec<_>>(),
+                "total": total,
+                "hasMore": has_more,
+            }))
+        },
+    )
+}
+
+/// Plugin platform P2: cancel a run's active turn.
+fn plugin_task_cancel() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "pluginTask.cancel",
+        object(
+            &[("plugin", string_schema()), ("runId", string_schema())],
+            &["plugin", "runId"],
+        ),
+        object(&[("cancelled", boolean_schema())], &["cancelled"]),
+        &[PERM_TASK_RUN],
+        false,
+        |call: HostCall<'_>| {
+            let plugin = required_string(&call.params, "plugin")?;
+            let run_id = required_string(&call.params, "runId")?;
+            let cancelled = call
+                .host
+                .plugin_task_cancel(plugin, run_id)
+                .map_err(plugin_task_api_err)?;
+            Ok(json!({ "cancelled": cancelled }))
+        },
+    )
+}
+
+/// Plugin platform P2: answer a run's pending approval. `false` → stable
+/// APPROVAL_NOT_PENDING (same contract as `approval.respond`).
+fn plugin_task_approve() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "pluginTask.approve",
+        object(
+            &[
+                ("plugin", string_schema()),
+                ("runId", string_schema()),
+                ("allowed", boolean_schema()),
+                ("remember", boolean_schema()),
+            ],
+            &["plugin", "runId", "allowed"],
+        ),
+        object(&[], &[]),
+        &[PERM_TASK_RUN],
+        false,
+        |call: HostCall<'_>| {
+            let plugin = required_string(&call.params, "plugin")?;
+            let run_id = required_string(&call.params, "runId")?;
+            let allowed = call
+                .params
+                .get("allowed")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| ApiError::invalid_params("allowed must be a boolean"))?;
+            let remember = call.params.get("remember").and_then(Value::as_bool);
+            let responded = call
+                .host
+                .plugin_task_approve(plugin, run_id, allowed, remember)
+                .map_err(plugin_task_api_err)?;
+            if !responded {
+                return Err(ApiError::new(
+                    "APPROVAL_NOT_PENDING",
+                    "no approval is pending for this run",
+                ));
+            }
+            Ok(json!({}))
+        },
+    )
+}
+
+/// Plugin platform P2: audit list of the calling plugin's retained runs.
+fn plugin_task_list() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "pluginTask.list",
+        object(&[("plugin", string_schema())], &["plugin"]),
+        array_schema(any_schema()),
+        &[PERM_TASK_READ],
+        false,
+        |call: HostCall<'_>| {
+            let plugin = required_string(&call.params, "plugin")?;
+            let runs = call
+                .host
+                .plugin_task_list(plugin)
+                .map_err(plugin_task_api_err)?;
+            Ok(Value::Array(runs.iter().map(session_info_json).collect()))
+        },
+    )
+}
+
 fn agents_list() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
         "agents.list",
@@ -1013,10 +1340,14 @@ fn sessions_running() -> MethodSpec<HostRuntime> {
         &[PERM_SESSION_READ],
         false,
         |call: HostCall<'_>| {
+            // Plugin platform P2: hide plugin task runs from the chat-side
+            // running registry — the sidebar's running-poll would otherwise
+            // chase a row that session.list deliberately never returns.
             Ok(Value::Array(
                 call.host
                     .running_session_ids()
                     .into_iter()
+                    .filter(|id| !call.host.is_plugin_task_session(id))
                     .map(Value::String)
                     .collect(),
             ))
@@ -3141,6 +3472,8 @@ fn plugin_entry_json(p: &types::PluginEntry) -> Value {
             "themeCss": theme_css,
             "icon": ui.icon,
             "iconSvg": icon_svg,
+            "background": ui.background,
+            "maxPermissionPreset": ui.max_permission_preset,
         })
     });
     json!({
@@ -3265,6 +3598,8 @@ mod tests {
             permissions: vec![],
             theme: None,
             icon: Some("icon.svg".into()),
+            background: false,
+            max_permission_preset: None,
         };
         let entry = types::PluginEntry {
             name: "icon-probe-test".into(),
@@ -3309,6 +3644,8 @@ mod tests {
                     permissions: vec![],
                     theme: None,
                     icon: None,
+                    background: false,
+                    max_permission_preset: None,
                 }),
                 source_url: String::new(),
                 installed_at: String::new(),
@@ -3328,6 +3665,37 @@ mod tests {
         assert_eq!(tab["title"], "论文工作台");
         // Legacy shape: no titles key at all when the manifest has none.
         assert!(tab.get("titles").is_none());
+    }
+
+    /// Plugin platform P1: the manifest `background` opt-in flows through
+    /// `plugins.list` so the bridge can gate bare session.execute; absent
+    /// declaration serializes as false (fail-closed default).
+    #[test]
+    fn plugin_entry_json_delivers_background_flag() {
+        let make = |background: bool| types::PluginEntry {
+            name: "bg-probe".into(),
+            description: String::new(),
+            version: String::new(),
+            skills: vec![],
+            ui: Some(types::PluginUiEntry {
+                entry: "index.html".into(),
+                tabs: vec![],
+                permissions: vec![],
+                theme: None,
+                icon: None,
+                background,
+                max_permission_preset: None,
+            }),
+            source_url: String::new(),
+            installed_at: String::new(),
+        };
+        assert_eq!(plugin_entry_json(&make(true))["ui"]["background"], json!(true));
+        assert_eq!(plugin_entry_json(&make(false))["ui"]["background"], json!(false));
+        // P2: undeclared ceiling serializes as null (bridge → manual).
+        assert_eq!(plugin_entry_json(&make(true))["ui"]["maxPermissionPreset"], json!(null));
+        let mut capped = make(true);
+        capped.ui.as_mut().unwrap().max_permission_preset = Some("auto".into());
+        assert_eq!(plugin_entry_json(&capped)["ui"]["maxPermissionPreset"], json!("auto"));
     }
 
     /// WI-31 regression: `settings.update` must accept a real patch object —
@@ -3382,6 +3750,12 @@ mod tests {
             "plan.reviewDecision",
             "interaction.respond",
             "tools.list",
+            "pluginTask.run",
+            "pluginTask.wait",
+            "pluginTask.messages",
+            "pluginTask.cancel",
+            "pluginTask.approve",
+            "pluginTask.list",
             "agentPresets.list",
             "agents.list",
             "agents.scan",
@@ -3519,6 +3893,7 @@ mod tests {
             .execute(
                 "hello".into(),
                 Some("macro-session".into()),
+                None,
                 None,
                 None,
                 None,
@@ -3735,6 +4110,462 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, "INTERNAL");
         assert!(err.message.contains("not found"), "{err:?}");
+    }
+
+    /// Plugin platform P1: `tools.call` dispatches against the real host.
+    /// A non-approval builtin (glob) runs with NO session created; the
+    /// `tool:call` permission gates plugin frames; an approval-gated builtin
+    /// (bash) is refused fail-closed; missing `name` is a schema error.
+    #[test]
+    fn tools_call_dispatch_permissions_and_no_session() {
+        use starriver_protocol::permission::CallerScope;
+        use tempfile::TempDir;
+
+        // Pin HOME before boot (same rationale as workspaces_pin above: the
+        // process-global tracing appender writes under $HOME/.starriver/logs).
+        let home = tempfile::tempdir().expect("temp home");
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("STARRIVER_DISABLE_KEYCHAIN", "1");
+        std::mem::forget(home);
+
+        let dir = TempDir::new().expect("tempdir");
+        let db = dir.path().join("test.db");
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("marker.p1"), "x").unwrap();
+        let config = format!(
+            "version: 1\nmode: offline\ninference: {{ engines: [] }}\nagent: {{}}\nserver: {{ http: {{ enabled: false, bind: \"127.0.0.1:0\" }} }}\nsession: {{ db_path: \"{}\" }}\n",
+            db.display().to_string().replace('\\', "/")
+        );
+        let host = std::sync::Arc::new(
+            starriver_host::HostRuntime::new(Some(config)).expect("host boots"),
+        );
+        let registry = build();
+        let glob_args = json!({
+            "name": "glob",
+            "arguments": { "pattern": "*.p1", "path": workspace.display().to_string() },
+        });
+
+        // 1) A plugin caller WITHOUT tool:call is denied (FORBIDDEN).
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id("call-denied", "tools.call", glob_args.clone()),
+                Some(&CallerScope::plugin("demo", vec![])),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "FORBIDDEN");
+
+        // 2) Builtin caller: glob runs directly, returns its canonical value,
+        //    and NO session is created by the call.
+        let ok = registry
+            .dispatch(
+                &host,
+                &request_with_id("call-glob", "tools.call", glob_args.clone()),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(ok.ok, "{ok:?}");
+        let result = ok.result.unwrap();
+        assert_eq!(result["ok"], json!(true), "{result:?}");
+        assert!(
+            result["value"]["output"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("marker.p1"),
+            "glob output must list the marker: {result:?}"
+        );
+        assert!(result["content"].as_array().is_some_and(|c| !c.is_empty()));
+        assert!(
+            host.list_sessions(None).is_empty(),
+            "tools.call must not create sessions"
+        );
+
+        // 3) A plugin caller WITH tool:call may run the same call.
+        let granted = CallerScope::plugin("demo", vec![PERM_TOOL_CALL.into()]);
+        let ok = registry
+            .dispatch(
+                &host,
+                &request_with_id("call-plugin", "tools.call", glob_args),
+                Some(&granted),
+                None,
+            )
+            .unwrap();
+        assert!(ok.ok, "{ok:?}");
+        assert_eq!(ok.result.unwrap()["ok"], json!(true));
+
+        // 4) Approval-gated bash is refused fail-closed (no silent bypass).
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id(
+                    "call-gated",
+                    "tools.call",
+                    json!({ "name": "bash", "arguments": { "command": "echo hi" } }),
+                ),
+                None,
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "INTERNAL");
+        assert!(err.message.contains("APPROVAL_REQUIRED"), "{err:?}");
+
+        // 5) Missing required `name` → schema validation intercepts first.
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id("call-noname", "tools.call", json!({})),
+                None,
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "INVALID_PARAMS");
+
+        // Still zero sessions after every call above.
+        assert!(host.list_sessions(None).is_empty());
+    }
+
+    /// Plugin platform P1: `session.list` accepts an exact-match `origin`
+    /// filter so callers can list just the sessions a plugin branded.
+    /// Unbranded chats never match a supplied origin; omitting the filter
+    /// lists everything.
+    #[test]
+    fn session_list_filters_by_origin() {
+        use tempfile::TempDir;
+
+        // Pin HOME before boot (the process-global tracing appender writes
+        // under $HOME/.starriver/logs).
+        let home = tempfile::tempdir().expect("temp home");
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("STARRIVER_DISABLE_KEYCHAIN", "1");
+        std::mem::forget(home);
+
+        let dir = TempDir::new().expect("tempdir");
+        let db = dir.path().join("test.db");
+        let config = format!(
+            "version: 1\nmode: offline\ninference: {{ engines: [] }}\nagent: {{}}\nserver: {{ http: {{ enabled: false, bind: \"127.0.0.1:0\" }} }}\nsession: {{ db_path: \"{}\" }}\n",
+            db.display().to_string().replace('\\', "/")
+        );
+        let host = std::sync::Arc::new(
+            starriver_host::HostRuntime::new(Some(config)).expect("host boots"),
+        );
+        let registry = build();
+
+        // One plugin-branded background run and one plain chat. Offline
+        // turns fail fast, but the creation-time stamps still land.
+        let _rx = host
+            .execute(
+                "bg".into(), None, None, None, None, None, None, None,
+                Some("plugin:demo".into()),
+            )
+            .expect("plugin execute");
+        let _rx2 = host
+            .execute("chat".into(), None, None, None, None, None, None, None, None)
+            .expect("chat execute");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if host.list_sessions(None).len() == 2 {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "sessions never appeared");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        let list = registry
+            .dispatch(
+                &host,
+                &request_with_id("list-plugin", "session.list", json!({ "origin": "plugin:demo" })),
+                None,
+                None,
+            )
+            .unwrap();
+        let arr = list.result.unwrap();
+        let arr = arr.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "only the plugin session matches: {arr:?}");
+        assert_eq!(arr[0]["origin"], json!("plugin:demo"));
+
+        // Unknown origin → empty. P2: omitted filter → chats only (plugin
+        // task runs are invisible on the chat surface by default; the
+        // exact-match origin filter above remains the audit path).
+        let none = registry
+            .dispatch(
+                &host,
+                &request_with_id("list-none", "session.list", json!({ "origin": "plugin:nope" })),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(none.result.unwrap().as_array().unwrap().is_empty());
+        let all = registry
+            .dispatch(
+                &host,
+                &request_with_id("list-all", "session.list", json!({})),
+                None,
+                None,
+            )
+            .unwrap();
+        let all = all.result.unwrap();
+        let all = all.as_array().unwrap();
+        assert_eq!(all.len(), 1, "default list hides plugin runs: {all:?}");
+        assert_ne!(all[0]["origin"], json!("plugin:demo"));
+    }
+
+    /// Plugin platform P2: the `pluginTask.*` primitive — permission gate,
+    /// synchronous origin stamp, ownership isolation between plugins and
+    /// against user chats, chat-surface invisibility with explicit audit
+    /// paths, and stable error codes. Offline turns fail fast, but the
+    /// facade stamps the origin BEFORE execute, so the handle is ownership-
+    /// checkable the instant `run` returns.
+    #[test]
+    fn plugin_task_primitive_ownership_and_visibility() {
+        use starriver_protocol::permission::CallerScope;
+        use tempfile::TempDir;
+
+        // Pin HOME before boot (process-global tracing appender writes under
+        // $HOME/.starriver/logs — same rationale as the P1 tests above).
+        let home = tempfile::tempdir().expect("temp home");
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("STARRIVER_DISABLE_KEYCHAIN", "1");
+        std::mem::forget(home);
+
+        let dir = TempDir::new().expect("tempdir");
+        let db = dir.path().join("test.db");
+        let config = format!(
+            "version: 1\nmode: offline\ninference: {{ engines: [] }}\nagent: {{}}\nserver: {{ http: {{ enabled: false, bind: \"127.0.0.1:0\" }} }}\nsession: {{ db_path: \"{}\" }}\n",
+            db.display().to_string().replace('\\', "/")
+        );
+        let host = std::sync::Arc::new(
+            starriver_host::HostRuntime::new(Some(config)).expect("host boots"),
+        );
+        let registry = build();
+        let demo = CallerScope::plugin(
+            "demo",
+            vec![PERM_TASK_RUN.into(), PERM_TASK_READ.into()],
+        );
+
+        // 1) Permission gate: no task:run → FORBIDDEN before any execution.
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id(
+                    "t-denied",
+                    "pluginTask.run",
+                    json!({ "plugin": "demo", "task": "x" }),
+                ),
+                Some(&CallerScope::plugin("demo", vec![])),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "FORBIDDEN");
+
+        // 2) run returns the handle; the origin stamp is already durable.
+        let ok = registry
+            .dispatch(
+                &host,
+                &request_with_id(
+                    "t-run",
+                    "pluginTask.run",
+                    json!({ "plugin": "demo", "task": "background research" }),
+                ),
+                Some(&demo),
+                None,
+            )
+            .unwrap();
+        assert!(ok.ok, "{ok:?}");
+        let result = ok.result.unwrap();
+        let run_id = result["runId"].as_str().expect("runId").to_string();
+        assert!(result["subscription"].as_str().is_some());
+        assert!(host.is_plugin_task_session(&run_id), "stamp must be synchronous");
+
+        // Wait for the projection row (offline turn fails fast, log lands).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if host.list_sessions(None).iter().any(|s| s.id == run_id) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "run row never appeared");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // 3) Chat-surface invisibility + explicit audit paths.
+        let list = registry
+            .dispatch(
+                &host,
+                &request_with_id("t-list", "session.list", json!({})),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            !list.result.unwrap().as_array().unwrap().iter().any(|s| s["id"] == json!(run_id)),
+            "default session.list must hide the plugin run"
+        );
+        let audit = registry
+            .dispatch(
+                &host,
+                &request_with_id(
+                    "t-audit",
+                    "session.list",
+                    json!({ "origin": "plugin:demo" }),
+                ),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            audit.result.unwrap().as_array().unwrap().iter().any(|s| s["id"] == json!(run_id)),
+            "origin filter is the audit path"
+        );
+        let archived = registry
+            .dispatch(
+                &host,
+                &request_with_id("t-archived", "session.listArchived", json!({})),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            !archived.result.unwrap().as_array().unwrap().iter().any(|s| s["id"] == json!(run_id))
+        );
+        let running = registry
+            .dispatch(
+                &host,
+                &request_with_id("t-running", "sessions.running", json!({})),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            !running.result.unwrap().as_array().unwrap().iter().any(|s| *s == json!(run_id)),
+            "sessions.running must hide plugin runs (sidebar running-poll)"
+        );
+
+        // 4) Own-plugin reads: paged messages shape + audit list.
+        let msgs = registry
+            .dispatch(
+                &host,
+                &request_with_id(
+                    "t-msgs",
+                    "pluginTask.messages",
+                    json!({ "plugin": "demo", "runId": run_id }),
+                ),
+                Some(&demo),
+                None,
+            )
+            .unwrap();
+        let msgs = msgs.result.unwrap();
+        assert!(msgs["messages"].is_array(), "{msgs:?}");
+        assert!(msgs["total"].is_number());
+        assert_eq!(msgs["hasMore"], json!(false));
+        let runs = registry
+            .dispatch(
+                &host,
+                &request_with_id("t-runs", "pluginTask.list", json!({ "plugin": "demo" })),
+                Some(&demo),
+                None,
+            )
+            .unwrap();
+        assert!(
+            runs.result.unwrap().as_array().unwrap().iter().any(|s| s["id"] == json!(run_id))
+        );
+
+        // 5) Cross-plugin access is FORBIDDEN on every handle-taking method,
+        //    including continuation runs.
+        let other = CallerScope::plugin(
+            "other",
+            vec![PERM_TASK_RUN.into(), PERM_TASK_READ.into()],
+        );
+        for (method, params) in [
+            ("pluginTask.wait", json!({ "plugin": "other", "runId": run_id, "timeoutMs": 1 })),
+            ("pluginTask.messages", json!({ "plugin": "other", "runId": run_id })),
+            ("pluginTask.cancel", json!({ "plugin": "other", "runId": run_id })),
+            ("pluginTask.approve", json!({ "plugin": "other", "runId": run_id, "allowed": true })),
+            ("pluginTask.run", json!({ "plugin": "other", "runId": run_id, "task": "steal" })),
+        ] {
+            let err = registry
+                .dispatch(
+                    &host,
+                    &request_with_id("t-cross", method, params),
+                    Some(&other),
+                    None,
+                )
+                .unwrap_err();
+            assert_eq!(err.code, "FORBIDDEN", "{method} must reject cross-plugin access");
+        }
+
+        // 6) Unknown handle → NOT_FOUND.
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id(
+                    "t-unknown",
+                    "pluginTask.wait",
+                    json!({ "plugin": "demo", "runId": "no-such-run", "timeoutMs": 1 }),
+                ),
+                Some(&demo),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "NOT_FOUND");
+
+        // 7) A user chat is not a plugin task: cancel via the primitive is
+        //    FORBIDDEN even for a fully-permitted plugin.
+        let _rx = host
+            .execute("chat".into(), None, None, None, None, None, None, None, None)
+            .expect("chat execute");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let chat_id = loop {
+            if let Some(s) = host.list_sessions(None).into_iter().find(|s| s.id != run_id) {
+                break s.id;
+            }
+            assert!(std::time::Instant::now() < deadline, "chat row never appeared");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id(
+                    "t-chat",
+                    "pluginTask.cancel",
+                    json!({ "plugin": "demo", "runId": chat_id }),
+                ),
+                Some(&demo),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "FORBIDDEN");
+
+        // 8) No pending approval → APPROVAL_NOT_PENDING (stable contract).
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id(
+                    "t-approve",
+                    "pluginTask.approve",
+                    json!({ "plugin": "demo", "runId": run_id, "allowed": true }),
+                ),
+                Some(&demo),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "APPROVAL_NOT_PENDING");
+
+        // 9) Malformed plugin identity → INVALID_PARAMS.
+        let err = registry
+            .dispatch(
+                &host,
+                &request_with_id(
+                    "t-badid",
+                    "pluginTask.run",
+                    json!({ "plugin": "bad name", "task": "x" }),
+                ),
+                Some(&demo),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "INVALID_PARAMS");
     }
 
     /// FPM acceptance #5: two HTTP clients operate on the same session

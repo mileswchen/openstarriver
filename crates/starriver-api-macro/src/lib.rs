@@ -381,39 +381,10 @@ fn expand(attr: ApiMethodAttr, func: ItemFn) -> syn::Result<TokenStream2> {
                             __ApiError::internal(__msg)
                         }
                     })?;
-                let __subscription = ::uuid::Uuid::new_v4().to_string();
-                if let Some(emit) = call.emit.clone() {
-                    let __runtime = call.host.runtime_handle().clone();
-                    let __sub = __subscription.clone();
-                    __runtime.spawn(async move {
-                        let mut seq: u64 = 0;
-                        loop {
-                            let event = match __receiver.recv().await {
-                                Ok(event) => event,
-                                // Lagged means THIS consumer fell behind —
-                                // the receiver stays usable; exiting the loop
-                                // here silently starved the subscriber of its
-                                // terminal event (its execute hangs forever).
-                                Err(::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                    continue;
-                                }
-                                Err(::tokio::sync::broadcast::error::RecvError::Closed) => break,
-                            };
-                            seq += 1;
-                            let event_type = event
-                                .get("type")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("event")
-                                .to_string();
-                            emit(::starriver_protocol::EventEnvelope::new(
-                                __sub.clone(),
-                                seq,
-                                event_type,
-                                event,
-                            ));
-                        }
-                    });
-                }
+                // Plugin platform P2: the relay lives in one shared host
+                // helper (spawn_event_relay) so hand-written streaming specs
+                // (pluginTask.run) and this template never diverge.
+                let __subscription = call.host.spawn_event_relay(__receiver, call.emit.clone());
                 Ok(::serde_json::json!({ "subscription": __subscription }))
             }
         }

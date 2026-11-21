@@ -121,6 +121,8 @@ impl HostApi for Host {
             // WI-216: the TUI is terminal-initiated with no client echo to
             // reconcile — no correlation id.
             None,
+            // P1: TUI runs are user-initiated, never plugin-branded.
+            None,
         )
     }
     fn approve(&self, session_id: String, allowed: bool, remember: Option<bool>) -> Result<()> {

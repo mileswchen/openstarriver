@@ -809,6 +809,52 @@ impl HostRuntime {
         self.runtime_handle.clone()
     }
 
+    /// Plugin platform P2: the shared subscription relay. Forwards a per-run
+    /// event broadcast as [`starriver_protocol::EventEnvelope`]s on `emit`
+    /// and returns the subscription id. Used by BOTH the `api_method`
+    /// streaming template and hand-written streaming specs (`pluginTask.run`)
+    /// so the two never diverge. With `emit = None` (caller did not
+    /// subscribe) the receiver is simply dropped — same semantics the inline
+    /// template always had.
+    pub fn spawn_event_relay(
+        &self,
+        mut receiver: tokio::sync::broadcast::Receiver<serde_json::Value>,
+        emit: Option<Arc<dyn Fn(starriver_protocol::EventEnvelope) + Send + Sync>>,
+    ) -> String {
+        let subscription = uuid::Uuid::new_v4().to_string();
+        if let Some(emit) = emit {
+            let runtime = self.runtime_handle();
+            let sub = subscription.clone();
+            runtime.spawn(async move {
+                let mut seq: u64 = 0;
+                loop {
+                    let event = match receiver.recv().await {
+                        Ok(event) => event,
+                        // Lagged means THIS consumer fell behind — the
+                        // receiver stays usable; exiting the loop here
+                        // silently starved the subscriber of its terminal
+                        // event (its execute hangs forever).
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    };
+                    seq += 1;
+                    let event_type = event
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("event")
+                        .to_string();
+                    emit(starriver_protocol::EventEnvelope::new(
+                        sub.clone(),
+                        seq,
+                        event_type,
+                        event,
+                    ));
+                }
+            });
+        }
+        subscription
+    }
+
     /// Single-input-slot query: whether the session currently has a running
     /// task (fast-path check for the protocol `session.execute`; `execute`
     /// still falls back to an atomic insert internally).
@@ -1382,7 +1428,34 @@ impl HostRuntime {
         // retires when `UserMessageCommitted` echoes it back. Optional;
         // host-generated runs omit it.
         client_request_id: Option<String>,
+        // Plugin platform P1: creation-time origin marker for plugin-spawned
+        // background sessions. The renderer bridge stamps `plugin:<name>`
+        // from the manifest identity (frames cannot claim another origin —
+        // the bridge overwrites whatever they send). Write-once: only fresh
+        // sessions are stamped, so a plugin continuing a user chat never
+        // re-brands it. The sidebar groups these runs apart from chats.
+        origin: Option<String>,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
+        // Only the plugin namespace is accepted on this API — `scheduled`
+        // and other subsystem origins are stamped by their own creators.
+        // Unknown shapes fail loudly instead of silently branding the row.
+        if let Some(origin) = origin.as_deref() {
+            let valid = origin
+                .strip_prefix("plugin:")
+                .map(|name| {
+                    !name.is_empty()
+                        && name.len() <= 128
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                })
+                .unwrap_or(false);
+            if !valid {
+                return Err(anyhow::anyhow!(
+                    "invalid session origin `{origin}` (expected `plugin:<name>`)"
+                ));
+            }
+        }
         // Staged execution mode for a NEW session (binding: chosen at
         // creation, locked per session). Only an explicitly passed value takes
         // effect (the Coding renderer always sends one for new sessions,
@@ -1736,6 +1809,27 @@ impl HostRuntime {
             // `sessions.running` reports the session for the whole first turn
             // and the sidebar poll materializes the row immediately (WI-179).
             running_guard.adopt(&sid);
+            // Plugin platform P1: freshness anchor, captured BEFORE this
+            // run's own stamps. A session is fresh only if no earlier execute
+            // attempt left a projection row or a log — a first turn that
+            // failed before writing its log still counts as created (its
+            // agent stamp proves it), so a later plugin continuation never
+            // re-brands it. Legacy sessions (log but no projection row) are
+            // covered by the log check.
+            let fresh_session = {
+                let inner = inner_arc.lock().await;
+                match inner.as_ref() {
+                    Some(runtime) => {
+                        !runtime.host_store.session_projection_exists(&sid)
+                            && runtime
+                                .persistence
+                                .coordinator()
+                                .load(starriver_kernel::session::SessionId(sid.clone()))
+                                .is_err()
+                    }
+                    None => false,
+                }
+            };
             // New session: apply the staged mode to the kernel first (the
             // preset is stamped on SessionCreated), and write the mode into the
             // projcache as soon as the session id exists (write-once, locked for
@@ -1760,6 +1854,21 @@ impl HostRuntime {
                         .stamp_session_agent(&sid, &spawn_agent_name)
                     {
                         tracing::warn!(session = %sid, error = %e, "stamp session agent failed");
+                    }
+                }
+            }
+            // Plugin platform P1: plugin-spawned background sessions carry a
+            // durable `plugin:<name>` origin so the sidebar groups them apart
+            // from the user's chats (projection only — never hidden/deleted).
+            // Creation-time only (fresh_session above): a plugin continuing
+            // an existing chat must never re-brand it.
+            if fresh_session {
+                if let Some(ref origin) = origin {
+                    let inner = inner_arc.lock().await;
+                    if let Some(ref runtime) = *inner {
+                        if let Err(e) = runtime.host_store.stamp_session_origin(&sid, origin) {
+                            tracing::warn!(session = %sid, error = %e, "stamp session origin failed");
+                        }
                     }
                 }
             }
@@ -2215,6 +2324,124 @@ mod tests {
                 "NotRunning must return without waiting out the timeout"
             );
         });
+    }
+
+    /// Plugin platform P1: a plugin-spawned background session carries the
+    /// durable `plugin:<name>` origin (sidebar groups it apart from chats);
+    /// a continuation never re-stamps it; malformed origins fail loudly
+    /// before anything runs. The turn itself needs no LLM — the stamp lands
+    /// in the spawned task before the kernel runs, and the projection is
+    /// polled until it appears.
+    #[test]
+    fn execute_stamps_plugin_origin_write_once() {
+        crate::testutil::with_temp_home(|home| {
+            std::fs::create_dir_all(home.join(".starriver")).unwrap();
+            let rt = HostRuntime::new(None).expect("runtime constructs");
+
+            // Only the plugin namespace is accepted; bad shapes are a caller
+            // bug and must not create a session or leave a running guard.
+            for bad in ["scheduled", "plugin:", "plugin:../evil", "plugin:a b", "chat"] {
+                let err = rt
+                    .execute(
+                        "t".into(), None, None, None, None, None, None, None,
+                        Some(bad.into()),
+                    )
+                    .expect_err("bad origin must fail");
+                assert!(err.to_string().contains("invalid session origin"), "{bad}: {err}");
+            }
+            assert!(rt.list_sessions(None).is_empty(), "rejected origins must not create sessions");
+
+            let _rx = rt
+                .execute(
+                    "bg task".into(), None, None, None, None, None, None, None,
+                    Some("plugin:demo".into()),
+                )
+                .expect("execute accepts a plugin origin");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let sid = loop {
+                if let Some(s) = rt
+                    .list_sessions(None)
+                    .into_iter()
+                    .find(|s| s.origin.as_deref() == Some("plugin:demo"))
+                {
+                    break s.id;
+                }
+                assert!(std::time::Instant::now() < deadline, "origin stamp never landed");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            };
+            wait_turn_idle(&rt, &sid);
+
+            // Continuation with a DIFFERENT origin claim: write-once holds.
+            let _rx = rt
+                .execute(
+                    "follow-up".into(), Some(sid.clone()), None, None, None, None, None, None,
+                    Some("plugin:other".into()),
+                )
+                .expect("continuation executes");
+            wait_turn_idle(&rt, &sid);
+            let row = rt
+                .list_sessions(None)
+                .into_iter()
+                .find(|s| s.id == sid)
+                .expect("session row");
+            assert_eq!(row.origin.as_deref(), Some("plugin:demo"), "origin must never change");
+        });
+    }
+
+    /// Plugin platform P1: a plugin continuing a plain user chat must never
+    /// re-brand it — the origin stamp is creation-time only, so the chat
+    /// stays in the user's Chats folder, not Plugin runs.
+    #[test]
+    fn execute_origin_never_rebrands_existing_chat() {
+        crate::testutil::with_temp_home(|home| {
+            std::fs::create_dir_all(home.join(".starriver")).unwrap();
+            let rt = HostRuntime::new(None).expect("runtime constructs");
+
+            let _rx = rt
+                .execute("user chat".into(), None, None, None, None, None, None, None, None)
+                .expect("chat executes");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let sid = loop {
+                if let Some(s) = rt.list_sessions(None).into_iter().next() {
+                    break s.id;
+                }
+                assert!(std::time::Instant::now() < deadline, "chat session never appeared");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            };
+            wait_turn_idle(&rt, &sid);
+
+            // The plugin bridge injects origin on EVERY session.execute it
+            // forwards (including continuations) — the host must ignore it
+            // for an existing session.
+            let _rx = rt
+                .execute(
+                    "plugin follow-up".into(), Some(sid.clone()), None, None, None, None, None, None,
+                    Some("plugin:demo".into()),
+                )
+                .expect("continuation executes");
+            wait_turn_idle(&rt, &sid);
+            let row = rt
+                .list_sessions(None)
+                .into_iter()
+                .find(|s| s.id == sid)
+                .expect("session row");
+            assert_eq!(row.origin, None, "a user chat must never gain a plugin origin");
+        });
+    }
+
+    /// Block until the session has no live turn. Without an LLM the turn
+    /// fails fast — often before the first poll — so NotRunning (BUG-156:
+    /// finished or never started) is the expected idle signal, not a bug.
+    fn wait_turn_idle(rt: &HostRuntime, sid: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            match rt.wait_turn(sid, std::time::Duration::from_secs(1)) {
+                WaitTurnOutcome::NotRunning | WaitTurnOutcome::Completed => break,
+                WaitTurnOutcome::Timeout => {
+                    assert!(std::time::Instant::now() < deadline, "turn never ended");
+                }
+            }
+        }
     }
 
     /// BUG-156: the turn-end wake fires when the run guard drops — the same

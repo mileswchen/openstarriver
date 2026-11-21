@@ -54,6 +54,10 @@ files:
   # Single-instance lock helper, required by main.js line 1 — same BUG-95
   # class: missing from the asar = "Cannot find module './single-instance'".
   - single-instance.js
+  # Provider model probe (runtime:fetchProviderModels IPC), required by main.js
+  # line 43 — same BUG-95 class: missing from the asar = "Cannot find module
+  # './providerProbe'" crash on launch.
+  - providerProbe.js
   - protocol.schema.json
   - preload.js
   # Linux window icon: main.js sets BrowserWindow.icon to this file — without

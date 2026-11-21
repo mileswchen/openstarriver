@@ -87,6 +87,11 @@ pub struct PluginUiEntry {
     pub permissions: Vec<String>,
     pub theme: Option<String>,
     pub icon: Option<String>,
+    /// P1: manifest opt-in to spawning new host sessions (bare session.execute).
+    pub background: bool,
+    /// P2: manifest autonomy ceiling for task runs; None → bridge enforces
+    /// `manual` (fail-closed). Delivered to the renderer as `maxPermissionPreset`.
+    pub max_permission_preset: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -294,8 +299,9 @@ pub struct SessionInfo {
     /// `None` for sessions created before the stamp existed — the UI falls
     /// back to workspace membership).
     pub agent: Option<String>,
-    /// Session origin marker (`"scheduled"` = scheduled-task run; `None` =
-    /// plain conversation). Drives the sidebar Tasks grouping (WI-152).
+    /// Session origin marker (`"scheduled"` = scheduled-task run, WI-152;
+    /// `"plugin:<name>"` = plugin-spawned background run, plugin platform P1;
+    /// `None` = plain conversation). Drives the sidebar Tasks grouping.
     pub origin: Option<String>,
 }
 

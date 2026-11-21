@@ -8,6 +8,9 @@
         "properties": {
           "workspaceId": {
             "type": "string"
+          },
+          "origin": {
+            "type": "string"
           }
         },
         "required": [],
@@ -247,6 +250,9 @@
             "type": "string"
           },
           "clientRequestId": {
+            "type": "string"
+          },
+          "origin": {
             "type": "string"
           }
         },
@@ -1348,6 +1354,293 @@
       },
       "permissions": [
         "tools:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "tools.call",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "arguments": {},
+          "sessionId": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "value": {},
+          "content": {
+            "type": "array",
+            "items": {}
+          },
+          "meta": {},
+          "error": {}
+        },
+        "required": [
+          "ok",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "tool:call"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "pluginTask.run",
+      "params": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "permissionPreset": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "agentPreset": {
+            "type": "string"
+          },
+          "clientRequestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plugin",
+          "task"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "subscription": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "subscription"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "task:run"
+      ],
+      "streaming": true
+    },
+    {
+      "name": "pluginTask.wait",
+      "params": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plugin",
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ended": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "finalAssistant": {}
+        },
+        "required": [
+          "ended",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "task:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "pluginTask.messages",
+      "params": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "before": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plugin",
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {}
+          },
+          "total": {
+            "type": "integer"
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "messages",
+          "total",
+          "hasMore"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "task:read"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "pluginTask.cancel",
+      "params": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plugin",
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cancelled"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "task:run"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "pluginTask.approve",
+      "params": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "allowed": {
+            "type": "boolean"
+          },
+          "remember": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "plugin",
+          "runId",
+          "allowed"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "task:run"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "pluginTask.list",
+      "params": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plugin"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "array",
+        "items": {}
+      },
+      "permissions": [
+        "task:read"
       ],
       "streaming": false
     },

@@ -3786,7 +3786,8 @@ interface SessionInfo {
   /** Agent the session started with (write-once stamp; undefined = legacy
    *  row — the UI falls back to workspace membership). */
   agent?: string;
-  /** Session origin marker ("scheduled" = scheduled-task run; WI-152). */
+  /** Session origin marker ("scheduled" = scheduled-task run, WI-152;
+   *  "plugin:<name>" = plugin-spawned background run, plugin platform P1). */
   origin?: string;
 }
 
@@ -12035,6 +12036,10 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
             // scheduled origin 戳;旧会话(记录已滚出)按任务名兜底(标题在
             // 创建时被精确盖为任务名)。
             const taskNames = new Set(Array.from(taskRuns.values()));
+            // 插件平台 P2:插件任务运行(origin=plugin:*)已在宿主侧从
+            // session.list 默认排除 —— 它们不是聊天,不进侧栏。P1 的
+            // 「插件任务」分组随之移除;审计走 pluginTask.list /
+            // session.list?origin=plugin:<name>(显式、不静默)。
             const isRun = (s: SessionInfo) =>
               taskRuns.has(s.id) || s.origin === 'scheduled' || (!!s.title && taskNames.has(s.title));
             const chats = ungrouped.filter(s => !isRun(s));

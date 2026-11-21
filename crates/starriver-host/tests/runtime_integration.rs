@@ -248,6 +248,7 @@ fn agent_named_execution_and_workspace_activation() {
                 None,
                 None,
                 None,
+                None,
             )
             .is_err());
         // Naming an agent installs its persona.
@@ -257,6 +258,7 @@ fn agent_named_execution_and_workspace_activation() {
                 None,
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -304,7 +306,7 @@ fn execute_without_engine_fails_contract_compliant() {
     // session_id (plugin kernel UiEvent contract).
     let mut rx = t
         .host
-        .execute("hi".into(), None, None, None, None, None, None, None)
+        .execute("hi".into(), None, None, None, None, None, None, None, None)
         .expect("execute accepts");
     let handle = t.host.runtime_handle();
     let events: Vec<serde_json::Value> = handle.block_on(async move {
@@ -334,6 +336,7 @@ fn execute_without_engine_fails_contract_compliant() {
         .execute(
             "go".into(),
             Some("custom-session-1".into()),
+            None,
             None,
             None,
             None,
@@ -379,6 +382,7 @@ fn single_input_slot_returns_session_busy_and_releases_after_run() {
             None,
             None,
             None,
+            None,
         )
         .expect("first execute");
     assert!(
@@ -392,6 +396,7 @@ fn single_input_slot_returns_session_busy_and_releases_after_run() {
         .execute(
             "second".into(),
             Some(sid.clone()),
+            None,
             None,
             None,
             None,
@@ -435,6 +440,7 @@ fn single_input_slot_returns_session_busy_and_releases_after_run() {
         .execute(
             "third".into(),
             Some(sid.clone()),
+            None,
             None,
             None,
             None,
@@ -501,6 +507,7 @@ fn execute_stamps_workspace_root_into_session_header() {
                 Some("stamped".into()),
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -620,6 +627,7 @@ fn execution_mode_binds_to_session_and_locks() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute accepts");
         let sid = {
@@ -682,6 +690,7 @@ fn execution_mode_binds_to_session_and_locks() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute accepts");
         let handle = t.host.runtime_handle();
@@ -733,6 +742,7 @@ fn execute_rejects_unknown_execution_mode() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect_err("unknown mode must be rejected");
         assert!(err.to_string().contains("unknown execution mode"), "{err}");
@@ -767,6 +777,7 @@ fn workspace_grouping_e2e_filter_archive_delete_then_ungroup() {
                 Some("s-w".into()),
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -1880,6 +1891,7 @@ fn forked_child_shares_parent_workspace_or_lists_ungrouped() {
                 None,
                 None,
                 None,
+                None,
             )
             .unwrap();
         let handle = t.host.runtime_handle();
@@ -2339,6 +2351,7 @@ fn fast_failing_model_does_not_spin_the_driver() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute accepts");
         let handle = host.runtime_handle();
@@ -2394,6 +2407,7 @@ fn title_request_audited_even_without_engine() {
         .execute(
             "name me".into(),
             Some("audit-t".into()),
+            None,
             None,
             None,
             None,
@@ -2458,6 +2472,7 @@ fn named_execute_and_review_mirror_into_kernel_residents() {
                 None,
                 None,
                 None,
+                None,
             )
             .ok();
         let preview = t.host.debug_kernel_system_preview().expect("kernel live");
@@ -2488,6 +2503,7 @@ fn named_execute_and_review_mirror_into_kernel_residents() {
                 None,
                 None,
                 None,
+                None,
             )
             .ok();
         let preview = t.host.debug_kernel_system_preview().expect("kernel live");
@@ -2508,6 +2524,7 @@ fn named_execute_and_review_mirror_into_kernel_residents() {
                 None,
                 None,
                 None,
+                None,
             )
             .ok();
         t.host
@@ -2516,6 +2533,7 @@ fn named_execute_and_review_mirror_into_kernel_residents() {
                 None,
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -2559,6 +2577,7 @@ fn title_audit_skipped_for_user_pinned_sessions() {
             .execute(
                 "name me".into(),
                 Some("pin-t".into()),
+                None,
                 None,
                 None,
                 None,
@@ -2634,6 +2653,7 @@ fn review_mode_reaches_the_wire_as_system_and_tool_whitelist() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         wait_terminal(&t.host, rx);
@@ -2699,6 +2719,7 @@ fn memory_recall_injects_into_the_system_prompt() {
                 Some("mem-t".into()),
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -2828,6 +2849,7 @@ fn ask_user_tool_resolves_via_interaction_respond() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
 
@@ -2893,6 +2915,7 @@ fn ask_user_tool_times_out_and_reports_the_miss() {
                 Some("ask-dead".into()),
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -3094,6 +3117,7 @@ fn plan_review_approval_exits_plan_mode_and_releases_readonly() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
 
@@ -3177,6 +3201,7 @@ fn plan_review_approval_with_preset_lands_danger_full_bundle() {
                 Some("plan-p".into()),
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -3265,6 +3290,7 @@ fn plan_review_invalid_preset_fails_without_resolving() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
 
@@ -3336,6 +3362,7 @@ fn plan_review_rejection_keeps_plan_mode_and_carries_feedback() {
                 Some("plan-r".into()),
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -3412,6 +3439,7 @@ fn exit_plan_mode_in_standard_mode_requests_review_and_approval_resumes() {
                 Some("plan-off".into()),
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -3575,6 +3603,7 @@ fn desktop_provider_route_reaches_the_wire_end_to_end() {
             .execute(
                 "say something".into(),
                 Some("route-e2e".into()),
+                None,
                 None,
                 None,
                 None,
@@ -3795,6 +3824,7 @@ fn missing_credential_fails_the_run_with_missing_credential() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         let handle = host.runtime_handle();
@@ -3916,6 +3946,7 @@ fn image_attachment_reaches_the_wire_as_inline_image_url() {
             .execute(
                 format!("![photo]({ref_id}) describe this"),
                 Some("img-wire".into()),
+                None,
                 None,
                 None,
                 None,
@@ -4225,6 +4256,7 @@ fn openai_responses_api_format_routes_to_the_responses_protocol() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         wait_terminal(&host, rx);
@@ -4324,6 +4356,7 @@ fn execute_does_not_leak_ui_subscriptions_into_followup_runs() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute1");
         handle.block_on(async {
@@ -4345,6 +4378,7 @@ fn execute_does_not_leak_ui_subscriptions_into_followup_runs() {
                 None,
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -4727,6 +4761,7 @@ fn live_turn_persists_usage_and_projects_duration_for_history() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         wait_terminal(&t.host, rx);
@@ -4868,6 +4903,7 @@ fn live_edit_turn_persists_file_changes_for_history() {
             .execute(
                 "edit the note".into(),
                 Some("file-e2e".into()),
+                None,
                 None,
                 None,
                 None,
@@ -5138,6 +5174,7 @@ fn vision_model_still_receives_image_blocks() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         wait_terminal(&host, rx);
@@ -5217,6 +5254,7 @@ fn declared_text_only_model_rejects_image_turn() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         let handle = host.runtime_handle();
@@ -5257,7 +5295,7 @@ fn declared_text_only_model_rejects_image_turn() {
 fn execute_and_wait(t: &TestHost, task: &str, sid: &str) {
     let rx = t
         .host
-        .execute(task.into(), Some(sid.into()), None, None, None, None, None, None)
+        .execute(task.into(), Some(sid.into()), None, None, None, None, None, None, None)
         .expect("execute");
     let handle = t.host.runtime_handle();
     handle.block_on(async move {
@@ -5626,6 +5664,7 @@ fn permission_preset_roundtrip_writes_both_knobs_and_derives() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute accepts");
         wait_terminal(&t.host, rx);
@@ -5689,6 +5728,7 @@ fn permission_preset_creation_binding_steers_the_session() {
                 None,
                 Some("danger-full-access".into()),
                 None,
+                None,
             )
             .expect("execute accepts");
         wait_terminal(&t.host, rx);
@@ -5719,6 +5759,7 @@ fn permission_preset_creation_binding_steers_the_session() {
                 None,
                 Some("manual".into()),
                 None,
+                None,
             )
             .expect("continuing execute accepts");
         wait_terminal(&t.host, rx);
@@ -5742,6 +5783,7 @@ fn permission_preset_creation_binding_steers_the_session() {
                 None,
                 None,
                 Some("nope".into()),
+                None,
                 None,
             )
             .unwrap_err();
@@ -5767,6 +5809,7 @@ fn permission_fold_reports_custom_for_non_table_combo() {
             .execute(
                 "hello".into(),
                 Some("perm-c".into()),
+                None,
                 None,
                 None,
                 None,
@@ -5898,6 +5941,7 @@ fn attach_workspace_unarchives_and_rehomes() {
             .execute(
                 "hello".into(),
                 Some("att-t".into()),
+                None,
                 None,
                 None,
                 None,
@@ -6126,6 +6170,7 @@ fn image_projection_log_stays_referenced_and_reload_pulls_hot() {
                     None,
                     None,
                     None,
+                    None,
                 ) {
                     Ok(receiver) => {
                         rx = Some(receiver);
@@ -6164,6 +6209,7 @@ fn image_projection_log_stays_referenced_and_reload_pulls_hot() {
             match host.execute(
                 "final check".to_string(),
                 Some(session.into()),
+                None,
                 None,
                 None,
                 None,
@@ -6311,6 +6357,7 @@ fn five_small_images_in_one_message_all_ride() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         wait_terminal(&host, rx);
@@ -6393,6 +6440,7 @@ fn byte_budget_sheds_oldest_images_e2e() {
             .execute(
                 format!("compare {markdown}"),
                 Some("budget-img".into()),
+                None,
                 None,
                 None,
                 None,
@@ -6545,6 +6593,7 @@ fn duplicate_reload_noop_lands_in_the_log_e2e() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         wait_terminal(&host, rx);
@@ -6656,6 +6705,7 @@ fn pruned_asset_reload_fails_and_repeat_gets_failure_hint_e2e() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         wait_terminal(&host, rx);
@@ -6749,6 +6799,7 @@ fn zero_byte_budget_disables_images_e2e() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         wait_terminal(&host, rx);
@@ -6814,6 +6865,7 @@ fn feedback_record_is_durable_and_validated() {
             .execute(
                 "hello".to_string(),
                 Some("fb-1".into()),
+                None,
                 None,
                 None,
                 None,
@@ -6902,6 +6954,7 @@ fn execute_rejects_unknown_agent_preset() {
             Some("no-such-preset".into()),
             None,
             None,
+            None,
         )
         .unwrap_err();
     assert!(
@@ -6923,6 +6976,7 @@ fn execute_rejects_agent_preset_on_continuing_session() {
             Some("pres-lock".into()),
             None,
             Some(starriver_host::CODING_AGENT_NAME.into()),
+            None,
             None,
             None,
             None,
@@ -6954,6 +7008,7 @@ fn execute_rejects_agent_preset_on_continuing_session() {
             Some(starriver_host::CODING_AGENT_NAME.into()),
             None,
             Some("coding".into()),
+            None,
             None,
             None,
         ) {
@@ -6989,6 +7044,7 @@ fn execute_accepts_the_builtin_coding_preset_on_new_sessions() {
             Some(starriver_host::CODING_AGENT_NAME.into()),
             None,
             Some("coding".into()),
+            None,
             None,
             None,
         )
@@ -7045,7 +7101,7 @@ fn steer_injects_into_live_session() {
     let t = test_host();
     let rx = t
         .host
-        .execute("count from 1".into(), None, None, None, None, None, None, None)
+        .execute("count from 1".into(), None, None, None, None, None, None, None, None)
         .expect("execute");
     // Wait for the session to exist, then steer into it.
     let handle = t.host.runtime_handle();
@@ -7224,6 +7280,7 @@ fn mid_run_model_switch_takes_effect_on_the_next_llm_call() {
                 None,
                 None,
                 Some(CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -7458,6 +7515,7 @@ fn goal_loop_runs_rounds_and_stops_at_budget() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         let mut sid = String::new();
@@ -7503,6 +7561,7 @@ fn goal_loop_runs_rounds_and_stops_at_budget() {
                 Some(sid.clone()),
                 None,
                 Some(CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -7668,6 +7727,7 @@ fn cancel_during_silent_stream_takes_effect_immediately() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
 
@@ -7782,6 +7842,7 @@ fn truncated_llm_stream_fails_the_turn_visibly() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         let mut got_error = None;
@@ -7878,6 +7939,7 @@ fn running_session_ids_tracks_the_single_input_slot() {
                 Some(session_id.clone()),
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -8010,6 +8072,7 @@ fn fresh_session_first_turn_holds_slot_and_lists_during_the_run() {
                 None,
                 None,
                 Some(starriver_host::CODING_AGENT_NAME.into()),
+                None,
                 None,
                 None,
                 None,
@@ -8195,6 +8258,7 @@ fn send_now_followup_turn_stays_visible_on_execute_stream() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
 
@@ -8346,6 +8410,7 @@ fn turn_start_projects_legacy_task_started_event() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         let mut saw_started = false;
@@ -8470,6 +8535,7 @@ fn queued_message_auto_claim_streams_followup_turn() {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("execute");
         for _ in 0..500 {
@@ -8551,6 +8617,7 @@ fn execute_client_request_id_receipts_commit_event() {
             None,
             None,
             Some("rpc-wi216-e2e".into()),
+            None,
         )
         .expect("execute");
     // Drain until terminal, collecting the receipt(s).

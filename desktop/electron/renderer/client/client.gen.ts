@@ -11,7 +11,7 @@ export interface ProtocolMethodMeta {
 }
 
 export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
-  "session.list": { params: {"type":"object","properties":{"workspaceId":{"type":"string"}},"required":[],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["session:read"] },
+  "session.list": { params: {"type":"object","properties":{"workspaceId":{"type":"string"},"origin":{"type":"string"}},"required":[],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["session:read"] },
   "session.messages": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"limit":{"type":"integer"},"before":{"type":"integer"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.archiveMessages": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:read"] },
   "session.fork": { params: {"type":"object","properties":{"sourceId":{"type":"string"},"beforeMsgId":{"type":"integer"},"task":{"type":"string"}},"required":["sourceId","beforeMsgId","task"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
@@ -21,7 +21,7 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
   "session.unarchive": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.attachWorkspace": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"workspaceId":{"type":"string"}},"required":["sessionId","workspaceId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "session.listArchived": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["session:read"] },
-  "session.execute": { params: {"type":"object","properties":{"task":{"type":"string"},"sessionId":{"type":"string"},"executionMode":{"type":"string"},"agent":{"type":"string"},"isolation":{"type":"boolean"},"agentPreset":{"type":"string"},"permissionPreset":{"type":"string"},"clientRequestId":{"type":"string"}},"required":["task"],"additionalProperties":false}, result: {"type":"object","properties":{"subscription":{"type":"string"}},"required":["subscription"],"additionalProperties":false}, streaming: true, permissions: ["session:execute"] },
+  "session.execute": { params: {"type":"object","properties":{"task":{"type":"string"},"sessionId":{"type":"string"},"executionMode":{"type":"string"},"agent":{"type":"string"},"isolation":{"type":"boolean"},"agentPreset":{"type":"string"},"permissionPreset":{"type":"string"},"clientRequestId":{"type":"string"},"origin":{"type":"string"}},"required":["task"],"additionalProperties":false}, result: {"type":"object","properties":{"subscription":{"type":"string"}},"required":["subscription"],"additionalProperties":false}, streaming: true, permissions: ["session:execute"] },
   "session.cancel": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:execute"] },
   "session.steer": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"task":{"type":"string"}},"required":["sessionId","task"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:execute"] },
   "session.queueList": { params: {"type":"object","properties":{"sessionId":{"type":"string"}},"required":["sessionId"],"additionalProperties":false}, result: {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":[],"additionalProperties":false}}, streaming: false, permissions: ["session:execute"] },
@@ -66,6 +66,13 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
   "approval.revokeRule": { params: {"type":"object","properties":{"sessionId":{"type":"string"},"ruleId":{"type":"string"}},"required":["sessionId","ruleId"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["session:write"] },
   "agentPresets.list": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"object","properties":{"presets":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"agent":{"type":"string"},"name":{"type":"string"},"description":{"type":"string"},"source":{"type":"string"},"broken":{"type":"string"},"isDefault":{"type":"boolean"}},"required":["id","agent","name","description","source","isDefault"],"additionalProperties":false}},"default":{"type":"string"}},"required":["presets","default"],"additionalProperties":false}, streaming: false, permissions: ["agents:read"] },
   "tools.list": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["tools:read"] },
+  "tools.call": { params: {"type":"object","properties":{"name":{"type":"string"},"arguments":{},"sessionId":{"type":"string"},"timeoutMs":{"type":"integer"}},"required":["name"],"additionalProperties":false}, result: {"type":"object","properties":{"ok":{"type":"boolean"},"value":{},"content":{"type":"array","items":{}},"meta":{},"error":{}},"required":["ok","content"],"additionalProperties":false}, streaming: false, permissions: ["tool:call"] },
+  "pluginTask.run": { params: {"type":"object","properties":{"plugin":{"type":"string"},"task":{"type":"string"},"runId":{"type":"string"},"permissionPreset":{"type":"string"},"agent":{"type":"string"},"agentPreset":{"type":"string"},"clientRequestId":{"type":"string"}},"required":["plugin","task"],"additionalProperties":false}, result: {"type":"object","properties":{"runId":{"type":"string"},"subscription":{"type":"string"}},"required":["runId","subscription"],"additionalProperties":false}, streaming: true, permissions: ["task:run"] },
+  "pluginTask.wait": { params: {"type":"object","properties":{"plugin":{"type":"string"},"runId":{"type":"string"},"timeoutMs":{"type":"integer"}},"required":["plugin","runId"],"additionalProperties":false}, result: {"type":"object","properties":{"ended":{"type":"boolean"},"reason":{"type":"string"},"finalAssistant":{}},"required":["ended","reason"],"additionalProperties":false}, streaming: false, permissions: ["task:read"] },
+  "pluginTask.messages": { params: {"type":"object","properties":{"plugin":{"type":"string"},"runId":{"type":"string"},"limit":{"type":"integer"},"before":{"type":"integer"}},"required":["plugin","runId"],"additionalProperties":false}, result: {"type":"object","properties":{"messages":{"type":"array","items":{}},"total":{"type":"integer"},"hasMore":{"type":"boolean"}},"required":["messages","total","hasMore"],"additionalProperties":false}, streaming: false, permissions: ["task:read"] },
+  "pluginTask.cancel": { params: {"type":"object","properties":{"plugin":{"type":"string"},"runId":{"type":"string"}},"required":["plugin","runId"],"additionalProperties":false}, result: {"type":"object","properties":{"cancelled":{"type":"boolean"}},"required":["cancelled"],"additionalProperties":false}, streaming: false, permissions: ["task:run"] },
+  "pluginTask.approve": { params: {"type":"object","properties":{"plugin":{"type":"string"},"runId":{"type":"string"},"allowed":{"type":"boolean"},"remember":{"type":"boolean"}},"required":["plugin","runId","allowed"],"additionalProperties":false}, result: {"type":"object","properties":{},"required":[],"additionalProperties":false}, streaming: false, permissions: ["task:run"] },
+  "pluginTask.list": { params: {"type":"object","properties":{"plugin":{"type":"string"}},"required":["plugin"],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["task:read"] },
   "agents.list": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["agents:read"] },
   "agents.scan": { params: {"type":"object","properties":{},"required":[],"additionalProperties":false}, result: {"type":"array","items":{}}, streaming: false, permissions: ["agents:read"] },
   "agents.create": { params: {"type":"object","properties":{"name":{"type":"string"},"description":{"type":"string"}},"required":["name","description"],"additionalProperties":false}, result: {}, streaming: false, permissions: ["agents:write"] },
@@ -145,7 +152,7 @@ export const PROTOCOL_METHODS: Record<string, ProtocolMethodMeta> = {
 };
 
 export interface ProtocolClientMethods {
-  sessionList(params: { workspaceId?: string }): Promise<unknown[]>;
+  sessionList(params: { workspaceId?: string; origin?: string }): Promise<unknown[]>;
   sessionMessages(params: { sessionId: string; limit?: number; before?: number }): Promise<unknown>;
   sessionArchiveMessages(params: { sessionId: string }): Promise<unknown>;
   sessionFork(params: { sourceId: string; beforeMsgId: number; task: string }): Promise<unknown>;
@@ -155,7 +162,7 @@ export interface ProtocolClientMethods {
   sessionUnarchive(params: { sessionId: string }): Promise<unknown>;
   sessionAttachWorkspace(params: { sessionId: string; workspaceId: string }): Promise<unknown>;
   sessionListArchived(params: {  }): Promise<unknown[]>;
-  sessionExecute(params: { task: string; sessionId?: string; executionMode?: string; agent?: string; isolation?: boolean; agentPreset?: string; permissionPreset?: string; clientRequestId?: string }): Promise<{ subscription: string }>;
+  sessionExecute(params: { task: string; sessionId?: string; executionMode?: string; agent?: string; isolation?: boolean; agentPreset?: string; permissionPreset?: string; clientRequestId?: string; origin?: string }): Promise<{ subscription: string }>;
   sessionCancel(params: { sessionId: string }): Promise<unknown>;
   sessionSteer(params: { sessionId: string; task: string }): Promise<unknown>;
   sessionQueueList(params: { sessionId: string }): Promise<{ id?: string; text?: string }[]>;
@@ -200,6 +207,13 @@ export interface ProtocolClientMethods {
   approvalRevokeRule(params: { sessionId: string; ruleId: string }): Promise<unknown>;
   agentPresetsList(params: {  }): Promise<{ presets: { id: string; agent: string; name: string; description: string; source: string; broken?: string; isDefault: boolean }[]; default: string }>;
   toolsList(params: {  }): Promise<unknown[]>;
+  toolsCall(params: { name: string; arguments?: unknown; sessionId?: string; timeoutMs?: number }): Promise<{ ok: boolean; value?: unknown; content: unknown[]; meta?: unknown; error?: unknown }>;
+  pluginTaskRun(params: { plugin: string; task: string; runId?: string; permissionPreset?: string; agent?: string; agentPreset?: string; clientRequestId?: string }): Promise<{ runId: string; subscription: string }>;
+  pluginTaskWait(params: { plugin: string; runId: string; timeoutMs?: number }): Promise<{ ended: boolean; reason: string; finalAssistant?: unknown }>;
+  pluginTaskMessages(params: { plugin: string; runId: string; limit?: number; before?: number }): Promise<{ messages: unknown[]; total: number; hasMore: boolean }>;
+  pluginTaskCancel(params: { plugin: string; runId: string }): Promise<{ cancelled: boolean }>;
+  pluginTaskApprove(params: { plugin: string; runId: string; allowed: boolean; remember?: boolean }): Promise<{  }>;
+  pluginTaskList(params: { plugin: string }): Promise<unknown[]>;
   agentsList(params: {  }): Promise<unknown[]>;
   agentsScan(params: {  }): Promise<unknown[]>;
   agentsCreate(params: { name: string; description: string }): Promise<unknown>;

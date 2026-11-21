@@ -1,7 +1,7 @@
 // FPM P3 plugin host tests: permission filtering, contribution sync (tab/theme registration), the frame message bridge.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { canInvoke, syncPluginTabs } from './contrib/pluginHost';
+import { canInvoke, pluginCallParams, presetCeilingDenied, presetRank, sessionSpawnDenied, syncPluginTabs } from './contrib/pluginHost';
 import { getShellReplacement, getTab, listTabs, listThemes } from './contrib/registry';
 
 function fakeStarriver(plugins: unknown[]) {
@@ -41,6 +41,151 @@ describe('canInvoke permission filter', () => {
     expect(canInvoke(['session:read'], 'session.execute')).toBe(false);
     expect(canInvoke([], 'session.list')).toBe(false);
     expect(canInvoke([], 'nope.nope')).toBe(true); // unregistered method: no extra allow semantics (see host)
+  });
+});
+
+describe('sessionSpawnDenied bridge gate (plugin platform P1)', () => {
+  it('denies bare session.execute without the background opt-in', () => {
+    expect(sessionSpawnDenied(undefined, 'session.execute', {})).toBe(true);
+    expect(sessionSpawnDenied(null, 'session.execute', undefined)).toBe(true);
+    expect(sessionSpawnDenied({}, 'session.execute', { prompt: 'hi' })).toBe(true);
+    expect(sessionSpawnDenied({ background: false }, 'session.execute', {})).toBe(true);
+    // Empty / non-string sessionId is not a continuation — still a spawn.
+    expect(sessionSpawnDenied({}, 'session.execute', { sessionId: '' })).toBe(true);
+    expect(sessionSpawnDenied({}, 'session.execute', { sessionId: 42 })).toBe(true);
+  });
+
+  it('allows continuation of an existing session without any opt-in', () => {
+    expect(sessionSpawnDenied({}, 'session.execute', { sessionId: 's-1', prompt: 'follow-up' })).toBe(false);
+    expect(sessionSpawnDenied(undefined, 'session.execute', { sessionId: 's-1' })).toBe(false);
+  });
+
+  it('allows spawning only with the manifest background declaration', () => {
+    expect(sessionSpawnDenied({ background: true }, 'session.execute', {})).toBe(false);
+    expect(sessionSpawnDenied({ background: true }, 'session.execute', { sessionId: 's-1' })).toBe(false);
+  });
+
+  it('never gates other methods — tools.call is the session-less data path', () => {
+    expect(sessionSpawnDenied({}, 'tools.call', { name: 'glob', arguments: {} })).toBe(false);
+    expect(sessionSpawnDenied({}, 'session.list', {})).toBe(false);
+    expect(sessionSpawnDenied(undefined, 'plugins.list', undefined)).toBe(false);
+  });
+});
+
+describe('pluginCallParams origin branding (plugin platform P1)', () => {
+  it('brands session.execute with the manifest identity, overwriting frame claims', () => {
+    expect(pluginCallParams('demo', 'session.execute', { task: 't' })).toEqual({
+      task: 't',
+      origin: 'plugin:demo',
+    });
+    // A frame claiming another origin (or none) cannot escape its identity.
+    expect(pluginCallParams('demo', 'session.execute', { task: 't', origin: 'scheduled' })).toEqual({
+      task: 't',
+      origin: 'plugin:demo',
+    });
+    expect(pluginCallParams('demo', 'session.execute', undefined)).toEqual({ origin: 'plugin:demo' });
+    // Continuations keep their sessionId — the host ignores origin for them.
+    expect(pluginCallParams('demo', 'session.execute', { sessionId: 's-1', task: 't' })).toEqual({
+      sessionId: 's-1',
+      task: 't',
+      origin: 'plugin:demo',
+    });
+  });
+
+  it('passes other methods through untouched', () => {
+    const params = { name: 'glob', arguments: { pattern: '*.rs' } };
+    expect(pluginCallParams('demo', 'tools.call', params)).toBe(params);
+    expect(pluginCallParams('demo', 'session.list', undefined)).toEqual({});
+  });
+});
+
+describe('pluginCallParams pluginTask identity branding (plugin platform P2)', () => {
+  it('brands every pluginTask.* call with the manifest identity, overwriting frame claims', () => {
+    for (const method of [
+      'pluginTask.run',
+      'pluginTask.wait',
+      'pluginTask.messages',
+      'pluginTask.cancel',
+      'pluginTask.approve',
+      'pluginTask.list',
+    ]) {
+      expect(pluginCallParams('demo', method, { runId: 'r-1' })).toEqual({
+        runId: 'r-1',
+        plugin: 'demo',
+      });
+      // A frame claiming another plugin cannot escape its identity.
+      expect(pluginCallParams('demo', method, { plugin: 'other', runId: 'r-1' })).toEqual({
+        runId: 'r-1',
+        plugin: 'demo',
+      });
+    }
+    expect(pluginCallParams('demo', 'pluginTask.run', undefined)).toEqual({ plugin: 'demo' });
+  });
+
+  it('keeps session.execute origin branding alongside the new task branding', () => {
+    expect(pluginCallParams('demo', 'session.execute', { task: 't' })).toEqual({
+      task: 't',
+      origin: 'plugin:demo',
+    });
+    // Non-task, non-execute methods stay untouched.
+    const params = { query: 'x' };
+    expect(pluginCallParams('demo', 'session.search', params)).toBe(params);
+  });
+});
+
+describe('presetRank / presetCeilingDenied (plugin platform P2)', () => {
+  it('ranks presets by autonomy and rejects unknown names', () => {
+    expect(presetRank('manual')).toBe(0);
+    expect(presetRank('accept-edits')).toBe(1);
+    expect(presetRank('auto')).toBe(2);
+    expect(presetRank('danger-full-access')).toBe(3);
+    expect(presetRank('yolo')).toBeNull();
+    expect(presetRank('')).toBeNull();
+  });
+
+  it('undeclared ceiling is manual (fail-closed): anything above manual is denied', () => {
+    for (const ui of [undefined, null, {}]) {
+      expect(presetCeilingDenied(ui, 'pluginTask.run', { task: 't' })).toBe(false); // omitted → manual
+      expect(presetCeilingDenied(ui, 'pluginTask.run', { task: 't', permissionPreset: 'manual' })).toBe(false);
+      expect(presetCeilingDenied(ui, 'pluginTask.run', { task: 't', permissionPreset: 'accept-edits' })).toBe(true);
+      expect(presetCeilingDenied(ui, 'pluginTask.run', { task: 't', permissionPreset: 'auto' })).toBe(true);
+      expect(presetCeilingDenied(ui, 'session.execute', { task: 't', permissionPreset: 'danger-full-access' })).toBe(true);
+    }
+  });
+
+  it('declared ceiling allows up to its rank and denies above', () => {
+    const ui = { maxPermissionPreset: 'auto' };
+    expect(presetCeilingDenied(ui, 'pluginTask.run', { permissionPreset: 'manual' })).toBe(false);
+    expect(presetCeilingDenied(ui, 'pluginTask.run', { permissionPreset: 'accept-edits' })).toBe(false);
+    expect(presetCeilingDenied(ui, 'pluginTask.run', { permissionPreset: 'auto' })).toBe(false);
+    expect(presetCeilingDenied(ui, 'pluginTask.run', { permissionPreset: 'danger-full-access' })).toBe(true);
+    const max = { maxPermissionPreset: 'danger-full-access' };
+    expect(presetCeilingDenied(max, 'pluginTask.run', { permissionPreset: 'danger-full-access' })).toBe(false);
+  });
+
+  it('malformed requests and declarations fail closed', () => {
+    const ui = { maxPermissionPreset: 'auto' };
+    expect(presetCeilingDenied(ui, 'pluginTask.run', { permissionPreset: 'yolo' })).toBe(true);
+    expect(presetCeilingDenied(ui, 'pluginTask.run', { permissionPreset: 42 })).toBe(true);
+    // A malformed ceiling declaration degrades to manual, never to unlimited.
+    const bad = { maxPermissionPreset: 'superuser' };
+    expect(presetCeilingDenied(bad, 'pluginTask.run', { permissionPreset: 'auto' })).toBe(true);
+    expect(presetCeilingDenied(bad, 'pluginTask.run', { permissionPreset: 'manual' })).toBe(false);
+  });
+
+  it('gates the direct preset-change path too (session.setPermissionPreset)', () => {
+    const ui = { maxPermissionPreset: 'accept-edits' };
+    expect(presetCeilingDenied(ui, 'session.setPermissionPreset', { sessionId: 's', preset: 'auto' })).toBe(true);
+    expect(presetCeilingDenied(ui, 'session.setPermissionPreset', { sessionId: 's', preset: 'accept-edits' })).toBe(false);
+    expect(presetCeilingDenied(undefined, 'session.setPermissionPreset', { sessionId: 's', preset: 'auto' })).toBe(true);
+  });
+
+  it('never gates methods without a preset parameter', () => {
+    expect(presetCeilingDenied(undefined, 'pluginTask.wait', { runId: 'r', permissionPreset: 'auto' })).toBe(false);
+    expect(presetCeilingDenied(undefined, 'pluginTask.cancel', { runId: 'r' })).toBe(false);
+    expect(presetCeilingDenied(undefined, 'tools.call', { name: 'bash' })).toBe(false);
+    expect(presetCeilingDenied(undefined, 'pluginTask.run', undefined)).toBe(false);
+    expect(presetCeilingDenied(undefined, 'pluginTask.run', null)).toBe(false);
   });
 });
 

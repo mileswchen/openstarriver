@@ -26,7 +26,7 @@ impl UiChannel for HostRuntime {
         task: String,
         session_id: Option<String>,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
-        HostRuntime::execute(self, task, session_id, None, None, None, None, None, None)
+        HostRuntime::execute(self, task, session_id, None, None, None, None, None, None, None)
     }
 
     fn respond_approval(

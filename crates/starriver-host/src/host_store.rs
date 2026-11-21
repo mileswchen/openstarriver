@@ -531,6 +531,22 @@ impl HostStore {
         Ok(())
     }
 
+    /// Whether any projection row exists for the session — i.e. an earlier
+    /// execute attempt already stamped it (agent/mode/workspace/origin).
+    /// Plugin platform P1: the creation-time anchor for write-once origin —
+    /// a first turn that failed before writing its log still counts as
+    /// created (its agent stamp proves it), so a later plugin continuation
+    /// never re-brands the session.
+    pub fn session_projection_exists(&self, session_id: &str) -> bool {
+        let conn = self.db.lock().expect("host store poisoned");
+        conn.query_row(
+            "SELECT 1 FROM session_projcache WHERE session_id = ?1",
+            [session_id],
+            |_| Ok(()),
+        )
+        .is_ok()
+    }
+
     /// The session's locked execution mode; `None` for sessions created before
     /// the per-session binding existed (UI falls back to standard).
     pub fn execution_mode_of(&self, session_id: &str) -> Option<String> {

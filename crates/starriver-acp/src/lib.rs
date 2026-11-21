@@ -400,6 +400,8 @@ impl AcpServer {
                 // WI-216: ACP turns are editor-initiated with no client echo
                 // to reconcile — no correlation id.
                 None,
+                // P1: ACP runs are editor-initiated, never plugin-branded.
+                None,
             )
             .map_err(|e| (APP_ERROR, format!("execute failed: {e}")))?;
         // The translator thread owns the prompt's JSON-RPC response (it

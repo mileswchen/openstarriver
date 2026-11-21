@@ -46,6 +46,27 @@ pub struct PluginUiEntry {
     /// the sidebar at 16px with `currentColor` strokes.
     #[serde(default)]
     pub icon: Option<String>,
+    /// Plugin platform P1: opt-in to spawning NEW host sessions from the UI
+    /// (bare `session.execute` without a sessionId). Default false — the
+    /// bridge refuses session-spawning calls unless the manifest declares
+    /// this, steering data operations to `tools.call` and follow-ups to
+    /// sessionId continuation. Declared background sessions are stamped
+    /// `origin=plugin:<name>` and grouped apart from the user's chat.
+    #[serde(default)]
+    pub background: bool,
+    /// Plugin platform P2: the highest permission preset this plugin's UI
+    /// may request for task runs (`pluginTask.run` / `session.execute`).
+    /// The bridge enforces the ceiling fail-closed: undeclared → `manual`.
+    /// Order: manual < accept-edits < auto < danger-full-access. Declaring
+    /// a ceiling is a manifest-level promise to the user about how much
+    /// autonomy the plugin can ever ask for.
+    #[serde(
+        default,
+        rename = "maxPermissionPreset",
+        alias = "max_permission_preset",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_permission_preset: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -300,6 +321,8 @@ fn install_ui_assets(root: &Path, dir: &Path) -> anyhow::Result<Option<PluginUiE
             permissions: Vec::new(),
             theme: None,
             icon: None,
+            background: false,
+            max_permission_preset: None,
         }
     };
     // The entry must stay inside ui/ (reject path traversal).
@@ -515,6 +538,8 @@ mod tests {
         assert_eq!(ui.tabs[0].titles.get("zh").map(String::as_str), Some("看板"));
         assert_eq!(ui.permissions, vec!["session:read"]);
         assert_eq!(ui.theme.as_deref(), Some("theme.css"));
+        // P1: no `background` declaration → fail-closed default (no session spawning).
+        assert!(!ui.background);
 
         let dir_name = src
             .path()
@@ -531,6 +556,56 @@ mod tests {
         assert!(ui_dir.join("index.html").exists());
         assert!(ui_dir.join("main.js").exists());
         assert!(ui_dir.join("theme.css").exists());
+    }
+
+    /// P1: `background: true` in the UI manifest is the explicit opt-in to
+    /// spawning host sessions from the plugin frame; it survives install.
+    #[test]
+    fn install_parses_background_opt_in() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("ui")).unwrap();
+        std::fs::write(src.path().join("ui").join("index.html"), "x").unwrap();
+        std::fs::write(
+            src.path().join("ui").join("manifest.json"),
+            r#"{ "entry": "index.html", "tabs": [], "permissions": ["session:execute"], "background": true }"#,
+        )
+        .unwrap();
+        let entry = install_plugin_into(root.path(), src.path().to_str().unwrap()).unwrap();
+        assert!(entry.ui.expect("ui").background);
+    }
+
+    /// P2: `maxPermissionPreset` is the manifest-level autonomy ceiling the
+    /// bridge enforces; undeclared → None (bridge treats it as `manual`).
+    #[test]
+    fn install_parses_max_permission_preset() {
+        let root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("ui")).unwrap();
+        std::fs::write(src.path().join("ui").join("index.html"), "x").unwrap();
+        std::fs::write(
+            src.path().join("ui").join("manifest.json"),
+            r#"{ "entry": "index.html", "tabs": [], "permissions": ["task:run"], "maxPermissionPreset": "auto" }"#,
+        )
+        .unwrap();
+        let entry = install_plugin_into(root.path(), src.path().to_str().unwrap()).unwrap();
+        assert_eq!(
+            entry.ui.expect("ui").max_permission_preset.as_deref(),
+            Some("auto")
+        );
+
+        // Undeclared → None (fail-closed manual ceiling at the bridge).
+        let root2 = tempfile::tempdir().unwrap();
+        let src2 = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src2.path().join("ui")).unwrap();
+        std::fs::write(src2.path().join("ui").join("index.html"), "x").unwrap();
+        std::fs::write(
+            src2.path().join("ui").join("manifest.json"),
+            r#"{ "entry": "index.html", "tabs": [] }"#,
+        )
+        .unwrap();
+        let entry2 = install_plugin_into(root2.path(), src2.path().to_str().unwrap()).unwrap();
+        assert_eq!(entry2.ui.expect("ui").max_permission_preset, None);
     }
 
     #[test]

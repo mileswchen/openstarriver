@@ -11,6 +11,19 @@ pub const PERM_SESSION_READ: &str = "session:read";
 pub const PERM_SESSION_WRITE: &str = "session:write";
 pub const PERM_APPROVAL_RESPOND: &str = "approval:respond";
 pub const PERM_TOOLS_READ: &str = "tools:read";
+/// Plugin platform P1: direct tool invocation (`tools.call`) — no session, no
+/// turn. Plugin frames hold it only when their manifest declares it; the
+/// approval gate inside the host still refuses approval-required tools.
+pub const PERM_TOOL_CALL: &str = "tool:call";
+/// Plugin platform P2: plugin-task execution primitive (`pluginTask.run` /
+/// `.cancel` / `.approve`). Runs an agent turn in an internal task session
+/// that is invisible to every chat surface; the run handle (`runId`) is the
+/// only access path, ownership-checked against the calling plugin's origin.
+pub const PERM_TASK_RUN: &str = "task:run";
+/// Plugin platform P2: read-side of the plugin-task primitive
+/// (`pluginTask.wait` / `.messages` / `.list`). Decoupled from `session:read`
+/// so a plugin can run tasks without any access to user chats.
+pub const PERM_TASK_READ: &str = "task:read";
 pub const PERM_MODELS_READ: &str = "models:read";
 pub const PERM_MODELS_WRITE: &str = "models:write";
 pub const PERM_CREDENTIALS_WRITE: &str = "credentials:write";

@@ -643,6 +643,10 @@ impl AgentRuntime {
                 agent_preset,
                 permission_preset,
                 client_request_id,
+                // P1: the dedicated NAPI execute path carries no plugin
+                // origin — plugin frames go through the generic protocol
+                // dispatch, where the api-macro parses `origin` from params.
+                None,
             )
             .map_err(|e| Error::from_reason(format!("{e}")))?;
         // Embedded-mode bridge: NAPI execute runs in-process, its events reach
