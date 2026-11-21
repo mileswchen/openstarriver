@@ -131,6 +131,10 @@ impl TurnSignals {
 pub enum WaitTurnOutcome {
     /// The session had a running turn and it ended while we waited.
     Completed,
+    /// D: the turn ended, but NOT successfully — a breaker/error/block/abort
+    /// terminated it (`turn/end` kind error/blocked/aborted/disposed). The
+    /// caller surfaces this as a blocker rather than a misleading "completed".
+    Failed,
     /// The turn was still running when the deadline passed.
     Timeout,
     /// The session holds no input slot — the execute never started (or the
@@ -898,7 +902,10 @@ impl HostRuntime {
             // from the set BEFORE bumping the counter, so a snapshot taken
             // after a completed Drop must not enter the (unwakeable) sleep.
             if !self.is_session_running(session_id) {
-                return WaitTurnOutcome::Completed;
+                // D3: release the std guard BEFORE the blocking session read
+                // (classify spawns a thread + block_on the runtime lock).
+                drop(guard);
+                return self.classify_turn_end(session_id);
             }
             let (guard2, _wait_result) = self
                 .turn_signals
@@ -907,8 +914,24 @@ impl HostRuntime {
                 .unwrap_or_else(|e| e.into_inner());
             guard = guard2;
             if !self.is_session_running(session_id) {
-                return WaitTurnOutcome::Completed;
+                drop(guard);
+                return self.classify_turn_end(session_id);
             }
+        }
+    }
+
+    /// D3: classify a finished turn by its durable `turn/end` kind. A clean
+    /// completion (or max-tokens) is `Completed`; an error/block/abort/dispose
+    /// is `Failed` so callers report a blocker. When no `turn/end` is loadable
+    /// (unknown session / not yet durable) fall back to `Completed` — the
+    /// pre-D behavior — rather than spuriously failing a successful run.
+    fn classify_turn_end(&self, session_id: &str) -> WaitTurnOutcome {
+        match self.last_turn_end_reason(session_id) {
+            Some((kind, _)) => match kind.as_str() {
+                "completed" | "max-tokens" => WaitTurnOutcome::Completed,
+                _ => WaitTurnOutcome::Failed,
+            },
+            None => WaitTurnOutcome::Completed,
         }
     }
 
@@ -2432,11 +2455,15 @@ mod tests {
     /// Block until the session has no live turn. Without an LLM the turn
     /// fails fast — often before the first poll — so NotRunning (BUG-156:
     /// finished or never started) is the expected idle signal, not a bug.
+    /// D: a breaker/error-ended turn reports Failed; that is still a terminal
+    /// (idle) outcome, so it breaks the wait just like Completed.
     fn wait_turn_idle(rt: &HostRuntime, sid: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
             match rt.wait_turn(sid, std::time::Duration::from_secs(1)) {
-                WaitTurnOutcome::NotRunning | WaitTurnOutcome::Completed => break,
+                WaitTurnOutcome::NotRunning
+                | WaitTurnOutcome::Completed
+                | WaitTurnOutcome::Failed => break,
                 WaitTurnOutcome::Timeout => {
                     assert!(std::time::Instant::now() < deadline, "turn never ended");
                 }
@@ -2476,6 +2503,76 @@ mod tests {
             drop(guard);
             let outcome = waiter.join().expect("waiter thread");
             assert_eq!(outcome, WaitTurnOutcome::Completed);
+        });
+    }
+
+    /// D end-to-end: an errored turn surfaces as `Failed` (not the pre-D false
+    /// `Completed`) and exposes its durable `turn/end` reason. With no LLM the
+    /// turn fails fast with kind "error" — the same shape a loop-guard breaker
+    /// now produces (D1). We let the real turn persist its error, then drive
+    /// the wait_turn → classify_turn_end → last_turn_end_reason chain
+    /// deterministically via a controlled run-guard drop (the turn already
+    /// ended, so a bare wait_turn would short-circuit to NotRunning before
+    /// classify ever runs).
+    #[test]
+    fn wait_turn_reports_failed_and_exposes_reason_for_an_errored_turn() {
+        crate::testutil::with_temp_home(|home| {
+            std::fs::create_dir_all(home.join(".starriver")).unwrap();
+            let rt = std::sync::Arc::new(HostRuntime::new(None).expect("runtime constructs"));
+            let _rx = rt
+                .execute(
+                    "do something".into(), None, None, None, None, None, None, None, None,
+                )
+                .expect("execute");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let sid = loop {
+                if let Some(s) = rt.list_sessions(None).into_iter().next() {
+                    break s.id;
+                }
+                assert!(std::time::Instant::now() < deadline, "session never created");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            };
+            wait_turn_idle(&rt, &sid);
+
+            // D4: the durable reason is loadable and honest (poll past any
+            // persistence-flush lag after the guard drop).
+            let reason_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let (kind, _message) = loop {
+                if let Some(r) = rt.last_turn_end_reason(&sid) {
+                    break r;
+                }
+                assert!(
+                    std::time::Instant::now() < reason_deadline,
+                    "turn/end reason never became durable"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            };
+            assert_eq!(kind, "error", "a no-LLM turn ends in error, exposed honestly");
+
+            // D3: drive the classify path via a controlled guard drop. Re-arm
+            // the running slot so wait_turn observes a running→ended
+            // transition and classifies the durable error.
+            rt.running_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(sid.clone());
+            let waiter = {
+                let rt = std::sync::Arc::clone(&rt);
+                let sid = sid.clone();
+                std::thread::spawn(move || rt.wait_turn(&sid, std::time::Duration::from_secs(10)))
+            };
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let guard = SessionRunGuard {
+                running: Arc::clone(&rt.running_sessions),
+                session_id: Some(sid.clone()),
+                signals: Arc::clone(&rt.turn_signals),
+            };
+            drop(guard);
+            let outcome = waiter.join().expect("waiter thread");
+            assert_eq!(
+                outcome, WaitTurnOutcome::Failed,
+                "an errored turn classifies as Failed, not Completed"
+            );
         });
     }
 

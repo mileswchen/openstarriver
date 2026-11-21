@@ -127,6 +127,9 @@ pub fn resolve_preset_options(
         turn_tool_call_budget: caller
             .turn_tool_call_budget
             .or(preset.turn_tool_call_budget),
+        repeat_reminder: caller
+            .repeat_reminder
+            .or_else(|| preset.repeat_reminder.clone()),
     }
 }
 
@@ -1017,6 +1020,7 @@ mod tests {
                 mcp_status_feed: None,
                 max_parallel_tool_calls: None,
                 turn_tool_call_budget: None,
+                repeat_reminder: None,
             },
         );
         let options = resolve_preset_options(

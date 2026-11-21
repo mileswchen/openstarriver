@@ -57,6 +57,11 @@ pub struct AgentSection {
     /// BUG-138 repeat breaker: total non-reload tool calls allowed per turn
     /// (turnToolCallBudget). Unset keeps the engine default (666).
     pub turn_tool_call_budget: Option<u32>,
+    /// Advisory repeat-tool reminder (`agent.repeat_tool_reminder:`). Counts
+    /// consecutive identical tool calls and nudges the model at thresholds;
+    /// never blocks. Unset keeps engine defaults (enabled, [3,5,8], no
+    /// filters, 500-char preview).
+    pub repeat_tool_reminder: Option<RepeatToolReminderSection>,
     /// WI-199: escalation rung ③ fallback route, `provider/model`. When the
     /// SAME step fails 3+ times the ladder condenses, then downgrades
     /// reasoning, then reroutes here. Unset = no fallback rung.
@@ -138,6 +143,40 @@ impl AgentSection {
             compaction_context_cap: self.compaction_context_cap,
         })
     }
+
+    /// Fold the advisory repeat-reminder settings into the kernel options
+    /// struct. `None` when nothing is configured (engine defaults apply).
+    pub fn repeat_reminder_options(
+        &self,
+    ) -> Option<starriver_kernel::agent::RepeatReminderOptions> {
+        let section = self.repeat_tool_reminder.as_ref()?;
+        Some(starriver_kernel::agent::RepeatReminderOptions {
+            enabled: section.enabled,
+            thresholds: section.thresholds.clone(),
+            include: section.include.clone(),
+            exclude: section.exclude.clone(),
+            args_preview_chars: section.args_preview_chars,
+        })
+    }
+}
+
+/// Advisory repeat-tool-reminder settings (`agent.repeat_tool_reminder:`).
+/// All fields optional; unset keeps engine defaults. Mirrors the kernel
+/// `RepeatReminderOptions` shape so the preset fill is a straight map.
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, PartialEq)]
+#[serde(default)]
+pub struct RepeatToolReminderSection {
+    /// Master switch. Unset = enabled.
+    pub enabled: Option<bool>,
+    /// Consecutive-identical-call counts that fire a reminder (gentle at the
+    /// smallest, detailed at the rest). Non-empty, each ≥ 2, unique.
+    pub thresholds: Option<Vec<u32>>,
+    /// Wildcard (`*`) tool-name patterns to track. Empty/unset = all tools.
+    pub include: Option<Vec<String>>,
+    /// Wildcard tool-name patterns to ignore transparently. Applied first.
+    pub exclude: Option<Vec<String>>,
+    /// Cap on the detailed reminder's argument-preview text. Unset = 500.
+    pub args_preview_chars: Option<usize>,
 }
 
 /// Provider-route declarations from the `llm:` namespace.
@@ -471,6 +510,33 @@ impl Settings {
                 );
             }
         }
+        // Advisory repeat-reminder config is fail-loud (DSH rejects bad config
+        // at load): catch empty / sub-2 / duplicate thresholds and a zero
+        // preview cap here so a bad patch is rejected wholesale instead of
+        // panicking at agent construction.
+        if let Some(reminder) = &self.agent.repeat_tool_reminder {
+            if let Some(thresholds) = &reminder.thresholds {
+                if thresholds.is_empty() {
+                    anyhow::bail!("agent.repeat_tool_reminder.thresholds must not be empty");
+                }
+                if thresholds.iter().any(|&t| t < 2) {
+                    anyhow::bail!("agent.repeat_tool_reminder.thresholds must each be >= 2");
+                }
+                let mut sorted = thresholds.clone();
+                sorted.sort_unstable();
+                for pair in sorted.windows(2) {
+                    if pair[0] == pair[1] {
+                        anyhow::bail!(
+                            "agent.repeat_tool_reminder.thresholds contain a duplicate: {}",
+                            pair[0]
+                        );
+                    }
+                }
+            }
+            if reminder.args_preview_chars == Some(0) {
+                anyhow::bail!("agent.repeat_tool_reminder.args_preview_chars must be > 0");
+            }
+        }
         Ok(())
     }
 
@@ -780,6 +846,55 @@ mod tests {
             updated.agent.max_parallel_tool_calls.is_none(),
             "untouched sibling field survives"
         );
+    }
+
+    #[test]
+    fn repeat_tool_reminder_parses_patches_and_validates() {
+        // Parses the nested namespace and maps to kernel options.
+        let parsed: Settings = serde_json::from_value(serde_json::json!({
+            "agent": { "repeat_tool_reminder": {
+                "enabled": false,
+                "thresholds": [4, 6],
+                "include": ["search"],
+                "exclude": ["todo_*"],
+                "args_preview_chars": 120
+            } }
+        }))
+        .expect("parse");
+        let section = parsed.agent.repeat_tool_reminder.as_ref().expect("section");
+        assert_eq!(section.enabled, Some(false));
+        assert_eq!(section.thresholds, Some(vec![4, 6]));
+        let options = parsed.agent.repeat_reminder_options().expect("options");
+        assert_eq!(options.thresholds, Some(vec![4, 6]));
+        assert_eq!(options.exclude, Some(vec!["todo_*".to_string()]));
+
+        // Unset = None (engine defaults apply downstream).
+        assert!(Settings::default().agent.repeat_tool_reminder.is_none());
+        assert!(Settings::default().agent.repeat_reminder_options().is_none());
+
+        // A good patch merges; a sibling field survives.
+        let updated = Settings::default()
+            .update_from_patch(&serde_json::json!({
+                "agent": { "repeat_tool_reminder": { "thresholds": [3, 5, 8] } }
+            }))
+            .expect("patch");
+        assert_eq!(
+            updated.agent.repeat_tool_reminder.as_ref().unwrap().thresholds,
+            Some(vec![3, 5, 8])
+        );
+
+        // Bad configs are rejected wholesale (fail-loud at the boundary).
+        for bad in [
+            serde_json::json!({ "thresholds": [] }),
+            serde_json::json!({ "thresholds": [1, 3] }),
+            serde_json::json!({ "thresholds": [3, 3, 5] }),
+            serde_json::json!({ "args_preview_chars": 0 }),
+        ] {
+            let result = Settings::default().update_from_patch(&serde_json::json!({
+                "agent": { "repeat_tool_reminder": bad }
+            }));
+            assert!(result.is_err(), "must reject {bad}");
+        }
     }
 
     #[test]

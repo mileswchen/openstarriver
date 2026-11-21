@@ -1169,10 +1169,23 @@ fn plugin_task_wait() -> MethodSpec<HostRuntime> {
                 .plugin_task_wait(plugin, run_id.clone(), timeout_ms)
                 .map_err(plugin_task_api_err)?;
             let (ended, reason) = match outcome {
-                starriver_host::runtime::WaitTurnOutcome::Completed => (true, "completed"),
-                starriver_host::runtime::WaitTurnOutcome::Timeout => (false, "timeout"),
+                starriver_host::runtime::WaitTurnOutcome::Completed => {
+                    (true, "completed".to_string())
+                }
+                // D5: a breaker/error/block/abort-ended turn is a blocker, not
+                // a success — surface the durable turn/end kind as the reason.
+                starriver_host::runtime::WaitTurnOutcome::Failed => (
+                    true,
+                    call.host
+                        .last_turn_end_reason(&run_id)
+                        .map(|(kind, _)| kind)
+                        .unwrap_or_else(|| "error".to_string()),
+                ),
+                starriver_host::runtime::WaitTurnOutcome::Timeout => {
+                    (false, "timeout".to_string())
+                }
                 starriver_host::runtime::WaitTurnOutcome::NotRunning => {
-                    (false, "session_not_running")
+                    (false, "session_not_running".to_string())
                 }
             };
             let final_assistant = if ended {
@@ -1392,10 +1405,23 @@ fn session_wait_turn() -> MethodSpec<HostRuntime> {
                 .host
                 .wait_turn(&session_id, std::time::Duration::from_millis(timeout_ms));
             let (ended, reason) = match outcome {
-                starriver_host::runtime::WaitTurnOutcome::Completed => (true, "completed"),
-                starriver_host::runtime::WaitTurnOutcome::Timeout => (false, "timeout"),
+                starriver_host::runtime::WaitTurnOutcome::Completed => {
+                    (true, "completed".to_string())
+                }
+                // D5: surface the durable turn/end kind for a failed turn so
+                // callers see a blocker (error/blocked/aborted/disposed).
+                starriver_host::runtime::WaitTurnOutcome::Failed => (
+                    true,
+                    call.host
+                        .last_turn_end_reason(&session_id)
+                        .map(|(kind, _)| kind)
+                        .unwrap_or_else(|| "error".to_string()),
+                ),
+                starriver_host::runtime::WaitTurnOutcome::Timeout => {
+                    (false, "timeout".to_string())
+                }
                 starriver_host::runtime::WaitTurnOutcome::NotRunning => {
-                    (false, "session_not_running")
+                    (false, "session_not_running".to_string())
                 }
             };
             let final_assistant = if ended {

@@ -597,16 +597,39 @@ impl TurnRepeatGuard {
     }
 }
 
-/// Whitespace-normalized tool+arguments identity: re-serialized variants of
-/// the same call count as repeats.
-pub fn call_signature(name: &str, arguments: &JsonValue) -> String {
-    let flat = arguments
+/// Deep-key-sorted canonical JSON of a tool's arguments: object keys are
+/// sorted recursively so property-order variants of the same call serialize
+/// identically (DSH repeat-tool-reminder parity). Array order is preserved
+/// (semantically meaningful); string contents are preserved verbatim — unlike
+/// the old whitespace-stripping normalization, which incorrectly merged
+/// `"a b"` with `"ab"`.
+pub fn canonical_arguments(arguments: &JsonValue) -> String {
+    deep_key_sort(arguments)
         .to_json_string()
         .unwrap_or_default()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect::<String>();
-    format!("{name}\u{0}{flat}")
+}
+
+fn deep_key_sort(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Array(items) => JsonValue::Array(items.iter().map(deep_key_sort).collect()),
+        JsonValue::Object(entries) => {
+            let mut sorted: Vec<(String, JsonValue)> = entries
+                .iter()
+                .map(|(key, val)| (key.clone(), deep_key_sort(val)))
+                .collect();
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            JsonValue::Object(sorted)
+        }
+        other => other.clone(),
+    }
+}
+
+/// Tool+arguments identity: deep-key-sorted canonical arguments so
+/// re-serialized / property-reordered variants of the same call count as
+/// repeats. Shared by the failure breaker (`TurnRepeatGuard`) and the advisory
+/// repeat reminder so both agree on what "the same call" means.
+pub fn call_signature(name: &str, arguments: &JsonValue) -> String {
+    format!("{name}\u{0}{}", canonical_arguments(arguments))
 }
 
 /// BUG-138: the generalized breaker's terminal pair — an error result telling

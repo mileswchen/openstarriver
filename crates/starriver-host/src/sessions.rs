@@ -492,6 +492,34 @@ pub(crate) async fn load_projection_parts(
     Ok((merged, tool_names))
 }
 
+/// D4: the last `turn/end` reason for a session — `(kind, failure_message)`.
+/// `turn/end` is log-only (never a surface node), so this reads the raw log
+/// directly rather than the projected surface. `None` when the session is
+/// unknown or has no `turn/end` yet. The reason payload is nested under
+/// `reason` (`{turn, reason:{kind, failure?}}`).
+pub(crate) async fn load_last_turn_end_reason(
+    runtime: &crate::RuntimeInner,
+    session_id: &str,
+) -> Option<(String, Option<String>)> {
+    let inspection = runtime
+        .persistence
+        .coordinator()
+        .load(SessionId(session_id.to_string()))
+        .ok()?;
+    let last = inspection
+        .events
+        .iter()
+        .filter(|event| event.event_type == "turn/end")
+        .max_by_key(|event| event.seq)?;
+    let reason = last.data.get("reason")?;
+    let kind = reason.as_str_at("kind")?.to_string();
+    let failure_message = reason
+        .get("failure")
+        .and_then(|failure| failure.as_str_at("message"))
+        .map(str::to_string);
+    Some((kind, failure_message))
+}
+
 /// Full-history archive projection (`session.archive`): identical decode to
 /// `load_projection_parts`, but driven directly by the persisted ledger in
 /// seq order — the kernel surface fold (compaction/summary shadowing) is
@@ -2032,6 +2060,27 @@ impl HostRuntime {
         })
         .join()
         .unwrap_or_default()
+    }
+
+    /// D4: sync accessor for the last `turn/end` reason — `(kind,
+    /// failure_message)`. Mirrors `get_session_messages`'s thread+block_on
+    /// pattern so blocking protocol handlers can classify a finished turn
+    /// honestly: a breaker-ended turn is `error`, not a misleading
+    /// `completed`. `None` when the session is unknown or has no turn yet.
+    pub fn last_turn_end_reason(&self, session_id: &str) -> Option<(String, Option<String>)> {
+        let inner = self.inner.clone();
+        let handle = self.runtime_handle.clone();
+        let session_id = session_id.to_string();
+        std::thread::spawn(move || {
+            handle.block_on(async {
+                let l = inner.lock().await;
+                let Some(ref runtime) = *l else { return None };
+                load_last_turn_end_reason(runtime, &session_id).await
+            })
+        })
+        .join()
+        .ok()
+        .flatten()
     }
 
     /// Full-history chat archive (session.archiveMessages): the raw ledger

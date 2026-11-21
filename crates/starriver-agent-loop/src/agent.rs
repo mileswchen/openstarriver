@@ -212,6 +212,11 @@ pub struct ReactLoopAgent {
     /// unavailable/failing/pattern-locked shape gets the turn terminated
     /// instead of looping ~7s/step forever.
     turn_repeat: Mutex<crate::tool_calls::TurnRepeatGuard>,
+    /// Advisory repeat-tool reminder (DSH parity): counts consecutive identical
+    /// tool calls and injects a gentle→detailed notice at thresholds. Purely
+    /// advisory — never blocks/skips/aborts; the hard backstops above remain
+    /// the only early-turn terminators. Turn-scoped, cursor-preserving reset.
+    repeat_reminder: Mutex<crate::repeat_tool_reminder::RepeatToolReminder>,
 }
 
 /// Bridge from the loop's LLM runtime view to the compaction crate's
@@ -257,27 +262,6 @@ impl ReactLoopAgent {
                 source_event_seqs: Vec::new(),
             },
         );
-    }
-
-    /// WI-200: one-shot anti-loop steering injected the moment the
-    /// output-side breaker trips, so the re-ask diverges from the exact
-    /// prompt shape that induced the loop (the looped partial never enters
-    /// the surface — the interrupted anchor sees to that). Same seam as the
-    /// time-context notice: a plugin-sourced user message that rides the
-    /// next assembly and is compact-managed like any other notice.
-    fn append_anti_loop_notice(&self) {
-        let text = "Detected repeated output in a loop: stop repeating, directly execute the \
-                    next operation (write file/call tool), and do not confirm again."
-            .to_string();
-        self.append_snapshot_message(Message {
-            id: mint_message_id(),
-            role: MessageRole::User,
-            content: vec![ContentBlock::Text(text)],
-            source: MessageSource::Plugin {
-                plugin: "harness:anti-loop".into(),
-                form: None,
-            },
-        });
     }
 
     /// Compact the context when the derived surface's estimated token count
@@ -546,6 +530,11 @@ impl ReactLoopAgent {
             std::sync::Mutex::new(crate::time_context::TimeProjection::new(&session));
         let mcp_status =
             std::sync::Mutex::new(crate::mcp_status::McpStatusProjection::new(&session));
+        // Advisory repeat reminder: built from options before `options` moves
+        // into Self. Fail-loud on invalid config (settings validates first).
+        let repeat_reminder = Mutex::new(
+            crate::repeat_tool_reminder::RepeatToolReminder::from_options(&options),
+        );
         let agent = Arc::new(Self {
             loop_ctx,
             id,
@@ -580,6 +569,7 @@ impl ReactLoopAgent {
             reload_confirm_cursor: Mutex::new(0),
             reload_storm: Mutex::new(crate::tool_calls::ReloadStorm::default()),
             turn_repeat: Mutex::new(crate::tool_calls::TurnRepeatGuard::default()),
+            repeat_reminder,
         });
         *cell.lock().unwrap() = Some(Arc::downgrade(&agent));
         *agent.me.lock().unwrap() = Arc::downgrade(&agent);
@@ -990,6 +980,9 @@ impl ReactLoopAgent {
         // session history on the next absorb, re-counting prior turns'
         // failures into this turn's tally.
         self.turn_repeat.lock().unwrap().reset_keeping_cursor();
+        // Advisory reminder is turn-scoped too; keep the cursor (WI-202 parity)
+        // so prior turns' identical calls are not re-counted into this turn.
+        self.repeat_reminder.lock().unwrap().reset_keeping_cursor();
         self.inbox_lock().has_pending()
     }
 
@@ -1055,9 +1048,6 @@ impl ReactLoopAgent {
         let mut escalation = StepEscalation::default();
         'request: loop {
             let tools = self.tools.schemas_for(Some(&self.id.0));
-            // WI-200: fresh output-side loop detector per attempt — a retry
-            // re-counts from zero on its new stream.
-            let mut degenerate = crate::degenerate_loop::DegenerateLoopMonitor::default();
             let assembled =
                 match self.build_request(turn, step, abort, system, tools, &escalation).await {
                     Ok(assembled) => assembled,
@@ -1171,95 +1161,12 @@ impl ReactLoopAgent {
                 if let StreamChunk::Usage { usage } = &chunk {
                     *self.observed_input_tokens.lock().unwrap() = Some(usage.input_tokens);
                 }
-                // WI-200: output-side degenerate-loop breaker. The detector
-                // watches the streamed text; on trip the stream is aborted
-                // IMMEDIATELY (instead of burning the attempt until an
-                // upstream idle timeout kills it ~30s in), the looped
-                // partial never reaches the surface history (interrupted
-                // anchor), an anti-loop notice diverges the re-ask, and the
-                // WI-199 ladder advances one rung (the long poisoned context
-                // that induced the loop gets condensed). DEGENERATE_LOOP is
-                // retryable per the kernel policy.
-                if let StreamChunk::TextDelta { text, .. } = &chunk {
-                    if degenerate.feed(text) {
-                        // Deliberately NO interrupted anchor here: the anchor
-                        // persists the partial into the surface (user-abort
-                        // semantics), and the looped text is precisely what
-                        // must NOT cement itself into the history (the
-                        // 2026-10-14 incident: 21.7k looped chars locked the
-                        // context). The raw assistant/chunk log events stay,
-                        // the derived surface drops the attempt.
-                        if !escalation.anti_loop_notice_fired {
-                            escalation.anti_loop_notice_fired = true;
-                            self.append_anti_loop_notice();
-                        }
-                        self.escalate_retry(
-                            turn,
-                            step,
-                            &assembled.request.provider,
-                            &mut escalation,
-                        )
-                        .await;
-                        let failure = LlmFailure {
-                            message: "loop output detected: the stream degenerated into a \
-                                     repetition loop and was aborted"
-                                .to_string(),
-                            code: "DEGENERATE_LOOP".to_string(),
-                            status: None,
-                            provider_retry_after_ms: None,
-                            request_id: None,
-                        };
-                        match self
-                            .retry_transient_failure(
-                                turn,
-                                step,
-                                &assembled.request.provider,
-                                &failure,
-                                &self.step_retry_policy(&assembled),
-                                transient_retries + 1,
-                                &mut escalation,
-                                abort,
-                            )
-                            .await
-                        {
-                            RetryDecision::Retry => {
-                                transient_retries += 1;
-                                continue 'request;
-                            }
-                            RetryDecision::Aborted => {
-                                self.append_interrupted_anchor(
-                                    turn, step, &assembler, &chunk_seqs,
-                                );
-                                return Some(TurnEndReason::Aborted {
-                                    cause: self.take_cancel_cause(),
-                                });
-                            }
-                            RetryDecision::GiveUp => {}
-                        }
-                        let action = self
-                            .request_error_waterfall(
-                                turn,
-                                step,
-                                &assembled.request,
-                                &failure,
-                                assembled
-                                    .prepared
-                                    .as_ref()
-                                    .map(|prepared| prepared.retry_policy.clone()),
-                                abort,
-                            )
-                            .await;
-                        match action {
-                            RequestErrorAction::Retry => continue 'request,
-                            RequestErrorAction::None => {
-                                return Some(TurnEndReason::Error {
-                                    failure: escalation
-                                        .summarized(failure, transient_retries),
-                                });
-                            }
-                        }
-                    }
-                }
+                // Prose repetition is deliberately NOT monitored: a content
+                // statistic over streamed text false-positives on legitimate
+                // templated enumeration (paper cards, tables, bibtex, …) and
+                // silently killed those tasks. Loop hygiene now lives in the
+                // advisory action-identity guard (`repeat_tool_reminder`) plus
+                // the failure/budget breakers — see design/dsh-style-loop-guard.md.
                 if abort.is_cancelled() {
                     self.append_interrupted_anchor(turn, step, &assembler, &chunk_seqs);
                     return Some(TurnEndReason::Aborted {
@@ -1489,6 +1396,16 @@ impl ReactLoopAgent {
                         .lock()
                         .unwrap()
                         .absorb_results(&self.session);
+                    // Advisory repeat reminder (DSH parity): count consecutive
+                    // identical executed calls and, at a threshold, inject a
+                    // notice that rides the next assembly. Purely advisory —
+                    // it never blocks/skips/aborts this call; the hard breaker
+                    // below remains the only early-turn terminator.
+                    if let Some(reminder) =
+                        self.repeat_reminder.lock().unwrap().absorb(&self.session)
+                    {
+                        self.append_snapshot_message(reminder);
+                    }
                     let (name, arguments) = match &call {
                         ContentBlock::ToolCall {
                             name: Some(name),
@@ -1501,8 +1418,9 @@ impl ReactLoopAgent {
                     let mut guard = self.turn_repeat.lock().unwrap();
                     let fails = guard.consecutive_errors(&sig);
                     if fails >= crate::tool_calls::REPEAT_FAILURE_LIMIT {
-                        Some(format!(
-                            "tool `{name}` failed identically {fails} times in a row"
+                        Some((
+                            "REPEAT_CALL_BREAKER",
+                            format!("tool `{name}` failed identically {fails} times in a row"),
                         ))
                     } else if guard.over_budget(
                         // Settings seam: `agent.turn_tool_call_budget`
@@ -1511,7 +1429,10 @@ impl ReactLoopAgent {
                             .turn_tool_call_budget
                             .unwrap_or(crate::tool_calls::TURN_TOOL_CALL_BUDGET),
                     ) {
-                        Some("turn tool-call budget exhausted".into())
+                        Some((
+                            "TURN_TOOL_CALL_BUDGET_EXHAUSTED",
+                            "turn tool-call budget exhausted".into(),
+                        ))
                     } else {
                         let _ = guard.note_call();
                         None
@@ -1538,7 +1459,7 @@ impl ReactLoopAgent {
                 // the stop hint: confirmed ids say "already re-attached",
                 // failed ones say "attempted without success".
                 self.confirm_reload_results();
-                if let Some(reason) = general_break {
+                if let Some((code, reason)) = general_break {
                     // BUG-138: the generalized breaker — this call gets the
                     // terminal error pair, every remaining call is paired as
                     // skipped, and the turn ends (a model that keeps re-emitting
@@ -1559,7 +1480,18 @@ impl ReactLoopAgent {
                         );
                     }
                     self.confirm_reload_results();
-                    return Some(TurnEndReason::Completed);
+                    // D1: a breaker-terminated turn is NOT a success — surface
+                    // it as an error so wait_turn/pluginTask.wait report a
+                    // blocker instead of a misleading "completed".
+                    return Some(TurnEndReason::Error {
+                        failure: LlmFailure {
+                            message: reason,
+                            code: code.into(),
+                            status: None,
+                            provider_retry_after_ms: None,
+                            request_id: None,
+                        },
+                    });
                 }
                 let file_id = match &call {
                     ContentBlock::ToolCall { arguments, .. } => {
@@ -1596,7 +1528,19 @@ impl ReactLoopAgent {
                         );
                     }
                     self.confirm_reload_results();
-                    return Some(TurnEndReason::Completed);
+                    // D1: reload-storm termination is a blocker, not a success.
+                    return Some(TurnEndReason::Error {
+                        failure: LlmFailure {
+                            message: format!(
+                                "reload_image storm breaker fired (file_id={file_id}) — \
+                                 the turn was terminated early"
+                            ),
+                            code: "RELOAD_STORM_BREAKER".into(),
+                            status: None,
+                            provider_retry_after_ms: None,
+                            request_id: None,
+                        },
+                    });
                 }
                 // BUG-131: once the turn is aborted the remaining noop pairs
                 // land in the ABORTED shape (matching the generic scheduler's
@@ -2337,9 +2281,6 @@ struct StepEscalation {
     /// Rung ②: the reasoning_effort to force on subsequent assemblies
     /// (`Some(None)` = clear the effort — the one step below "low").
     reasoning_override: Option<Option<String>>,
-    /// WI-200: the anti-loop notice rides the re-ask ONCE per step — a
-    /// persistently looping model must not accumulate a notice per attempt.
-    anti_loop_notice_fired: bool,
     /// Human-readable record of every escalation action attempted, surfaced
     /// in the terminal failure message when the ladder is exhausted.
     actions: Vec<String>,
@@ -3944,6 +3885,157 @@ mod tests {
                 .and_then(|r| r.as_str_at("kind")),
             Some("completed")
         );
+    }
+
+    /// F regression (design/degenerate-loop-false-positive.md): the retired
+    /// prose-degeneracy detector false-positived on fixed-template enumeration
+    /// streamed as prose — across six distinct formats and verbose paper
+    /// cards. With the detector removed (A) and only an advisory TOOL-call
+    /// reminder remaining (B), every such format must complete normally: the
+    /// turn ends `completed` (never aborted/errored), the full enumeration is
+    /// delivered, and no false repeat reminder fires (there are no tool calls
+    /// to repeat). `turn/end` kind is the authoritative no-abort signal — the
+    /// old detector ended these turns `aborted` mid-enumeration.
+    #[tokio::test]
+    async fn templated_enumeration_prose_never_aborts() {
+        use starriver_kernel::llm::{ContentBlock, FinishReason, LlmAdapter, StreamChunk};
+
+        struct ProseAdapter {
+            providers: Vec<String>,
+            chunks: Vec<StreamChunk>,
+        }
+        impl LlmAdapter for ProseAdapter {
+            fn providers(&self) -> &[String] {
+                &self.providers
+            }
+            fn stream(
+                &self,
+                _options: starriver_kernel::llm::GenerateOptions,
+            ) -> futures::stream::BoxStream<
+                'static,
+                Result<StreamChunk, starriver_kernel::llm::LlmError>,
+            > {
+                Box::pin(futures::stream::iter(
+                    self.chunks.iter().cloned().map(Ok).collect::<Vec<_>>(),
+                ))
+            }
+        }
+
+        // Six representative fixed-template formats from the false-positive
+        // analysis. Each renders item `i` from an identical skeleton — the
+        // exact near-duplicate-block shape that tripped the old prose gate.
+        let formats: Vec<(&str, fn(usize) -> String)> = vec![
+            ("numbered-compact", |i| {
+                format!("{i}. 标题：论文{i} 摘要：方法{i} 结论：有效{i}")
+            }),
+            ("paper-card", |i| {
+                format!(
+                    "【论文{i}】\n标题：深度学习论文{i}\n摘要：本文提出方法{i}，实验表明有效。\n链接：https://example.com/{i}"
+                )
+            }),
+            ("bullet", |i| format!("- 项目{i}：描述{i}，状态：完成")),
+            ("markdown-header", |i| format!("### 条目{i}\n内容{i}：固定模板文本。")),
+            ("json-line", |i| {
+                format!("{{\"id\":{i},\"title\":\"论文{i}\",\"status\":\"ok\"}}")
+            }),
+            ("qa-pair", |i| format!("问：问题{i}？答：答案{i}。")),
+        ];
+
+        for (name, render) in formats {
+            let n = 30usize;
+            // Stream each item as its own delta (the streaming-degeneracy
+            // shape), then the authoritative full block, then a clean Stop.
+            let mut full = String::new();
+            let mut chunks = Vec::new();
+            for i in 0..n {
+                let piece = format!("{}\n", render(i));
+                full.push_str(&piece);
+                chunks.push(StreamChunk::TextDelta {
+                    index: 0,
+                    text: piece,
+                });
+            }
+            chunks.push(StreamChunk::BlockEnd {
+                index: 0,
+                block: ContentBlock::Text(full.clone()),
+            });
+            chunks.push(StreamChunk::Finish {
+                reason: FinishReason::Stop,
+                replay_state: None,
+            });
+
+            let bus = EventBus::new();
+            let ctx = Context::new().with_event_bus(&bus);
+            let llm = Arc::new(starriver_llm::InMemoryLlmRuntime::new(bus.clone()));
+            let _adapter = llm
+                .register_adapter(Arc::new(ProseAdapter {
+                    providers: vec!["mock".into()],
+                    chunks,
+                }))
+                .unwrap();
+            let tools = Arc::new(starriver_tools::InMemoryToolRuntime::new(
+                EventBus::new(),
+                Context::new(),
+            )) as Arc<dyn crate::services::ToolRuntimeView>;
+            let sid = format!("enum-{name}");
+            let session = Session::new(SessionId(sid.clone()), bus);
+            let agent = ReactLoopAgent::new(
+                ctx,
+                SessionId(sid.clone()),
+                AgentOptions {
+                    provider: Some("mock".into()),
+                    model: Some("m1".into()),
+                    ..Default::default()
+                },
+                session,
+                llm,
+                tools,
+                Arc::new(starriver_kernel::system_prompt::SystemPromptRegistry::new()),
+            );
+            agent.start();
+            agent.followup(message("enumerate the items"));
+            let idle =
+                tokio::time::timeout(std::time::Duration::from_secs(5), agent.when_idle()).await;
+            assert!(idle.is_ok(), "{name}: the prose turn must complete promptly");
+
+            let events = agent.session().events();
+            let turn_end = events
+                .iter()
+                .find(|e| e.event_type == "turn/end")
+                .expect("turn/end");
+            assert_eq!(
+                turn_end
+                    .data
+                    .get("reason")
+                    .and_then(|r| r.as_str_at("kind")),
+                Some("completed"),
+                "{name}: templated enumeration completes, never aborts"
+            );
+            // No tool calls → the advisory reminder must never fire on prose.
+            assert!(
+                !events.iter().any(|e| e.event_type == "user/message"
+                    && format!("{:?}", e.data).contains("repeat-tool-reminder")),
+                "{name}: no false repeat reminder on prose"
+            );
+            // Full delivery: the assistant message carries the first, middle
+            // and last item (the old detector truncated/aborted mid-stream).
+            let assistant = events
+                .iter()
+                .find(|e| e.event_type == "assistant/message")
+                .expect("assistant/message");
+            let message_json = assistant.data.get("message").expect("message payload");
+            let text = match Message::from_json(message_json.clone())
+                .unwrap()
+                .content
+                .first()
+            {
+                Some(ContentBlock::Text(t)) => t.clone(),
+                other => panic!("{name}: expected text block, got {other:?}"),
+            };
+            assert!(text.contains(&render(0)), "{name}: first item delivered");
+            assert!(text.contains(&render(n / 2)), "{name}: middle item delivered");
+            assert!(text.contains(&render(n - 1)), "{name}: last item delivered");
+        }
     }
 
     #[tokio::test]
@@ -5840,9 +5932,16 @@ mod tests {
             })
             .count();
         assert_eq!(storms, 1, "exactly one breaker result");
-        assert!(
-            events.iter().any(|e| e.event_type == "turn/end"),
-            "the turn terminates"
+        // D1: the reload-storm turn ends as an error, not "completed".
+        let turn_end = events
+            .iter()
+            .find(|e| e.event_type == "turn/end")
+            .expect("the turn terminates");
+        let reason = turn_end.data.get("reason").expect("turn/end reason");
+        assert_eq!(reason.as_str_at("kind"), Some("error"));
+        assert_eq!(
+            reason.get("failure").and_then(|f| f.as_str_at("code")),
+            Some("RELOAD_STORM_BREAKER")
         );
     }
 
@@ -5973,7 +6072,18 @@ mod tests {
             }),
             "exactly the general breaker's terminal result"
         );
-        assert!(events.iter().any(|e| e.event_type == "turn/end"));
+        // D1: a breaker-terminated turn is surfaced as an error (not a
+        // misleading "completed") so wait_turn/pluginTask.wait report a blocker.
+        let turn_end = events
+            .iter()
+            .find(|e| e.event_type == "turn/end")
+            .expect("turn/end");
+        let reason = turn_end.data.get("reason").expect("turn/end reason");
+        assert_eq!(reason.as_str_at("kind"), Some("error"));
+        assert_eq!(
+            reason.get("failure").and_then(|f| f.as_str_at("code")),
+            Some("REPEAT_CALL_BREAKER")
+        );
     }
 
     /// BUG-138 反面: a first failure followed by a success resets the
@@ -6288,7 +6398,17 @@ mod tests {
             })
             .count();
         assert_eq!(skipped, 1, "the trailing echo is paired, not dangling");
-        assert!(events.iter().any(|e| e.event_type == "turn/end"));
+        // D1: the turn-budget breaker also ends the turn as an error.
+        let turn_end = events
+            .iter()
+            .find(|e| e.event_type == "turn/end")
+            .expect("turn/end");
+        let reason = turn_end.data.get("reason").expect("turn/end reason");
+        assert_eq!(reason.as_str_at("kind"), Some("error"));
+        assert_eq!(
+            reason.get("failure").and_then(|f| f.as_str_at("code")),
+            Some("RELOAD_STORM_BREAKER")
+        );
     }
 
     /// WI-160: two DIFFERENT ids in one step must both execute (no false
@@ -8438,91 +8558,6 @@ mod tests {
         );
     }
 
-    /// WI-200 shared fixture: an adapter whose stream is a repetition loop —
-    /// the incident shape, 200 deltas of the same short sentence with the
-    /// finish chunk unreachable behind the breaker's trip point.
-    struct LoopingAdapter {
-        providers: Vec<String>,
-        /// None = loop on EVERY attempt; Some(k) = loop for the first k
-        /// attempts, then recover.
-        recover_after: Option<usize>,
-        attempts: std::sync::atomic::AtomicUsize,
-        calls: std::sync::Mutex<Vec<String>>,
-    }
-    impl LoopingAdapter {
-        fn new(recover_after: Option<usize>) -> Self {
-            Self {
-                providers: vec!["mock".into()],
-                recover_after,
-                attempts: std::sync::atomic::AtomicUsize::new(0),
-                calls: std::sync::Mutex::new(Vec::new()),
-            }
-        }
-    }
-    impl starriver_kernel::llm::LlmAdapter for LoopingAdapter {
-        fn providers(&self) -> &[String] {
-            &self.providers
-        }
-        fn provider_retry_policy(
-            &self,
-            _provider: &str,
-        ) -> Option<starriver_kernel::llm::RetryPolicy> {
-            Some(starriver_kernel::llm::RetryPolicy::Normal {
-                max_retries: 5,
-                retryable_codes: vec!["DEGENERATE_LOOP".into()],
-                backoff: starriver_kernel::llm::RetryBackoff {
-                    initial_delay_ms: 1,
-                    max_delay_ms: 2,
-                    jitter_ratio: 0.0,
-                },
-            })
-        }
-        fn stream(
-            &self,
-            options: GenerateOptions,
-        ) -> futures::stream::BoxStream<'static, Result<StreamChunk, LlmError>> {
-            let attempt = self
-                .attempts
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.calls
-                .lock()
-                .unwrap()
-                .push(options.reasoning_effort.clone().unwrap_or_default());
-            let recovered = self
-                .recover_after
-                .is_some_and(|after| attempt >= after);
-            if !recovered {
-                let deltas = (0..200)
-                    .map(|_| {
-                        Ok(StreamChunk::TextDelta {
-                            index: 0,
-                            text: "写实现。".to_string(),
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                // No finish chunk: the breaker must cut the stream long
-                // before these deltas run out.
-                Box::pin(futures::stream::iter(deltas))
-            } else {
-                let text = "recovered".to_string();
-                Box::pin(futures::stream::iter(vec![
-                    Ok(StreamChunk::TextDelta {
-                        index: 0,
-                        text: text.clone(),
-                    }),
-                    Ok(StreamChunk::BlockEnd {
-                        index: 0,
-                        block: ContentBlock::Text(text),
-                    }),
-                    Ok(StreamChunk::Finish {
-                        reason: FinishReason::Stop,
-                        replay_state: None,
-                    }),
-                ]))
-            }
-        }
-    }
-
     fn assistant_surface_texts(agent: &ReactLoopAgent) -> Vec<String> {
         agent
             .session()
@@ -8537,102 +8572,6 @@ mod tests {
                 })
             })
             .collect()
-    }
-
-    /// WI-200 acceptance: the output-side breaker aborts a looping stream
-    /// immediately, keeps the looped partial OUT of the surface history,
-    /// injects the anti-loop notice, and the re-ask recovers the turn.
-    #[tokio::test]
-    async fn degenerate_stream_aborts_and_recovers() {
-        let adapter = Arc::new(LoopingAdapter::new(Some(1)));
-        let agent = agent_with_options(
-            Arc::clone(&adapter) as Arc<dyn starriver_kernel::llm::LlmAdapter>,
-            flaky_tools(),
-            starriver_kernel::agent::AgentOptions {
-                provider: Some("mock".into()),
-                model: Some("m1".into()),
-                context_window: Some(128_000),
-                ..Default::default()
-            },
-        );
-        agent.start();
-        agent.followup(message("do the thing"));
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), agent.when_idle()).await;
-
-        let events = agent.session().events();
-        {
-            let te = events.iter().rev().find(|e| e.event_type == "turn/end").unwrap();
-            eprintln!("PROBE turn_end: {:?}", te.data);
-            eprintln!("PROBE calls: {:?}", adapter.calls.lock().unwrap());
-            let msgs: Vec<String> = events.iter().map(|e| e.event_type.clone()).collect();
-            eprintln!("PROBE event_types: {msgs:?}");
-        }
-        assert_eq!(last_turn_end_reason(&events), "completed");
-        let calls = adapter.calls.lock().unwrap().clone();
-        assert_eq!(calls.len(), 2, "looping attempt aborted, re-ask recovered");
-
-        let surface = assistant_surface_texts(&agent);
-        assert_eq!(
-            surface,
-            vec!["recovered".to_string()],
-            "the looped partial must never enter the surface history"
-        );
-        // The anti-loop notice rode the re-ask as a plugin-sourced message.
-        assert!(
-            agent
-                .session()
-                .derive_messages()
-                .unwrap()
-                .iter()
-                .any(|m| {
-                    m.content.iter().any(|block| {
-                        matches!(block, ContentBlock::Text(text) if text.contains("repeated output"))
-                    })
-                }),
-            "the anti-loop notice must ride the re-ask"
-        );
-    }
-
-    /// WI-200: a model that loops on EVERY attempt ends the turn in a
-    /// DEGENERATE_LOOP terminal error whose message carries the escalation
-    /// summary — not an 8-hour silent burn.
-    #[tokio::test]
-    async fn persistent_degenerate_loop_ends_annotated() {
-        let adapter = Arc::new(LoopingAdapter::new(None));
-        let agent = agent_with_options(
-            Arc::clone(&adapter) as Arc<dyn starriver_kernel::llm::LlmAdapter>,
-            flaky_tools(),
-            starriver_kernel::agent::AgentOptions {
-                provider: Some("mock".into()),
-                model: Some("m1".into()),
-                context_window: Some(128_000),
-                ..Default::default()
-            },
-        );
-        agent.start();
-        agent.followup(message("do the thing"));
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), agent.when_idle()).await;
-
-        let events = agent.session().events();
-        assert_eq!(last_turn_end_reason(&events), "error");
-        let calls = adapter.calls.lock().unwrap().clone();
-        assert_eq!(calls.len(), 6, "5 ladder retries then give-up, not forever");
-        let turn_end = events
-            .iter()
-            .rev()
-            .find(|e| e.event_type == "turn/end")
-            .unwrap();
-        let rendered = format!("{:?}", turn_end.data);
-        assert!(rendered.contains("DEGENERATE_LOOP"), "{rendered}");
-        assert!(rendered.contains("loop output detected"), "{rendered}");
-        assert!(rendered.contains("[escalation] 5 transient retries"), "{rendered}");
-        assert!(rendered.contains("compact"), "{rendered}");
-        assert!(rendered.contains("reasoning: unsupported"), "{rendered}");
-        assert!(rendered.contains("fallback: unconfigured"), "{rendered}");
-        assert!(
-            assistant_surface_texts(&agent).is_empty(),
-            "no looped content may enter the surface history"
-        );
     }
 
     /// WI-202 integration: a tool whose failures are TRANSPORT-class (MCP

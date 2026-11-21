@@ -226,6 +226,9 @@ pub fn coding_preset(settings: &crate::settings::Settings) -> AgentOptions {
         max_parallel_tool_calls: settings.agent.max_parallel_tool_calls,
         // BUG-138: per-turn tool-call budget (repeat breaker) from settings.
         turn_tool_call_budget: settings.agent.turn_tool_call_budget,
+        // Advisory repeat-tool reminder (DSH parity) from settings; unset
+        // keeps engine defaults. Purely advisory — never blocks a call.
+        repeat_reminder: settings.agent.repeat_reminder_options(),
         // WI-1: projection config/resolver are injected per-run in
         // default_agent_options (post-preset-merge), so the preset stays None.
         image_projection: None,

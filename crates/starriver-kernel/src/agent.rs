@@ -68,6 +68,12 @@ pub struct AgentOptions {
     /// `None` = the loop's default (666); filled from
     /// `agent.turn_tool_call_budget` settings (same next-run semantics).
     pub turn_tool_call_budget: Option<u32>,
+    /// Advisory repeat-tool reminder (DSH repeat-tool-reminder parity): counts
+    /// consecutive identical tool calls and injects a gentle→detailed notice at
+    /// thresholds, never blocking. `None` = engine defaults (enabled,
+    /// thresholds [3,5,8], no filters, 500-char preview); filled from
+    /// `agent.repeat_tool_reminder` settings (same next-run semantics).
+    pub repeat_reminder: Option<RepeatReminderOptions>,
     /// WI-1: image cold/hot projection config. `None` = projection disabled
     /// (Image blocks pass through exactly as logged).
     pub image_projection: Option<ImageProjectionConfig>,
@@ -81,6 +87,28 @@ pub struct AgentOptions {
     /// WI-9: compaction tuning knobs (pruner budgets + retry counts);
  /// `None` fields keep the engine defaults (compaction-basic).
     pub compaction_tuning: Option<CompactionTuning>,
+}
+
+/// Advisory repeat-tool-reminder configuration (DSH repeat-tool-reminder
+/// parity). All `Option` — unset fields keep engine defaults: enabled,
+/// thresholds `[3,5,8]`, no include/exclude filters, 500-char argument
+/// preview. The reminder is purely advisory: it injects a notice at the
+/// configured consecutive-identical-call counts and never blocks a call.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RepeatReminderOptions {
+    /// Master switch. `None` = enabled.
+    pub enabled: Option<bool>,
+    /// Consecutive-identical-call counts that fire a reminder (gentle at the
+    /// smallest, detailed at the rest). Must be non-empty, each ≥ 2, unique.
+    pub thresholds: Option<Vec<u32>>,
+    /// Wildcard (`*`) tool-name patterns to track. Empty/`None` = all tools.
+    pub include: Option<Vec<String>>,
+    /// Wildcard tool-name patterns to ignore transparently (neither count nor
+    /// reset the chain). Applied before `include`.
+    pub exclude: Option<Vec<String>>,
+    /// Cap on the argument-preview text in the detailed reminder (the
+    /// detection key always uses the full canonical arguments). `None` = 500.
+    pub args_preview_chars: Option<usize>,
 }
 
 /// WI-9: compaction tuning knobs (compaction-basic + tool-result-pruner
