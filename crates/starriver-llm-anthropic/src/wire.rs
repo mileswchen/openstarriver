@@ -25,7 +25,7 @@ pub const DEFAULT_MAX_TOKENS: u64 = 4096;
 const THINKING_MARGIN_TOKENS: u64 = 2048;
 
 /// Map the caller's reasoning effort to an extended-thinking budget
-/// (BUG-163): Claude extended thinking must be requested explicitly, and the
+/// (BUG-163): extended thinking must be requested explicitly, and the
 /// capture/replay seam below already round-trips thinking blocks — but
 /// nothing ever ENABLED them, so a configured effort silently no-opped.
 /// `None`/`"off"` leave thinking to the provider default (zhipu-style
@@ -399,8 +399,8 @@ fn text_of(blocks: &[starriver_kernel::llm::ContentBlock]) -> String {
 
 /// Zhipu/bigmodel coding relay: a request that carries image content parts to
 /// a model the endpoint serves TEXT-ONLY is answered
-/// `400 {"error":{"code":"1210","message":"messages.content.type 参数非法，取值
-/// 范围 ['text']"}}` (observed live 2026-11-01: `glm-5.3` on
+/// `400 {"error":{"code":"1210","message":"messages.content.type parameter invalid, value
+/// range ['text']"}}` (observed live 2026-11-01: `glm-5.3` on
 /// `/api/coding/paas/v4` rejects `image_url` parts; `glm-5.3-flash` accepts
 /// the same request). Undeclared (`supports_vision: null`) models let the
 /// provider arbitrate images — this recognizer is what its verdict looks

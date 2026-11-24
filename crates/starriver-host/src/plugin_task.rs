@@ -58,7 +58,7 @@ impl From<anyhow::Error> for PluginTaskError {
 
 /// Same shape rule as the `session.execute` origin validation (P1): the
 /// plugin namespace only, `[a-zA-Z0-9._-]{1,128}` after the prefix.
-fn plugin_task_origin(plugin: &str) -> Result<String, PluginTaskError> {
+pub(crate) fn plugin_task_origin(plugin: &str) -> Result<String, PluginTaskError> {
     let valid = !plugin.is_empty()
         && plugin.len() <= 128
         && plugin

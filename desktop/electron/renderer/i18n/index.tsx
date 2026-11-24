@@ -54,9 +54,9 @@ export function hasTranslation(key: string): boolean {
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangRaw] = useState<Lang>(detectSystemLang);
 
-  // 2026-10-03 用户要求: <html lang> 随界面语言切换(zh → zh-CN)。字体解析经
-  // Electron CDP 探针实测与 lang 无关(styles.css --font 注释有证据),这里同步的
-  // 是语义语言标签——屏幕阅读器发音、连字符、翻译提示都依赖它。
+  // 2026-10-03 user request: <html lang> follows the UI language (zh → zh-CN). Font resolution was
+  // measured via an Electron CDP probe to be independent of lang (evidence in the styles.css --font comment); what is synced here
+  // is the semantic language tag — screen-reader pronunciation, hyphenation, and translation hints all depend on it.
   useEffect(() => {
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
   }, [lang]);

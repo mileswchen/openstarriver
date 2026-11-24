@@ -80,7 +80,7 @@ function wrapFirstCommand(segment: string): string {
     while (i < segment.length && (segment[i] === ' ' || segment[i] === '\t')) i++;
   };
   ws();
-  // FOO=bar 前缀(值是不含空格的整块)透明跳过,使命令首词仍可着色
+  // FOO=bar prefixes (the value is a single space-free block) are skipped transparently, so the first command word can still be colored
   for (;;) {
     const assign = /^[A-Za-z_]\w*=\S*/.exec(segment.slice(i));
     if (!assign) break;

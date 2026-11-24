@@ -67,6 +67,38 @@ pub struct PluginUiEntry {
         skip_serializing_if = "Option::is_none"
     )]
     pub max_permission_preset: Option<String>,
+    /// WI-252: egress network grant (`net.allow`). The plugin frame's CSP
+    /// keeps `connect-src 'none'`; this grant is the authority for the one
+    /// sanctioned channel out, `pluginTask.proxyFetch` (host-process forward,
+    /// no LLM). Absent or empty ⇒ every URL is refused (fail closed). The
+    /// manifest `permissions` list must ALSO carry `plugin:net` for the
+    /// bridge method to pass the frame-level gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net: Option<PluginNetEntry>,
+}
+
+/// WI-252: authorized outbound URL patterns. https-only; a trailing `*`
+/// matches any path suffix, otherwise the path matches exactly (query
+/// strings are stripped before matching). Port defaults to 443 and must be
+/// written explicitly for any other value — a wildcard port is rejected at
+/// install time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginNetEntry {
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+impl PluginNetEntry {
+    /// Install-time validation: every pattern must parse and stay inside the
+    /// safety envelope (https, explicit-or-default port, no wildcard port,
+    /// non-empty host). Bad patterns fail the INSTALL, not the first fetch.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        for pattern in &self.allow {
+            crate::plugin_net::parse_net_allow(pattern)
+                .map_err(|e| anyhow::anyhow!("invalid net.allow entry `{pattern}`: {e}"))?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -313,7 +345,13 @@ fn install_ui_assets(root: &Path, dir: &Path) -> anyhow::Result<Option<PluginUiE
     let manifest_path = ui_dir.join("manifest.json");
     let manifest = if manifest_path.exists() {
         let text = std::fs::read_to_string(&manifest_path)?;
-        serde_json::from_str::<PluginUiEntry>(&text)?
+        let manifest: PluginUiEntry = serde_json::from_str(&text)?;
+        // WI-252: net.allow patterns are validated (and rejected) at install
+        // time — a broken or unsafe grant never reaches the runtime fetch path.
+        if let Some(net) = &manifest.net {
+            net.validate()?;
+        }
+        manifest
     } else {
         PluginUiEntry {
             entry: "index.html".into(),
@@ -323,6 +361,7 @@ fn install_ui_assets(root: &Path, dir: &Path) -> anyhow::Result<Option<PluginUiE
             icon: None,
             background: false,
             max_permission_preset: None,
+            net: None,
         }
     };
     // The entry must stay inside ui/ (reject path traversal).

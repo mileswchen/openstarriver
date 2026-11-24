@@ -1062,6 +1062,26 @@
       "streaming": false
     },
     {
+      "name": "approval.pendingState",
+      "params": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "approval:respond"
+      ],
+      "streaming": false
+    },
+    {
       "name": "plan.reviewDecision",
       "params": {
         "type": "object",
@@ -1456,6 +1476,78 @@
         "task:run"
       ],
       "streaming": true
+    },
+    {
+      "name": "pluginTask.proxyFetch",
+      "params": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "headers": {},
+          "body": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plugin",
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "result": {},
+      "permissions": [
+        "plugin:net"
+      ],
+      "streaming": false
+    },
+    {
+      "name": "pluginTask.netPolicy",
+      "params": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "plugin"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "plugin",
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": [
+        "plugins:write"
+      ],
+      "streaming": false
     },
     {
       "name": "pluginTask.wait",

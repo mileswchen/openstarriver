@@ -10,7 +10,7 @@ use starriver_kernel::approval::{
     ApprovalError, ApprovalOutcome, ApprovalRequest, ApprovalRuntime,
 };
 use starriver_kernel::json::JsonValue;
-use starriver_kernel::session::{Session, SessionId};
+use starriver_kernel::session::{Session, SessionEvent, SessionId};
 
 use starriver_kernel::agent::AgentRegistry;
 
@@ -408,6 +408,114 @@ pub fn effective_policy(session: &Session) -> Option<ApprovalPolicy> {
         }
     }
     None
+}
+
+/// True while the newest `turn/start` has no `turn/end` after it. Under the
+/// kernel's linear turn discipline (starts and ends alternate) this equals
+/// the classic depth count, but both probes are reverse scans with early
+/// exit — the full-log depth fold costs O(n) on every call, and this fold
+/// runs per pending-alignment query on sessions with 100k+ events.
+pub fn has_open_turn_in(events: &[SessionEvent]) -> bool {
+    let Some(start) = events
+        .iter()
+        .rposition(|event| event.event_type == "turn/start")
+    else {
+        return false;
+    };
+    !events[start + 1..]
+        .iter()
+        .any(|event| event.event_type == "turn/end")
+}
+
+/// The newest `approval/asked` whose id has no `approval/decided` pair
+/// anywhere after it (reverse scan with early exit at the ask). Shared by
+/// the pending fold (open-turn bounded) and the boot reconciliation (whole
+/// log).
+fn newest_unpaired_asked(events: &[SessionEvent]) -> Option<(&SessionEvent, String)> {
+    let mut decided: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for event in events.iter().rev() {
+        match event.event_type.as_str() {
+            "approval/decided" => {
+                if let Some(id) = event.data.as_str_at("id") {
+                    decided.insert(id);
+                }
+            }
+            "approval/asked" => {
+                let id = event.data.as_str_at("id").unwrap_or_default();
+                if decided.contains(id) {
+                    continue;
+                }
+                return Some((event, id.to_string()));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// WI-247: one unanswered approval, reconstructed from the audit log. The
+/// in-memory oneshot (`ApprovalBridge` pending map) stays the only
+/// ANSWERING channel; this fold is the reconstruction face that lets a UI
+/// which missed the live `approvalRequested` relay re-align after a
+/// reconnect, a session switch, or an app reload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingApproval {
+    pub id: String,
+    pub tool_name: String,
+    pub arguments: Option<String>,
+    pub reason: Option<String>,
+    pub call_id: Option<String>,
+    /// Wall-clock ms of the `approval/asked` event (for staleness display).
+    pub asked_at_ms: u64,
+}
+
+/// Pure fold over the event log: the newest `approval/asked` without a
+/// paired `approval/decided`, while a turn is open. `None` when the turn is
+/// closed (a finished turn cannot carry an unanswered approval — terminal
+/// paths resolve pending ones) or every asked is paired. Events may be the
+/// live session's or a cold durable load; both fold identically. The scan
+/// is bounded to the open turn's suffix, so the negative case on huge
+/// sessions costs two tail probes instead of a full-log walk.
+pub fn pending_approval_in(events: &[SessionEvent]) -> Option<PendingApproval> {
+    let start = events
+        .iter()
+        .rposition(|event| event.event_type == "turn/start")?;
+    if events[start + 1..]
+        .iter()
+        .any(|event| event.event_type == "turn/end")
+    {
+        return None;
+    }
+    let (event, id) = newest_unpaired_asked(&events[start..])?;
+    Some(PendingApproval {
+        id,
+        tool_name: event
+            .data
+            .as_str_at("toolName")
+            .unwrap_or_default()
+            .to_string(),
+        arguments: event.data.as_str_at("arguments").map(String::from),
+        reason: event
+            .data
+            .get("reason")
+            .and_then(JsonValue::as_str)
+            .map(String::from),
+        call_id: event
+            .data
+            .get("callId")
+            .and_then(JsonValue::as_str)
+            .map(String::from),
+        asked_at_ms: event.time,
+    })
+}
+
+/// WI-249: the newest unanswered `approval/asked` regardless of turn state —
+/// the boot-reconciliation face. Unlike [`pending_approval_in`] this does
+/// not require an open turn: at daemon boot no turn can be live, so any
+/// unpaired asked is a request whose asker died with the process and whose
+/// audit pair must be closed before it can poison later claims.
+pub fn dangling_approval_in(events: &[SessionEvent]) -> Option<String> {
+    newest_unpaired_asked(events).map(|(_, id)| id)
 }
 
 /// The approval service face registered as `approval` on the loop context.
@@ -1933,6 +2041,97 @@ mod approval_mode_tests {
         assert!(static_grader_allows(&bash_req("ls -la")));
         assert!(!static_grader_allows(&bash_req("rm -rf build")));
         assert!(!static_grader_allows(&bash_req("sudo systemctl restart x")));
+    }
+
+    /// WI-247: the reconstruction fold. The pending face must track the
+    /// audit pair (asked/decided), not the in-memory oneshot, so a UI that
+    /// missed the live relay can re-align from the durable log.
+    fn asked_event(id: &str, tool: &str) -> (&'static str, JsonValue) {
+        (
+            "approval/asked",
+            JsonValue::Object(vec![
+                ("id".into(), JsonValue::String(id.into())),
+                ("toolName".into(), JsonValue::String(tool.into())),
+                (
+                    "arguments".into(),
+                    JsonValue::String(r#"{"path":"/tmp/x"}"#.into()),
+                ),
+            ]),
+        )
+    }
+
+    fn decided_event(id: &str) -> (&'static str, JsonValue) {
+        (
+            "approval/decided",
+            JsonValue::Object(vec![
+                ("id".into(), JsonValue::String(id.into())),
+                ("outcome".into(), JsonValue::String("allow".into())),
+            ]),
+        )
+    }
+
+    #[test]
+    fn pending_approval_tracks_unpaired_asked_in_open_turn() {
+        let (session, _bus) = policy_session("ask");
+        let (t, d) = asked_event("ap-1", "write");
+        session.append(t, d).unwrap();
+        let pending = pending_approval_in(&session.events()).expect("unpaired asked is pending");
+        assert_eq!(pending.id, "ap-1");
+        assert_eq!(pending.tool_name, "write");
+        assert!(pending.arguments.is_some());
+    }
+
+    #[test]
+    fn pending_approval_none_after_decided_pair() {
+        let (session, _bus) = policy_session("ask");
+        let (t1, d1) = asked_event("ap-1", "write");
+        session.append(t1, d1).unwrap();
+        let (t2, d2) = decided_event("ap-1");
+        session.append(t2, d2).unwrap();
+        assert!(pending_approval_in(&session.events()).is_none());
+    }
+
+    #[test]
+    fn pending_approval_none_when_turn_closed() {
+        // A finished turn cannot carry an unanswered approval: cancellation
+        // paths append the decided half; a dangling asked in a closed turn is
+        // a dead request (daemon died mid-ask) and must not resurface.
+        let (session, _bus) = policy_session("ask");
+        let (t1, d1) = asked_event("ap-1", "write");
+        session.append(t1, d1).unwrap();
+        session.append("turn/end", JsonValue::UInt(1)).unwrap();
+        assert!(pending_approval_in(&session.events()).is_none());
+    }
+
+    #[test]
+    fn pending_approval_newest_unpaired_wins_over_older_pair() {
+        let (session, _bus) = policy_session("ask");
+        let (t1, d1) = asked_event("ap-1", "bash");
+        session.append(t1, d1).unwrap();
+        let (t2, d2) = decided_event("ap-1");
+        session.append(t2, d2).unwrap();
+        let (t3, d3) = asked_event("ap-2", "write");
+        session.append(t3, d3).unwrap();
+        let pending = pending_approval_in(&session.events()).expect("ap-2 pending");
+        assert_eq!(pending.id, "ap-2");
+        assert_eq!(pending.tool_name, "write");
+    }
+
+    /// WI-249: at boot no turn can be live, so an unpaired asked inside a
+    /// CLOSED turn is still a dangling request whose audit pair must be
+    /// closed by reconciliation (pending_approval_in must NOT report it —
+    /// there is nothing alive to answer).
+    #[test]
+    fn dangling_approval_survives_closed_turn_where_pending_does_not() {
+        let (session, _bus) = policy_session("ask");
+        let (t1, d1) = asked_event("ap-9", "write");
+        session.append(t1, d1).unwrap();
+        session.append("turn/end", JsonValue::UInt(1)).unwrap();
+        assert!(pending_approval_in(&session.events()).is_none());
+        assert_eq!(
+            dangling_approval_in(&session.events()).as_deref(),
+            Some("ap-9")
+        );
     }
 
     #[tokio::test]

@@ -1178,11 +1178,13 @@ pub(crate) fn project_chat_messages(
 }
 
 /// Project surface entries into TrajectoryView trace entries: every content
-/// 逐字节实时一致（开放回合快照流）：开放回合切片。
-/// 从最后一条 `user/message`（含）切到末尾——其后的回合头/工具/助手内容都在
-/// 区间内，全量投影在该区间上与切片投影逐条一致。返回 `(turn_index, 切片)`；
-/// turn_index 为切片之前的 user/message 条数（0-based 回合序号）。
-/// 无 user 条目（回合尚未开始）→ None。
+/// Byte-for-byte live consistency (open-turn snapshot stream): the open-turn
+/// slice. Cut from the last `user/message` (inclusive) to the end — the turn
+/// header / tool / assistant content after it all fall inside the range, and
+/// the full projection agrees entry-by-entry with the slice projection over
+/// that range. Returns `(turn_index, slice)`; turn_index is the count of
+/// user/message entries before the slice (0-based turn ordinal). No user
+/// entry (the turn has not started) → None.
 pub(crate) fn open_turn_slice(mut entries: Vec<SurfaceEntry>) -> Option<(u32, Vec<SurfaceEntry>)> {
     let last_user = entries
         .iter()
@@ -1196,8 +1198,8 @@ pub(crate) fn open_turn_slice(mut entries: Vec<SurfaceEntry>) -> Option<(u32, Ve
     Some((turn_index, slice))
 }
 
-/// 由切片构建 TraceSnapshot 事件（`project_trace_entries` 同源投影；
-/// 相同内容跳过由调用方哈希完成）。
+/// Build a TraceSnapshot event from the slice (same-source projection via
+/// `project_trace_entries`; identical-content skipping is hashed by the caller).
 pub(crate) fn build_trace_snapshot(
     session_id: &str,
     epoch: u64,
@@ -1698,6 +1700,418 @@ async fn session_plan_planning(runtime: &crate::RuntimeInner, session_id: &str) 
             tracing::warn!(%session_id, %error, "plan phase fold unavailable; treating as not planning");
             false
         }
+    }
+}
+
+/// WI-249: close dangling `approval/asked` audit pairs left by a previous
+/// process. At boot no turn can be live, so an asked without a paired
+/// decided is a request whose asker (and oneshot answerer) died with the
+/// old daemon: no UI can ever answer it, and the unpaired asked would poison
+/// later bridge claims (the both-absent callId pairing). Append
+/// `approval/decided {outcome: cancelled, reason: daemon-restart}` to
+/// restore the audit invariant ("every asked gets decided"); the next
+/// continue rebuilds the transcript via the interrupted-anchor path.
+/// Idempotent — a second pass finds every pair closed and appends nothing.
+///
+/// BUG-205: takes the persistence handle directly (NOT `&RuntimeInner`) and
+/// never touches the runtime inner lock. The scan decompresses every
+/// session's full log; holding the inner lock across it serialized the UI's
+/// `listWorkspaces`/`listSessions` (both lock inner) and — via the boot
+/// `.join()` — blocked runtime construction itself, so workspaces/sessions
+/// took seconds to appear. Boot has no resident agent, so every read/append
+/// here is the cold path; `execute` gates on completion separately.
+pub(crate) async fn reconcile_dangling_approvals(
+    persistence: &starriver_session_persistence::SqliteSessionPersistence,
+) {
+    if let Err(error) = persistence.flush().await {
+        tracing::warn!(%error, "approval reconcile skipped: flush failed");
+        return;
+    }
+    let headers = match persistence.coordinator().list() {
+        Ok(headers) => headers,
+        Err(error) => {
+            tracing::warn!(%error, "approval reconcile skipped: cannot list headers");
+            return;
+        }
+    };
+    for header in headers {
+        let session_id = header.id.clone();
+        let events = match persistence.coordinator().load(session_id.clone()) {
+            Ok(inspection) => inspection.events,
+            Err(error) => {
+                tracing::warn!(session = %session_id.0, %error, "approval reconcile: read failed");
+                continue;
+            }
+        };
+        let Some(id) = starriver_agent_loop::approval::dangling_approval_in(&events) else {
+            continue;
+        };
+        let prepared = match persistence.coordinator().prepare(session_id.clone(), None).await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                tracing::warn!(session = %session_id.0, %error, "approval reconcile: prepare failed");
+                continue;
+            }
+        };
+        let appended = prepared.session.append_with(
+            "approval/decided",
+            JsonValue::Object(vec![
+                ("id".into(), JsonValue::String(id)),
+                ("outcome".into(), JsonValue::String("cancelled".into())),
+                (
+                    "reason".into(),
+                    JsonValue::String("daemon-restart".into()),
+                ),
+            ]),
+            AppendOptions::default(),
+        );
+        match appended {
+            Ok(_) => {
+                if let Err(error) = persistence.flush().await {
+                    tracing::warn!(session = %session_id.0, %error, "approval reconcile: flush failed");
+                }
+                tracing::info!(
+                    session = %session_id.0,
+                    "closed dangling approval pair (daemon restart)"
+                );
+            }
+            Err(error) => tracing::warn!(session = %session_id.0, %error, "approval reconcile: append failed"),
+        }
+        drop(prepared);
+    }
+}
+
+#[cfg(test)]
+mod approval_reconcile_tests {
+    //! BUG-205: the boot reconciliation closes dangling approval pairs using
+    //! only the persistence handle (no runtime inner lock), and is idempotent.
+    use super::*;
+
+    fn temp_persistence() -> Arc<starriver_session_persistence::SqliteSessionPersistence> {
+        Arc::new(
+            starriver_session_persistence::SqliteSessionPersistence::open_with_bus(
+                std::env::temp_dir().join(format!("reconcile-{}.db", uuid::Uuid::new_v4())),
+                cordis_rslite::EventBus::new(),
+            )
+            .unwrap(),
+        )
+    }
+
+    async fn seed_dangling_ask(
+        persistence: &starriver_session_persistence::SqliteSessionPersistence,
+        sid: &str,
+        ask_id: &str,
+    ) {
+        let header = starriver_kernel::session::SessionHeader::new(SessionId(sid.to_string()));
+        let asked = SessionEvent {
+            seq: 0,
+            time: 1,
+            event_type: "approval/asked".into(),
+            data: JsonValue::Object(vec![("id".into(), JsonValue::String(ask_id.to_string()))]),
+            surface_op: None,
+            source_event_seqs: vec![],
+        };
+        persistence
+            .coordinator()
+            .append(SessionId(sid.to_string()), header, vec![asked])
+            .await
+            .unwrap();
+        persistence.flush().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconcile_closes_dangling_ask_and_is_idempotent() {
+        let persistence = temp_persistence();
+        seed_dangling_ask(&persistence, "s-dangling", "ask-1").await;
+
+        // First pass closes the pair (persistence-only; no inner lock needed).
+        reconcile_dangling_approvals(&persistence).await;
+        let events = persistence
+            .coordinator()
+            .load(SessionId("s-dangling".into()))
+            .unwrap()
+            .events;
+        let decided = events
+            .iter()
+            .find(|e| e.event_type == "approval/decided")
+            .expect("a decided event must be appended");
+        assert_eq!(decided.data.as_str_at("id"), Some("ask-1"));
+        assert_eq!(decided.data.as_str_at("outcome"), Some("cancelled"));
+        assert_eq!(decided.data.as_str_at("reason"), Some("daemon-restart"));
+        let n = events.len();
+
+        // Second pass finds the pair closed and appends nothing.
+        reconcile_dangling_approvals(&persistence).await;
+        let events2 = persistence
+            .coordinator()
+            .load(SessionId("s-dangling".into()))
+            .unwrap()
+            .events;
+        assert_eq!(events2.len(), n, "idempotent: no new events on the second pass");
+    }
+
+    // ── BUG-205 branch matrix: every read/append outcome of the scan ──
+
+    /// Seed a session with an arbitrary event sequence (seq assigned 0..n).
+    async fn seed_events(
+        persistence: &starriver_session_persistence::SqliteSessionPersistence,
+        sid: &str,
+        events: Vec<(&str, JsonValue)>,
+    ) {
+        let header = starriver_kernel::session::SessionHeader::new(SessionId(sid.to_string()));
+        let built: Vec<SessionEvent> = events
+            .into_iter()
+            .enumerate()
+            .map(|(i, (ty, data))| SessionEvent {
+                seq: i as u64,
+                time: (i + 1) as u64,
+                event_type: ty.to_string(),
+                data,
+                surface_op: None,
+                source_event_seqs: vec![],
+            })
+            .collect();
+        persistence
+            .coordinator()
+            .append(SessionId(sid.to_string()), header, built)
+            .await
+            .unwrap();
+        persistence.flush().await.unwrap();
+    }
+
+    fn ask(id: &str) -> JsonValue {
+        JsonValue::Object(vec![("id".into(), JsonValue::String(id.to_string()))])
+    }
+
+    fn decided(id: &str) -> JsonValue {
+        JsonValue::Object(vec![
+            ("id".into(), JsonValue::String(id.to_string())),
+            ("outcome".into(), JsonValue::String("allow".into())),
+        ])
+    }
+
+    fn events_of(
+        persistence: &starriver_session_persistence::SqliteSessionPersistence,
+        sid: &str,
+    ) -> Vec<SessionEvent> {
+        persistence
+            .coordinator()
+            .load(SessionId(sid.to_string()))
+            .unwrap()
+            .events
+    }
+
+    fn decided_count(events: &[SessionEvent]) -> usize {
+        events.iter().filter(|e| e.event_type == "approval/decided").count()
+    }
+
+    #[tokio::test]
+    async fn reconcile_leaves_an_already_decided_pair_alone() {
+        let persistence = temp_persistence();
+        seed_events(&persistence, "s-paired", vec![("approval/asked", ask("a")), ("approval/decided", decided("a"))]).await;
+        let before = events_of(&persistence, "s-paired").len();
+        reconcile_dangling_approvals(&persistence).await;
+        let after = events_of(&persistence, "s-paired");
+        assert_eq!(after.len(), before, "a paired ask must not gain another decided");
+        assert_eq!(decided_count(&after), 1);
+    }
+
+    #[tokio::test]
+    async fn reconcile_on_an_empty_store_is_a_noop() {
+        let persistence = temp_persistence();
+        // No sessions at all: the scan must succeed and list nothing.
+        reconcile_dangling_approvals(&persistence).await;
+        assert!(persistence.coordinator().list().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconcile_closes_every_dangling_session() {
+        let persistence = temp_persistence();
+        seed_events(&persistence, "s-one", vec![("approval/asked", ask("a1"))]).await;
+        seed_events(&persistence, "s-two", vec![("approval/asked", ask("a2"))]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        for (sid, id) in [("s-one", "a1"), ("s-two", "a2")] {
+            let events = events_of(&persistence, sid);
+            let d = events.iter().find(|e| e.event_type == "approval/decided").expect("decided");
+            assert_eq!(d.data.as_str_at("id"), Some(id));
+            assert_eq!(d.data.as_str_at("reason"), Some("daemon-restart"));
+        }
+    }
+
+    #[tokio::test]
+    async fn reconcile_touches_only_the_dangling_session_in_a_mix() {
+        let persistence = temp_persistence();
+        seed_events(&persistence, "s-dangling", vec![("approval/asked", ask("a"))]).await;
+        seed_events(&persistence, "s-paired", vec![("approval/asked", ask("b")), ("approval/decided", decided("b"))]).await;
+        seed_events(&persistence, "s-plain", vec![("user/message", JsonValue::Object(vec![]))]).await;
+        let paired_before = events_of(&persistence, "s-paired").len();
+        let plain_before = events_of(&persistence, "s-plain").len();
+        reconcile_dangling_approvals(&persistence).await;
+        assert_eq!(decided_count(&events_of(&persistence, "s-dangling")), 1);
+        assert_eq!(events_of(&persistence, "s-paired").len(), paired_before);
+        assert_eq!(events_of(&persistence, "s-plain").len(), plain_before);
+    }
+
+    #[tokio::test]
+    async fn reconcile_closes_the_newest_unpaired_ask() {
+        let persistence = temp_persistence();
+        // a is answered; b is the newest unanswered ask → b is the dangling one.
+        seed_events(&persistence, "s-seq", vec![
+            ("approval/asked", ask("a")),
+            ("approval/decided", decided("a")),
+            ("approval/asked", ask("b")),
+        ]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        let events = events_of(&persistence, "s-seq");
+        assert_eq!(decided_count(&events), 2);
+        let last = events.iter().rev().find(|e| e.event_type == "approval/decided").unwrap();
+        assert_eq!(last.data.as_str_at("id"), Some("b"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_treats_a_decided_for_another_id_as_still_dangling() {
+        let persistence = temp_persistence();
+        // The decided names a DIFFERENT id, so ask `a` remains unpaired.
+        seed_events(&persistence, "s-mismatch", vec![("approval/asked", ask("a")), ("approval/decided", decided("other"))]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        let events = events_of(&persistence, "s-mismatch");
+        assert_eq!(decided_count(&events), 2);
+        let appended = events.iter().rev().find(|e| e.event_type == "approval/decided").unwrap();
+        assert_eq!(appended.data.as_str_at("id"), Some("a"));
+        assert_eq!(appended.data.as_str_at("outcome"), Some("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_closes_an_ask_that_carries_no_id() {
+        let persistence = temp_persistence();
+        // No `id` field → the fold yields the empty-string id; the pair is
+        // still dangling and gets a decided with that same (empty) id.
+        seed_events(&persistence, "s-noid", vec![("approval/asked", JsonValue::Object(vec![]))]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        let events = events_of(&persistence, "s-noid");
+        let d = events.iter().find(|e| e.event_type == "approval/decided").expect("decided");
+        assert_eq!(d.data.as_str_at("id"), Some(""));
+    }
+
+    #[tokio::test]
+    async fn reconcile_is_idempotent_across_many_sessions() {
+        let persistence = temp_persistence();
+        seed_events(&persistence, "s-a", vec![("approval/asked", ask("a"))]).await;
+        seed_events(&persistence, "s-b", vec![("approval/asked", ask("b")), ("approval/decided", decided("b"))]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        let a1 = events_of(&persistence, "s-a").len();
+        let b1 = events_of(&persistence, "s-b").len();
+        reconcile_dangling_approvals(&persistence).await;
+        assert_eq!(events_of(&persistence, "s-a").len(), a1);
+        assert_eq!(events_of(&persistence, "s-b").len(), b1);
+    }
+
+    #[tokio::test]
+    async fn reconcile_closes_only_the_newest_when_several_asks_dangle() {
+        let persistence = temp_persistence();
+        // Three unpaired asks: the fold targets the NEWEST only, so exactly
+        // one decided is appended (for c), not one per ask.
+        seed_events(&persistence, "s-many", vec![
+            ("approval/asked", ask("a")),
+            ("approval/asked", ask("b")),
+            ("approval/asked", ask("c")),
+        ]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        let events = events_of(&persistence, "s-many");
+        assert_eq!(decided_count(&events), 1);
+        let d = events.iter().find(|e| e.event_type == "approval/decided").unwrap();
+        assert_eq!(d.data.as_str_at("id"), Some("c"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_preserves_unrelated_events() {
+        let persistence = temp_persistence();
+        seed_events(&persistence, "s-mixed", vec![
+            ("user/message", JsonValue::Object(vec![("text".into(), JsonValue::String("hi".into()))])),
+            ("approval/asked", ask("a")),
+            ("tool/call", JsonValue::Object(vec![("name".into(), JsonValue::String("bash".into()))])),
+        ]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        let events = events_of(&persistence, "s-mixed");
+        // The seeded non-approval events survive untouched, and exactly one
+        // decided is appended. (The persistence may derive extra surface
+        // rows, so assert presence of the seeds rather than a raw count.)
+        assert!(events.iter().any(|e| e.event_type == "user/message"));
+        assert!(events.iter().any(|e| e.event_type == "tool/call"));
+        assert!(events.iter().any(|e| e.event_type == "approval/asked"));
+        assert_eq!(decided_count(&events), 1);
+    }
+
+    #[tokio::test]
+    async fn reconcile_tracks_a_set_of_decided_ids_to_find_the_newest_unpaired() {
+        let persistence = temp_persistence();
+        // b and a are answered; c (the newest) is not → c is the dangling one.
+        seed_events(&persistence, "s-set", vec![
+            ("approval/asked", ask("c")),
+            ("approval/asked", ask("b")),
+            ("approval/decided", decided("b")),
+            ("approval/asked", ask("a")),
+            ("approval/decided", decided("a")),
+        ]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        let events = events_of(&persistence, "s-set");
+        assert_eq!(decided_count(&events), 3);
+        let appended = events.iter().rev().find(|e| e.event_type == "approval/decided").unwrap();
+        assert_eq!(appended.data.as_str_at("id"), Some("c"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_noop_when_only_decided_events_exist() {
+        let persistence = temp_persistence();
+        // A decided with no asked at all: nothing is dangling.
+        seed_events(&persistence, "s-onlydec", vec![("approval/decided", decided("a"))]).await;
+        let before = events_of(&persistence, "s-onlydec").len();
+        reconcile_dangling_approvals(&persistence).await;
+        assert_eq!(events_of(&persistence, "s-onlydec").len(), before);
+    }
+
+    #[tokio::test]
+    async fn reconcile_closes_a_dangling_ask_even_without_turn_events() {
+        let persistence = temp_persistence();
+        // dangling_approval_in is a pure newest-unpaired fold; it does not
+        // require an open turn, so a bare asked is still closed at boot.
+        seed_events(&persistence, "s-noturn", vec![("approval/asked", ask("a"))]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        let events = events_of(&persistence, "s-noturn");
+        assert_eq!(decided_count(&events), 1);
+        assert!(!events.iter().any(|e| e.event_type == "turn/start"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_scans_every_session_and_closes_each_dangling_pair() {
+        let persistence = temp_persistence();
+        // Two independent sessions, each with its own unanswered ask: the
+        // boot scan iterates all headers, not just the first.
+        seed_events(&persistence, "s-multi-a", vec![("approval/asked", ask("a"))]).await;
+        seed_events(&persistence, "s-multi-b", vec![("approval/asked", ask("b"))]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        assert_eq!(decided_count(&events_of(&persistence, "s-multi-a")), 1);
+        assert_eq!(decided_count(&events_of(&persistence, "s-multi-b")), 1);
+    }
+
+    #[tokio::test]
+    async fn reconcile_in_a_mixed_store_closes_only_the_dangling_session() {
+        let persistence = temp_persistence();
+        // One session already answered, one still dangling: the scan must
+        // skip the paired session (continue) and close only the other.
+        seed_events(&persistence, "s-mixed-done", vec![
+            ("approval/asked", ask("a")),
+            ("approval/decided", decided("a")),
+        ]).await;
+        seed_events(&persistence, "s-mixed-open", vec![("approval/asked", ask("b"))]).await;
+        reconcile_dangling_approvals(&persistence).await;
+        // The answered session keeps exactly its one original decided event.
+        assert_eq!(decided_count(&events_of(&persistence, "s-mixed-done")), 1);
+        // The dangling session gained its cancellation.
+        let open = events_of(&persistence, "s-mixed-open");
+        assert_eq!(decided_count(&open), 1);
+        assert_eq!(open.iter().rev().find(|e| e.event_type == "approval/decided")
+            .unwrap().data.as_str_at("id"), Some("b"));
     }
 }
 
@@ -2281,8 +2695,9 @@ impl HostRuntime {
                         .map_err(|e| anyhow::anyhow!("remove session metadata: {e}"))?;
                     Some(Arc::clone(&runtime.agent.terminal_service))
                 };
-                // 会话已删，其后台终端没有存在理由了（dsh 语义：owner 销毁
-                // ⇒ 终端回收）。fail-open：回收失败不回滚删除。
+                // The session is deleted; its background terminals have no
+                // reason to exist (owner destroyed => terminals reclaimed).
+                // Fail-open: a reclaim failure does not roll back the deletion.
                 if let Some(terminals) = terminal_service {
                     let killed = terminals.kill_owner(&sid);
                     if killed > 0 {
@@ -2387,8 +2802,8 @@ impl HostRuntime {
         let sid = session_id.clone();
         let outcome: anyhow::Result<()> = std::thread::spawn(move || {
             handle.block_on(async {
-                // Kill 走锁外：kill_owner 是 bounded-quiescent 的，不能占着
-                // runtime 锁等子进程退出。
+                // Kill runs outside the lock: kill_owner is bounded-quiescent,
+                // so we must not hold the runtime lock waiting for children to exit.
                 let (result, terminal_service) = {
                     let l = inner.lock().await;
                     match l.as_ref() {
@@ -2403,9 +2818,10 @@ impl HostRuntime {
                             )
                             .await
                             .map_err(|e| anyhow::anyhow!("archive event failed: {e}"));
-                            // 归档 = 用户主动结束会话：后台终端一并回收
-                            // （终端状态本就不持久化，无可丢失）。unarchive
-                            // 不复活终端。
+                            // Archive = the user deliberately ends the session:
+                            // reclaim the background terminals too (terminal state
+                            // is not persisted anyway, so nothing is lost).
+                            // Unarchive does not revive them.
                             let terminals = if archived && result.is_ok() {
                                 Some(Arc::clone(&runtime.agent.terminal_service))
                             } else {
@@ -2683,10 +3099,12 @@ mod projection_tests {
 
     #[test]
     fn compacted_turns_stay_in_display_projection() {
-        // 压缩检查点用 user/message Replace 落盘，内核 surface 折叠会把被替换
-        // 的整个区间从 nodes 里剔掉——那是模型窗口语义；Desktop 的 transcript
-        // 契约是"永不删行"。display_seq_order 必须复活该区间的 seq，而工具结果
-        // prune 的单条 tool/result 替身继续遮蔽原件（否则替身+原件渲染两遍）。
+        // Compaction checkpoints land as a user/message Replace; the kernel
+        // surface fold drops the whole replaced range from nodes — that is
+        // model-window semantics. The Desktop transcript contract is "never
+        // delete rows": display_seq_order must revive that range's seqs, while
+        // the single tool/result stand-in from tool-result prune keeps shadowing
+        // the original (else stand-in + original would render twice).
         use starriver_kernel::session::{AppendOptions, Session as KernelSession, SurfaceOp};
         let session = KernelSession::new(
             starriver_kernel::session::SessionId("s".into()),
@@ -3857,6 +4275,15 @@ impl HostRuntime {
                     )]),
                 )
                 .await;
+                // WI-250: the switch supersedes a still-waiting ask — resolve
+                // it as Cancelled so the agent retries under the NEW policy
+                // (bypass re-runs allowed, manual re-asks) instead of the
+                // preset change dangling behind a decision the user has
+                // implicitly taken over. No pending request → no-op.
+                let _ = runtime
+                    .agent
+                    .approval_bridge
+                    .cancel_session_pending(&session_id);
                 Ok(())
             })
         })
@@ -3946,6 +4373,52 @@ impl HostRuntime {
         .unwrap_or_else(|_| serde_json::json!([])))
     }
 
+    /// WI-247: the session's pending approval, reconstructed from the audit
+    /// log (newest `approval/asked` without a paired `approval/decided`,
+    /// open turn only). This is the UI re-alignment face: a client that
+    /// missed the live `approvalRequested` relay (reconnect gap, session
+    /// switch, app reload) queries this instead of staying deaf while the
+    /// engine waits. The in-memory oneshot remains the only answering
+    /// channel — `approval.respond` still settles a reported-pending request
+    /// only when the bridge actually holds it; a stale report (the asker
+    /// process died) fails with `APPROVAL_NOT_PENDING` and the caller clears
+    /// its panel.
+    #[api_method("approval.pendingState", permissions = ["approval:respond"])]
+    pub fn approval_pending_state(&self, session_id: String) -> anyhow::Result<serde_json::Value> {
+        let inner = self.inner.clone();
+        let handle = self.runtime_handle.clone();
+        Ok(std::thread::spawn(move || {
+            handle.block_on(async {
+                let l = inner.lock().await;
+                let Some(ref runtime) = *l else {
+                    return serde_json::json!({ "pending": false });
+                };
+                let pending = match crate::sessions::session_events(runtime, &session_id).await {
+                    Ok(events) => starriver_agent_loop::approval::pending_approval_in(&events),
+                    Err(error) => {
+                        tracing::warn!(session = %session_id, %error, "pending approval unavailable");
+                        None
+                    }
+                };
+                match pending {
+                    Some(p) => serde_json::json!({
+                        "pending": true,
+                        "sessionId": session_id,
+                        "requestId": p.id,
+                        "toolName": p.tool_name,
+                        "arguments": p.arguments,
+                        "reason": p.reason,
+                        "callId": p.call_id,
+                        "askedAtMs": p.asked_at_ms,
+                    }),
+                    None => serde_json::json!({ "pending": false, "sessionId": session_id }),
+                }
+            })
+        })
+        .join()
+        .unwrap_or_else(|_| serde_json::json!({ "pending": false })))
+    }
+
     /// WI-16: revoke a remembered approval rule by id (appends
     /// `approval/rule-revoked`); the rule stops auto-approving immediately.
     #[api_method("approval.revokeRule", permissions = ["session:write"])]
@@ -4025,7 +4498,8 @@ mod delete_tests {
 }
 
 impl crate::HostRuntime {
-    /// 当前投影世代（开放回合快照流）：客户端 epoch 与此不一致即全量重拉。
+    /// Current projection generation (open-turn snapshot stream): a client
+    /// epoch that differs from this triggers a full re-pull.
     pub fn trace_epoch(&self, session_id: &str) -> u64 {
         *self
             .trace_epochs
@@ -4035,8 +4509,8 @@ impl crate::HostRuntime {
             .unwrap_or(&0)
     }
 
-    /// compaction/fork/回滚后递增（手动 compact 路径；运行中自动压缩由
-    /// 中继在见到 Compaction 事件时递增）。
+    /// Incremented after compaction/fork/rollback (the manual compact path;
+    /// in-run auto-compaction is bumped by the relay on a Compaction event).
     pub fn bump_trace_epoch(&self, session_id: &str) {
         let mut map = self.trace_epochs.lock().unwrap_or_else(|e| e.into_inner());
         let next = map.get(session_id).copied().unwrap_or(0) + 1;
@@ -4060,8 +4534,9 @@ mod trace_snapshot_tests {
         }
     }
 
-    /// 切片语义：从最后一条 user/message（含）切起；其后的 request/header
-    /// 一并纳入（回合头随回合走）；turn_index = 之前的 user 条数。
+    /// Slice semantics: cut from the last user/message (inclusive); the
+    /// request/header after it is included (the turn header rides the turn);
+    /// turn_index = the count of preceding user entries.
     #[test]
     fn open_turn_slice_cuts_at_last_user_message_and_counts_turns() {
         let entries = vec![
@@ -4079,7 +4554,7 @@ mod trace_snapshot_tests {
         assert_eq!(slice[2].seq, 6);
     }
 
-    /// 无 user 条目（回合未开始/仅注入）→ 无快照。
+    /// No user entry (turn not started / injection only) → no snapshot.
     #[test]
     fn open_turn_slice_without_user_message_is_none() {
         let entries = vec![entry("request/header", 1), entry("context/message", 2)];

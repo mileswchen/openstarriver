@@ -1,4 +1,4 @@
-//! Advisory repeat-tool reminder (DSH `guard/repeat-tool-reminder` parity).
+//! Advisory repeat-tool reminder (`guard/repeat-tool-reminder` parity).
 //!
 //! Counts consecutive IDENTICAL tool calls — same tool name plus deep-key-sort
 //! canonical arguments — and, when the count reaches a configured threshold,
@@ -10,12 +10,12 @@
 //!
 //! Why this exists: the retired prose-degeneracy detector (`degenerate_loop`)
 //! false-positived on legitimate fixed-template enumeration streamed as prose
-//! (see `design/degenerate-loop-false-positive.md`). DSH's answer is to NOT
+//! (see `design/degenerate-loop-false-positive.md`). The reference answer is to NOT
 //! detect prose at all — instead nudge the model when it repeats the *same
 //! action* with the *same arguments*, which is the observable signature of a
 //! stuck tool loop, and leave prose generation entirely alone.
 //!
-//! Semantics (mirrors DSH):
+//! Semantics (mirrors the reference behavior):
 //! - A single chain tracks the last tracked call's key + consecutive count.
 //! - A different tracked call resets the chain to 1.
 //! - Excluded tools are TRANSPARENT: they neither count nor reset the chain.
@@ -33,7 +33,7 @@ use starriver_kernel::llm::{
 };
 use starriver_kernel::session::Session;
 
-/// Plugin attribution for the injected notice (DSH `source.kind='plugin'`).
+/// Plugin attribution for the injected notice (`source.kind='plugin'`).
 pub const REMINDER_PLUGIN: &str = "harness:repeat-tool-reminder";
 
 /// Engine-default thresholds: gentle nudge at 3, detailed at 5 and 8.
@@ -73,7 +73,7 @@ impl RepeatReminderConfig {
         config
     }
 
-    /// Fail-loud validation (DSH rejects bad config at load). Thresholds must
+    /// Fail-loud validation (bad config is rejected at load). Thresholds must
     /// be non-empty, each ≥ 2, and unique; the preview cap must be positive.
     pub fn validate(&self) -> Result<(), String> {
         if self.thresholds.is_empty() {
@@ -303,7 +303,7 @@ impl RepeatToolReminder {
     }
 }
 
-/// Wildcard glob with `*` only (DSH parity): `*` matches any run of characters.
+/// Wildcard glob with `*` only (reference parity): `*` matches any run of characters.
 /// A pattern without `*` is an exact match.
 fn glob_match(pattern: &str, name: &str) -> bool {
     if !pattern.contains('*') {

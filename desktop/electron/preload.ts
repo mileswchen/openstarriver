@@ -35,11 +35,11 @@ for (const [name, spec] of Object.entries(LEGACY_METHODS)) {
 }
 
 // ── runtime:event fan-out ──
-// 单一持久 ipc 监听器把每个事件分发给两类消费者：当前回合处理器
-// （execute / executeStream，后到者替换前者，保留 re-arm 契约）和全部
-// 协议客户端订阅者（onEvent，各自按 subscription 过滤）。此前每个消费
-// 方都先 removeAllListeners —— 三方抢占唯一监听槽，最后注册者独占，
-// 其余饿死（2026-11-15：打开插件工作台后聊天转录冻结，切组才恢复）。
+// A single persistent ipc listener dispatches each event to two kinds of consumers: the current turn handler
+// (execute / executeStream, last-arrived replaces the previous, preserving the re-arm contract) and all
+// protocol-client subscribers (onEvent, each filtering by subscription). Previously every consumer
+// removeAllListeners first — three parties fought over the single listener slot, the last registrant monopolized it,
+// and the rest starved (2026-11-15: opening the plugin workbench froze the chat transcript; only switching groups recovered).
 let turnHandler: ((event: any) => void) | null = null;
 const eventSubscribers = new Set<(event: any) => void>();
 ipcRenderer.on('runtime:event', (_e: any, event: any) => {
@@ -161,14 +161,14 @@ contextBridge.exposeInMainWorld('starriver', {
     ipcRenderer.invoke('shell:openTerminal', { cwd, command }),
   openIDE: (cwd: string, command?: string): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('shell:openIDE', { cwd, command }),
-  // Turn file list 打开: open ONE file with the configured editor (main
+  // Turn file list Open: open ONE file with the configured editor (main
   // process spawn; `command` = apps.ide_command template, {file}/{dir}).
   openFile: (path: string, command?: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openFile', { path, command }),
   // Models page "open config file": open ~/.starriver/settings.yaml in the system editor.
   openModelsConfig: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openModelsConfig'),
-  // 设置页：退出时是否顺带停止后台服务（starriverd）。默认关（shared service）。
+  // Settings page: whether to also stop the background service (starriverd) on exit. Default off (shared service).
   getQuitStopsDaemon: (): Promise<boolean> => ipcRenderer.invoke('prefs:getQuitStopsDaemon'),
   setQuitStopsDaemon: (value: boolean): Promise<boolean> =>
     ipcRenderer.invoke('prefs:setQuitStopsDaemon', value),

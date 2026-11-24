@@ -119,11 +119,11 @@ async function renderDialog() {
 describe('LanChatDialog — 实例发现列表', () => {
   it('按 hostname 渲染实例，在线/离线与 ip:port 次行', async () => {
     await renderDialog();
-    // hostname 同时出现在实例行与会话头 → getAllByText。
+    // hostname appears in both the instance row and the conversation header → getAllByText.
     expect(screen.getAllByText('dev-linux').length).toBeGreaterThan(0);
     expect(screen.getAllByText('studio-win').length).toBeGreaterThan(0);
     expect(screen.getAllByText('192.168.1.23:51001').length).toBeGreaterThan(0);
-    // 本机行
+    // The local-machine row
     expect(screen.getByText('This Mac')).toBeTruthy();
     expect(screen.getByText('xiaomo-macpro')).toBeTruthy();
   });
@@ -209,7 +209,7 @@ describe('LAN chat 图片大小门槛（20MiB，与 host attachment store 准入
     await renderDialog();
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     const file = new File([new Uint8Array([1, 2, 3])], 'huge.png', { type: 'image/png' });
-    // 仅覆盖声明大小以触发门槛（门槛在读取/解码之前），避免分配 20MB。
+    // Only override the declared size to trigger the threshold (the threshold is before read/decode), avoiding a 20MB allocation.
     Object.defineProperty(file, 'size', { value: LAN_CHAT_IMAGE_MAX_BYTES + 1 });
     fireEvent.change(input, { target: { files: [file] } });
     await waitFor(() =>
@@ -219,7 +219,7 @@ describe('LAN chat 图片大小门槛（20MiB，与 host attachment store 准入
   });
 
   it('恰好等于上限（==20MiB）放行并发送（门槛为严格大于）', async () => {
-    // jsdom 不解码图片：stub Image 使选择器的 onload 立即完成。
+    // jsdom does not decode images: stub Image so the selector's onload completes immediately.
     const pngBytes = Uint8Array.from(atob(TINY_PNG_BASE64), (c) => c.charCodeAt(0));
     class MockImage {
       width = 10;

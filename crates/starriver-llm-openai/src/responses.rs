@@ -154,7 +154,7 @@ pub fn serialize_request(
         "store": false,
         // BUG-161: `store: false` means the server never persists the rs_
         // reasoning ids we replay — the encrypted content must ride the
-        // items themselves. Parity with OpenAI's own codex client, which
+        // items themselves. Parity with the reference responses client, which
         // always sends this include alongside `store: false`.
         "include": ["reasoning.encrypted_content"],
     });
@@ -1139,7 +1139,7 @@ mod round5_tests {
     }
 
     /// BUG-161: `store: false` never persists the rs_ ids we replay — the
-    /// encrypted content must be requested so it rides the items (codex-rs
+    /// encrypted content must be requested so it rides the items (the reference client
     /// parity).
     #[test]
     fn body_requests_encrypted_reasoning_content() {

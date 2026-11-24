@@ -115,7 +115,7 @@ describe('TurnFileSummary', () => {
     );
     const review = getByText('审查');
     const open = getByText('打开');
-    // 打开 renders AFTER 审查 inside the same row (right-hand neighbour).
+    // Open renders AFTER Review inside the same row (right-hand neighbour).
     expect(review.compareDocumentPosition(open) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(open);
     expect(onOpenExternal).toHaveBeenCalledWith('crates/x.rs', DIFF);

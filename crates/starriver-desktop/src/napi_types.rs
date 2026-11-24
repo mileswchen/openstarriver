@@ -109,7 +109,7 @@ pub struct ModelProvider {
 pub struct ModelVariant {
     pub id: String,
     pub name: String,
-    /// Per-model image-input declaration (dsh pattern): null = undeclared
+    /// Per-model image-input declaration (per-model declaration): null = undeclared
     /// (permissive); false = declared text-only, image requests fail loudly
     /// at request assembly.
     pub supports_vision: Option<bool>,

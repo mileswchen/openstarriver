@@ -12,7 +12,8 @@ use starriver_protocol::permission::{
     PERM_AGENTS_READ, PERM_AGENTS_WRITE, PERM_APPROVAL_RESPOND, PERM_ATTACHMENTS_READ,
     PERM_ATTACHMENTS_WRITE, PERM_CREDENTIALS_READ, PERM_CREDENTIALS_WRITE, PERM_HOOKS_READ,
     PERM_HOOKS_WRITE, PERM_JOBS_READ, PERM_LAN_CHAT, PERM_MARKET_READ, PERM_MCP_READ, PERM_MCP_WRITE,
-    PERM_MEMORY_READ, PERM_MEMORY_WRITE, PERM_MODELS_READ, PERM_MODELS_WRITE, PERM_PLUGINS_READ,
+    PERM_MEMORY_READ, PERM_MEMORY_WRITE, PERM_MODELS_READ, PERM_MODELS_WRITE, PERM_PLUGIN_NET,
+    PERM_PLUGINS_READ,
     PERM_PLUGINS_WRITE, PERM_PROJECT_WRITE, PERM_REVIEW_START, PERM_SCHEDULED_READ,
     PERM_SCHEDULED_WRITE, PERM_SESSION_EXECUTE, PERM_SESSION_READ, PERM_SESSION_WRITE,
     PERM_SKILLS_READ, PERM_SKILLS_WRITE, PERM_TASK_READ, PERM_TASK_RUN, PERM_TOOL_CALL,
@@ -75,9 +76,10 @@ pub fn build() -> MethodRegistry<HostRuntime> {
         session_usage_method(),
         session_export(),
         approval_respond(),
+        HostRuntime::__api_approval_pendingState(),
         plan_review_decide(),
         interaction_respond(),
-        // ── LAN chat：局域网实例互发消息（lan_chat 模块） ──
+        // ── LAN chat: instances on the LAN message each other (lan_chat module) ──
         lan_state(),
         lan_messages(),
         lan_send(),
@@ -91,6 +93,8 @@ pub fn build() -> MethodRegistry<HostRuntime> {
         tools_call(),
         // ── Plugin tasks (P2): chat-surface-sessionless execution ──
         plugin_task_run(),
+        plugin_task_proxy_fetch(),
+        plugin_task_net_policy(),
         plugin_task_wait(),
         plugin_task_messages(),
         plugin_task_cancel(),
@@ -612,7 +616,7 @@ fn review_structured() -> MethodSpec<HostRuntime> {
 }
 
 /// WI-93: background terminal panel — list active PTYs / kill one.
-/// Full snapshots: `cmd` answers「这个终端在跑什么」, `ownerSessionId` /
+/// Full snapshots: `cmd` answers "what is this terminal running", `ownerSessionId` /
 /// `workspace` power the session-title row and the workspace filter.
 fn terminal_list() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
@@ -691,7 +695,7 @@ fn settings_update() -> MethodSpec<HostRuntime> {
     )
 }
 
-// ── LAN chat (starriver-protocol-server::lan_chat)：局域网实例互发消息 ──
+// ── LAN chat (starriver-protocol-server::lan_chat): instances on the LAN message each other ──
 
 fn lan_state() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
@@ -1245,6 +1249,84 @@ fn plugin_task_messages() -> MethodSpec<HostRuntime> {
     )
 }
 
+/// WI-252: plugin egress network — forward a manifest-granted https request
+/// from the host process (no LLM, sub-second). The `plugin` identity is
+/// injected by the renderer bridge (frames cannot claim another plugin);
+/// URL-level authority is the manifest `net.allow` grant, re-validated per
+/// hop with SSRF defenses (private-IP block, redirect re-check, rate limit).
+/// Error codes: NET_* / PLUGIN_ORIGIN_REQUIRED.
+fn plugin_task_proxy_fetch() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "pluginTask.proxyFetch",
+        object(
+            &[
+                ("plugin", string_schema()),
+                ("url", string_schema()),
+                ("method", string_schema()),
+                ("headers", any_schema()),
+                ("body", string_schema()),
+                ("timeoutMs", integer_schema()),
+            ],
+            &["plugin", "url"],
+        ),
+        any_schema(),
+        &[PERM_PLUGIN_NET],
+        false,
+        |call: HostCall<'_>| {
+            let plugin = required_string(&call.params, "plugin")?;
+            let url = required_string(&call.params, "url")?;
+            let method = optional_string(&call.params, "method");
+            let headers = call
+                .params
+                .get("headers")
+                .and_then(Value::as_object)
+                .cloned();
+            let body = optional_string(&call.params, "body");
+            let timeout_ms = optional_u32(&call.params, "timeoutMs").map(u64::from);
+            let outcome = call
+                .host
+                .plugin_proxy_fetch(plugin.clone(), url, method, headers, body, timeout_ms)
+                .map_err(|e| {
+                    ApiError::with_data(e.code, e.message.clone(), json!({ "plugin": plugin }))
+                })?;
+            Ok(outcome)
+        },
+    )
+}
+
+/// WI-252: read / flip a plugin's network kill switch (`enabled: null` reads,
+/// a boolean toggles). Owner/settings surface — `plugins:write`.
+fn plugin_task_net_policy() -> MethodSpec<HostRuntime> {
+    MethodSpec::new(
+        "pluginTask.netPolicy",
+        object(
+            &[
+                ("plugin", string_schema()),
+                ("enabled", boolean_schema()),
+            ],
+            &["plugin"],
+        ),
+        object(
+            &[
+                ("plugin", string_schema()),
+                ("enabled", boolean_schema()),
+            ],
+            &["plugin", "enabled"],
+        ),
+        &[PERM_PLUGINS_WRITE],
+        false,
+        |call: HostCall<'_>| {
+            let plugin = required_string(&call.params, "plugin")?;
+            let enabled = call.params.get("enabled").and_then(Value::as_bool);
+            let outcome = call
+                .host
+                .plugin_net_policy(plugin, enabled)
+                .map_err(|e| ApiError::with_data(e.code, e.message.clone(), json!({})))?;
+            Ok(outcome)
+        },
+    )
+}
+
 /// Plugin platform P2: cancel a run's active turn.
 fn plugin_task_cancel() -> MethodSpec<HostRuntime> {
     MethodSpec::new(
@@ -1613,7 +1695,7 @@ fn session_trace() -> MethodSpec<HostRuntime> {
         |call: HostCall<'_>| {
             let session_id = required_string(&call.params, "sessionId")?;
             let mut trace = session_trace_json(&call.host.get_session_trace(session_id.clone()));
-            // 逐字节实时一致（开放回合快照流）：随全量水合下发投影世代。
+            // Byte-for-byte live consistency (open-turn snapshot stream): ship the projection generation with full hydration.
             if let Some(obj) = trace.as_object_mut() {
                 obj.insert("epoch".into(), json!(call.host.trace_epoch(&session_id)));
             }
@@ -1654,8 +1736,8 @@ fn session_compact() -> MethodSpec<HostRuntime> {
         |call: HostCall<'_>| {
             let session_id = required_string(&call.params, "sessionId")?;
             let keep_recent = call.params.get("keepRecent").and_then(Value::as_u64);
-            // 逐字节实时一致：历史将被重写，投影世代先 +1（客户端据此全量重拉；
-            // 重拉发生在重写完成之后）。
+            // Byte-for-byte live consistency: history is about to be rewritten; bump the projection generation first
+            // (clients full-repull on it; the re-pull happens after the rewrite completes).
             call.host.bump_trace_epoch(&session_id);
             let result = call
                 .host
@@ -3626,6 +3708,7 @@ mod tests {
             icon: Some("icon.svg".into()),
             background: false,
             max_permission_preset: None,
+            net: None,
         };
         let entry = types::PluginEntry {
             name: "icon-probe-test".into(),
@@ -3672,6 +3755,7 @@ mod tests {
                     icon: None,
                     background: false,
                     max_permission_preset: None,
+                    net: None,
                 }),
                 source_url: String::new(),
                 installed_at: String::new(),
@@ -3711,6 +3795,7 @@ mod tests {
                 icon: None,
                 background,
                 max_permission_preset: None,
+                net: None,
             }),
             source_url: String::new(),
             installed_at: String::new(),
@@ -4802,6 +4887,26 @@ mod approval_contract_tests {
                             "remember": { "type": "boolean" },
                         },
                         "required": ["sessionId", "allowed"],
+                        "additionalProperties": false,
+                    },
+                    "result": {},
+                    "permissions": ["approval:respond"],
+                    "streaming": false,
+                }),
+            ),
+            // WI-247: pending-approval reconstruction face — the audit-log
+            // fold for UIs that missed the live `approvalRequested` relay.
+            // Read-only (session:read semantics) but gated on approval:respond
+            // since it returns the pending command's arguments to callers
+            // allowed to answer it.
+            (
+                "approval.pendingState",
+                json!({
+                    "name": "approval.pendingState",
+                    "params": {
+                        "type": "object",
+                        "properties": { "sessionId": { "type": "string" } },
+                        "required": ["sessionId"],
                         "additionalProperties": false,
                     },
                     "result": {},

@@ -58,7 +58,7 @@ pub struct ApprovalBridge {
     resolved: Arc<Mutex<VecDeque<(String, ApprovalDecision)>>>,
 }
 
-/// Await a pending decision. Approvals wait indefinitely (dsh/codex
+/// Await a pending decision. Approvals wait indefinitely (reference
 /// parity): only an actual decision or the client channel dropping
 /// (requester gone) settles the request — never a clock.
 async fn await_decision(rx: oneshot::Receiver<ApprovalDecision>) -> ApprovalOutcome {
@@ -200,6 +200,18 @@ impl ApprovalBridge {
         let _ = pending.tx.send(decision);
         true
     }
+
+    /// WI-250: resolve the session's pending approval (if any) as
+    /// `Cancelled`. Used by `session.setPermissionPreset`: a preset switch
+    /// supersedes a still-waiting ask, and the agent retries the call under
+    /// the NEW policy (bypass re-runs silently allowed, manual re-asks)
+    /// instead of the switch dangling behind a decision nobody can make.
+    /// False when the session has no resolvable pending request.
+    pub fn cancel_session_pending(&self, session_id: &str) -> bool {
+        let id = self.session_latest.lock().unwrap().get(session_id).cloned();
+        let Some(id) = id else { return false };
+        self.respond(&id, ApprovalDecision::Cancel)
+    }
 }
 
 #[cfg(test)]
@@ -291,6 +303,30 @@ mod tests {
             Some(ApprovalDecision::Allow { remember: true })
         );
         assert_eq!(bridge.resolution_of("unknown"), None);
+    }
+
+    // ── WI-250: preset switch supersedes a waiting ask ──
+
+    #[test]
+    fn cancel_session_pending_resolves_latest_and_is_idempotent() {
+        let bridge = empty_bridge();
+        let (tx, rx) = oneshot::channel::<ApprovalDecision>();
+        bridge.pending.lock().unwrap().insert("ap-1".into(), Pending { tx });
+        bridge
+            .session_latest
+            .lock()
+            .unwrap()
+            .insert("s1".into(), "ap-1".into());
+        // The switch finds the session's pending ask and resolves it…
+        assert!(bridge.cancel_session_pending("s1"));
+        assert_eq!(rx.blocking_recv(), Ok(ApprovalDecision::Cancel));
+        assert_eq!(
+            bridge.resolution_of("ap-1"),
+            Some(ApprovalDecision::Cancel)
+        );
+        // …and a second switch (or a switch with nothing pending) is a no-op.
+        assert!(!bridge.cancel_session_pending("s1"));
+        assert!(!bridge.cancel_session_pending("other"));
     }
 
     // ── BUG-24: the audit-pair claim must match the callId VALUE ──

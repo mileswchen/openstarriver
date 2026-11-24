@@ -9,7 +9,7 @@
 // client gracefully shuts it down (`--shutdown`, control-socket protocol is version-stable) and
 // spawns the bundled binary instead. A daemon that refuses to die fails LOUDLY: silently talking
 // to the wrong build hides new features behind misleading UI (seen: lan.state METHOD_NOT_FOUND
-// surfacing as "消息服务未启用").
+// surfacing as "messages service not enabled").
 
 import { spawn, execFile, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
@@ -249,7 +249,7 @@ export interface StopDaemonResult {
 }
 
 /**
- * Explicit user action ("停止后台服务并退出" / macOS 卸载): gracefully stop the
+ * Explicit user action ("Stop background service and quit" / macOS uninstall): gracefully stop the
  * shared daemon and clean runtime handoff files. Unlike the upgrade takeover
  * there is NO build-identity check — the user asked the daemon to stop,
  * regardless of which build is running.

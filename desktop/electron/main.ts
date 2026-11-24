@@ -236,7 +236,7 @@ app.whenReady().then(async () => {
   // ── shell:openTerminal / shell:openIDE / shell:openFile ──
   // Renderer-initiated "open the workspace elsewhere" actions: spawn the
   // user's terminal emulator / IDE on the session's workspace directory, or
-  // open ONE file in the user's editor (turn file list 打开). These run
+  // open ONE file in the user's editor (turn file list Open). These run
   // OUTSIDE the agent (user-invoked, main-process spawn) — sandbox
   // does not apply. A settings-provided command template (`apps.*_command`,
   // `{dir}` placeholder) wins over the platform default; `{dir}` (and
@@ -347,7 +347,7 @@ app.whenReady().then(async () => {
     throw new Error('VS Code CLI (`code`) not found on PATH — configure apps.ide_command in settings.yaml');
   });
 
-  // Turn file list 打开: open ONE file in the user's editor. A settings
+  // Turn file list Open: open ONE file in the user's editor. A settings
   // `apps.ide_command` template runs with `{file}` (full path) and `{dir}`
   // (the file's directory) placeholders; the renderer only calls this when
   // an editor IS configured (no template → it opens the file in the
@@ -520,11 +520,11 @@ app.whenReady().then(async () => {
   }));
   ipcMain.handle('runtime:quitApp', () => app.quit());
 
-  // ── Daemon lifecycle：显式停服 + 应用内卸载 ──
-  // 默认：应用退出不杀守护进程（shared service，手机配对/远程 UI 仍在线）。
-  // 用户显式通道：菜单"停止后台服务并退出"、设置项 quitStopsDaemon（退出即停服）、
-  // macOS 应用内卸载（对齐 Docker Desktop 的 in-app uninstall：先停服务清数据，
-  // 退出后指引用户把 .app 拖入废纸篓——平台无拖废纸篓钩子，这是主流做法）。
+  // ── Daemon lifecycle: explicit stop + in-app uninstall ──
+  // Default: app exit does not kill the daemon (shared service; phone pairing / remote UI stay online).
+  // Explicit user channels: the menu "Stop background service and quit", the quitStopsDaemon setting (quit stops the service),
+  // macOS in-app uninstall (aligned with Docker Desktop's in-app uninstall: stop the service and clear data first,
+  // then guide the user to drag the .app to the Trash after exit — the platform has no drag-to-Trash hook; this is the mainstream approach).
   const desktopPrefsPath = () => path.join(app.getPath('userData'), 'desktop-prefs.json');
   const readQuitStopsDaemon = (): boolean => {
     try {

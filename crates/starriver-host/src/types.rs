@@ -92,6 +92,15 @@ pub struct PluginUiEntry {
     /// P2: manifest autonomy ceiling for task runs; None → bridge enforces
     /// `manual` (fail-closed). Delivered to the renderer as `maxPermissionPreset`.
     pub max_permission_preset: Option<String>,
+    /// WI-252: egress grant domains (raw patterns, install-consent display).
+    pub net: Option<PluginNetEntry>,
+}
+
+/// WI-252: raw `net.allow` patterns surfaced to the shell (install-consent
+/// dialog / plugin settings readout). The host re-validates per request.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PluginNetEntry {
+    pub allow: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,7 +143,7 @@ pub struct ModelProvider {
 pub struct ModelVariant {
     pub id: String,
     pub name: String,
-    /// Per-model image-input declaration (dsh pattern): None = undeclared
+    /// Per-model image-input declaration (per-model declaration): None = undeclared
     /// (permissive); Some(false) = declared text-only, image requests fail
     /// loudly at assembly.
     pub supports_vision: Option<bool>,

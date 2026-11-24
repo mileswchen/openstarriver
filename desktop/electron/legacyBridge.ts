@@ -96,6 +96,11 @@ export const LEGACY_METHODS: Record<string, LegacySpec> = {
   },
   listSkillUsage: { method: 'skills.usage', params: ([limit]) => ({ limit }) },
   listRunningSessions: { method: 'sessions.running' },
+  // WI-252: plugin network kill switch (read when enabled omitted).
+  pluginNetPolicy: {
+    method: 'pluginTask.netPolicy',
+    params: ([plugin, enabled]) => (enabled === undefined ? { plugin } : { plugin, enabled }),
+  },
   listHooks: { method: 'hooks.list' },
   readHook: {
     method: 'hooks.read',
@@ -383,6 +388,12 @@ export const LEGACY_METHODS: Record<string, LegacySpec> = {
   approve: {
     method: 'approval.respond',
     params: ([sessionId, allowed, remember]) => ({ sessionId, allowed, remember: remember ?? false }),
+  },
+  // WI-247: pending-approval reconstruction face — audit-log fold for UIs
+  // that missed the live `approvalRequested` relay.
+  pendingApprovalState: {
+    method: 'approval.pendingState',
+    params: ([sessionId]) => ({ sessionId }),
   },
   searchSessions: {
     method: 'session.search',

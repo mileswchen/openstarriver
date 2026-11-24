@@ -610,7 +610,7 @@ const ICON_PHONE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" 
 const ICON_MESSAGE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>';
 // LAN chat composer image picker (feather "image").
 const ICON_MESSAGE_IMAGE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
-// 界面定时锁（sidebar 左下角入口）— feather "lock"
+// Scheduled UI Lock (sidebar bottom-left entry) — feather "lock"
 const ICON_LOCK = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 /* Thinking-row icon: monochrome stroke brain (Lucide), same style/size as the tool icons. */
 const ICON_SYSTEM = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
@@ -982,7 +982,7 @@ function WorkFoldRow({ group, expanded, onToggle }: {
   );
 }
 
-/** 后台终端的用途标签：常见长驻模式一眼可辨；识别不出返回 null（不标）。 */
+/** Purpose label for a background terminal: common long-running modes are recognizable at a glance; returns null (no label) when unrecognized. */
 function terminalPurposeLabel(cmd: string | null | undefined, t: (k: string) => string): string | null {
   if (!cmd) return null;
   const c = cmd.toLowerCase();
@@ -1028,8 +1028,8 @@ function TerminalRow({ term, sessionTitle, onKill }: {
     const timer = setInterval(() => setTick(n => n + 1), 1000);
     return () => clearInterval(timer);
   }, []);
-  // 逐字节实时一致（dsh 式标记契约）：命令有精确生命周期——发出即 running，
-  // 结束标记一出现即 done · exit N；无标记信息时回退 host 会话状态。
+  // Byte-for-byte live consistency (marker contract): a command has a precise lifecycle — running as soon as it is issued,
+  // done · exit N as soon as the end marker appears; falls back to host session state when no marker info is available.
   const cmd = term.command;
   const cmdText = cmd?.cmd ?? null;
   const baseMs = cmd?.startedAtMs ?? term.startedAtMs;
@@ -1085,10 +1085,10 @@ function ShellCmdRow({ entry }: { entry: { cmd: string; startedAt: number } }) {
 
 /* ─── turn-level file change summary ─── */
 
-/** 打开 on the per-turn file list: launch ONE file in the user's configured
+/** Open on the per-turn file list: launch ONE file in the user's configured
  *  editor. `apps.ide_command` (settings.yaml, `{file}`/`{dir}` placeholders)
  *  IS the editor; with none set the right-hand panel is the default editor —
- *  the fallback reuses the 审查 open. A configured editor that fails to
+ *  the fallback reuses the Review open. A configured editor that fails to
  *  launch surfaces an error toast (no silent panel fallback). Resolves to
  *  'editor' | 'panel' so tests can assert the branch taken. */
 export async function openFileWithEditor(
@@ -1121,9 +1121,9 @@ export async function openFileWithEditor(
 }
 
 /** Per-turn changed-files card. Each row opens the file's diff in the
-    right-hand panel (审查) — the inline `<details>` expansion was replaced by
+    right-hand panel (Review) — the inline `<details>` expansion was replaced by
     the panel so diffs get the full width and coexist with the Plan tab.
-    打开 sits right of 审查: launches the file in the configured editor
+    Open sits right of Review: launches the file in the configured editor
     (`openFileWithEditor`; panel fallback when no editor is set). */
 export function TurnFileSummary({
   files,
@@ -1538,7 +1538,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
           {q && (
             <div className="traj-ledger-hits">{t('coding.trajSearchHits', { n: totalRows })}</div>
           )}
-          {/* DSH timeline minimap: three lanes (Input / Model / Tools), one
+          {/* Timeline minimap: three lanes (Input / Model / Tools), one
               bar per row, equal-width sequence positions; click scrolls. */}
           <div className="traj-timeline" aria-hidden="true">
             <div className="traj-timeline-labels">
@@ -1623,7 +1623,7 @@ export function TrajectoryView({ sessionId }: { sessionId: string }) {
                             )}
                           </span>
                         </div>
-                        {/* DSH collapsed-calls summary row under the assistant */}
+                        {/* Collapsed-calls summary row under the assistant */}
                         {row.kind === 'assistant' && groupCollapsed && (
                           <div className="traj-ledger-fold" role="row"
                             onClick={() => setCollapsedCalls((prev) => {
@@ -2140,7 +2140,7 @@ export function ToolRow({
   /** WI-86: wall time (ms) recorded from toolCall → toolResult. */
   durationMs?: number;
   /** Diff-bearing results (edit/write/patch): open the file diff in the
-      right-hand panel (审查). */
+      right-hand panel (Review). */
   onOpenDiff?: (path: string, text: string) => void;
 }) {
   const { t } = useI18n();
@@ -2285,7 +2285,7 @@ export function ToolRow({
   const summaryFull = (cmdText || label || whole).replace(/\s+/g, ' ').trim();
   const finalOk = ok ?? (result !== undefined ? null : (labelOk ?? bodyOk));
   const resultText = result !== undefined ? result : body;
-  // 文件内容型工具(read/write/edit/patch)的结果体按路径扩展名高亮(2026-10-04 方案补充)。
+  // Highlight the result body of file-content tools (read/write/edit/patch) by path extension (2026-10-04 design addition).
   const resultHtml = isDiffContent(resultText) ? null : highlightCodeHtml(resultText, fileResultLang(tname, cmdText));
   const hasResult = result !== undefined || bodyOk !== null || body.length > 0 ||
     labelOk !== null || streaming;
@@ -2487,15 +2487,15 @@ export function MiniSelect(props: React.SelectHTMLAttributes<HTMLSelectElement>)
 /* Plan review card — three-step takeover at the composer's bottom edge
    (design approved 2026-09-13, bottom-card form, Manual default):
    step "review": plan summary (markdown, scroll-capped; the full plan lives in
-     the right-hand Plan panel), a feedback line, 继续规划 / 批准计划. Enter
+     the right-hand Plan panel), a feedback line, Continue planning / Approve plan. Enter
      with text keeps planning with that feedback; empty Enter opens step 2.
    step "mode": the four permission presets — same vocabulary as the composer's
      permission dropdown — with the session's folded preset preselected.
-     开始实施 sends the preset as part of the approval decision itself
+     Start implementing sends the preset as part of the approval decision itself
      (plan.reviewDecision `preset` param); the host applies it atomically.
      Full access routes through step "risk" first.
    step "risk": the existing risk-confirmation copy + acknowledge checkbox
-     gating 开启并实施 (danger preset cannot be enabled blind). */
+     gating Enable and implement (danger preset cannot be enabled blind). */
 const PLAN_REVIEW_MODES: { value: string; labelKey: string; descKey: string; danger?: boolean }[] = [
   { value: 'manual', labelKey: 'common.permissionManual', descKey: 'coding.planReviewModeDescManual' },
   { value: 'accept-edits', labelKey: 'common.permissionAcceptEdits', descKey: 'coding.planReviewModeDescAcceptEdits' },
@@ -2601,7 +2601,7 @@ export function PlanReviewCard({ plan, currentPreset, onApprove, onDecide }: {
   plan: string;
   /** The session's folded permission preset — preselected on the mode step so
    *  re-approving a plan never silently downgrades the session (2026-10-14:
-   *  the card hardcoded `manual`, the user clicked through to 标准, and the
+   *  the card hardcoded `manual`, the user clicked through to Standard, and the
    *  write downgraded a danger-full-access session to workspace-write, which
    *  then refused out-of-workspace edits mid-task). */
   currentPreset?: string;
@@ -2813,7 +2813,7 @@ function QuestionCard({ question, onAnswer }: {
   );
 }
 
-/** WI-152 v3 (dsh pattern): image-accept for one active route key — the
+/** WI-152 v3 (per-model declaration): image-accept for one active route key — the
  *  active MODEL's per-variant declaration decides; undeclared or unknown
  *  routes stay permissive (a wrong "supports" claim surfaces the provider's
  *  own error, per the claim-not-check philosophy). */
@@ -3299,7 +3299,7 @@ export function Composer(props: {
  *   drop its own stale run state (2026-10-12 09:02 host log: the turn had
  *   ended long before, the composer still showed Stop, and both Stop clicks
  *   hit "no live agent"; resetting only `stopping` left the button wedged
- *   on Stop until 新建 task reset the whole view).
+ *   on Stop until New Task reset the whole view).
  * - onTerminal must be called on TaskCompleted / TaskFailed / TaskCancelled;
  *   it also stops the retry loop.
  * - Hard watchdog (20s): if no terminal confirmation arrived, reset
@@ -3404,7 +3404,7 @@ export function useTaskStop(
   }, [stopping, sendCancel]);
 
   // Session switch / remount: drop the previous session's stop state instead
-  // of letting 停止中/stopping leak into the newly opened one.
+  // of letting Stopping/stopping leak into the newly opened one.
   const reset = useCallback(() => {
     cancelSentRef.current = false;
     setStopping(false);
@@ -3636,6 +3636,9 @@ interface PluginEntry {
     tabs?: { id: string; title: string }[];
     permissions?: string[];
     theme?: string | null;
+    /** WI-252: raw net.allow patterns — install-consent/display only; the
+     *  host re-validates every proxied request against this grant. */
+    net?: { allow?: string[] } | null;
   } | null;
 }
 
@@ -3687,7 +3690,7 @@ interface ModelVariant {
   name: string;
   /** Real context window reported by the provider (/v1/models context_length), if any. */
   contextLength?: number;
-  /** Per-model image-input declaration (dsh pattern): false = declared
+  /** Per-model image-input declaration (per-model declaration): false = declared
    *  text-only (image requests fail loudly at request assembly);
    *  undefined/null = undeclared → permissive, the provider's own error is
    *  the arbiter. */
@@ -3934,12 +3937,19 @@ type GetPermissionFn = (sessionId: string) => Promise<{ sandbox: string | null; 
 interface StarriverBridge {
   /** FPM P1: generic protocol entry (raw envelope in, response JSON out). */
   invoke?(requestJson: string): Promise<string>;
+  /** runtime:event fan-out subscriber (independent of the execute turn slot).
+   *  Returns an unsubscribe fn. BUG-204: idle/remote-turn chat refresh rides
+   *  this, not the single-slot execute callback. */
+  onEvent?(callback: (event: any) => void): () => void;
   lanAddress?: LanAddressFn;
   retryInit?(): Promise<{ ok: boolean; relaunched?: boolean }>;
   startHttpServer?: StartHttpServerFn;
   httpServerInfo?: HttpServerInfoFn;
   execute(task: string, sessionId: string | undefined, cb: (err: string | null, event: any) => void, executionMode?: string, agent?: string, isolation?: boolean, agentPreset?: string, permissionPreset?: string, clientRequestId?: string): void;
   approve(sessionId: string, allowed: boolean, remember?: boolean): Promise<void>;
+  /** WI-247: pending-approval reconstruction face — the audit-log fold, for
+   *  UIs that missed the live `approvalRequested` relay to re-align. */
+  pendingApprovalState?(sessionId: string): Promise<{ pending: boolean; requestId?: string; toolName?: string; reason?: string | null; arguments?: string | null; callId?: string | null; askedAtMs?: number }>;
   /** Plan fold: answer a pending exit_plan_mode review (Plan confirm card).
    *  `preset` rides the decision — the host applies it atomically with the
    *  approval. */
@@ -3981,6 +3991,8 @@ interface StarriverBridge {
   listPlugins(): Promise<PluginEntry[]>;
   installPlugin(sourceUrl: string): Promise<PluginEntry>;
   uninstallPlugin(name: string): Promise<PluginEntry[]>;
+  /** WI-252: read / flip a plugin's network kill switch (enabled omitted = read). */
+  pluginNetPolicy?(plugin: string, enabled?: boolean): Promise<{ plugin: string; enabled: boolean }>;
   listModelProviders(): Promise<ModelProvider[]>;
   marketList(): Promise<any[]>;
   // New model registry methods
@@ -4054,12 +4066,12 @@ interface StarriverBridge {
   // Open the workspace directory externally (main-process spawn)
   openTerminal?(cwd: string, command?: string): Promise<{ ok: boolean }>;
   openIDE?(cwd: string, command?: string): Promise<{ ok: boolean }>;
-  /** Turn file list 打开: open ONE file with the configured editor command
+  /** Turn file list Open: open ONE file with the configured editor command
       (main-process spawn; `command` = apps.ide_command template). */
   openFile?(path: string, command?: string): Promise<{ ok: boolean; error?: string }>;
   /** Models page "open config file": open ~/.starriver/settings.yaml in the system editor. */
   openModelsConfig?(): Promise<{ ok: boolean; error?: string }>;
-  /** 设置页：退出时是否顺带停止后台服务（desktop-prefs.json，主进程持有）。 */
+  /** Settings page: whether to also stop background services on exit (desktop-prefs.json, owned by the main process). */
   getQuitStopsDaemon?(): Promise<boolean>;
   setQuitStopsDaemon?(value: boolean): Promise<boolean>;
 
@@ -4359,6 +4371,26 @@ export function PluginsTab() {
     finally { setBusy(false); }
   };
 
+  /** WI-252: per-plugin egress kill-switch state (defaults to enabled; the
+   *  host is the authority, this only mirrors `pluginTask.netPolicy`). */
+  const [netStates, setNetStates] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    let alive = true;
+    for (const p of plugins) {
+      if (!(p as any).ui?.net?.allow?.length) continue;
+      window.starriver.pluginNetPolicy?.(p.name)
+        .then((r: any) => { if (alive) setNetStates(prev => ({ ...prev, [p.name]: !!r?.enabled })); })
+        .catch(() => {});
+    }
+    return () => { alive = false; };
+  }, [plugins]);
+  const togglePluginNet = async (name: string, enabled: boolean) => {
+    try {
+      const r = await window.starriver.pluginNetPolicy?.(name, enabled);
+      setNetStates(prev => ({ ...prev, [name]: !!r?.enabled }));
+    } catch (e) { console.error(e); }
+  };
+
   const handleUninstall = async (p: PluginEntry) => {
     if (!confirm(`Uninstall plugin "${p.name}" and remove its ${p.skills.length} skill(s)?`)) return;
     try {
@@ -4415,6 +4447,19 @@ export function PluginsTab() {
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{p.description}</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{p.skills.length} skill(s): {p.skills.join(', ')}</div>
+              {(p as any).ui?.net?.allow?.length ? (
+                <div style={{ fontSize: 12, marginTop: 4, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>网络授权 (proxyFetch):</span>
+                  {(p as any).ui.net.allow.map((pat: string) => (
+                    <code key={pat} style={{ fontSize: 11, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px' }}>{pat}</code>
+                  ))}
+                  <button className="btn btn-secondary btn-small" style={{ fontSize: 11, padding: '2px 8px' }}
+                    title="Toggle this plugin's outbound network access (pluginTask.netPolicy)"
+                    onClick={() => togglePluginNet(p.name, !(netStates[p.name] ?? true))}>
+                    {netStates[p.name] === false ? '网络已禁用 — 点击启用' : '网络已启用 — 点击禁用'}
+                  </button>
+                </div>
+              ) : null}
             </div>
           ))}
         </>
@@ -7511,7 +7556,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // so the Enter handler never reads a stale closure.
   const sendingRef = useRef(false);
   sendingRef.current = sending;
-  // 远端回合重放的防抖计时器（traceSnapshot 驱动）。
+  // Debounce timer for remote-turn replay (driven by traceSnapshot).
   const remoteResyncTimerRef = useRef<number | null>(null);
   const queueSeqRef = useRef(0);
   const [queueItems, setQueueItems] = useState<{ id: string; text: string }[]>([]);
@@ -7747,8 +7792,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     handleUnarchive,
     newConvSeq,
   } = wsCtx;
-  // 工作区过滤：只显示本工作区（含其会话）启动的后台终端。workspace 字段
-  // 缺失的旧数据/宿主级终端照常显示——不藏数据。
+  // Workspace filter: show only background terminals started by this workspace (including its sessions). Old data /
+  // host-level terminals missing the workspace field still show — no data is hidden.
   const activeWorkspacePath = workspaces.find(w => w.id === activeWorkspaceId)?.path ?? null;
   const workspaceTerminals = useMemo(
     () => terminals.filter(x => !x.workspace || !activeWorkspacePath || x.workspace === activeWorkspacePath),
@@ -7774,11 +7819,11 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   const [instructionsTruncated, setInstructionsTruncated] = useState(false);
   const messagesRef = useRef<Message[]>([]);
   const sessionIdRef2 = useRef<string>('');
-  // The session the user just LEFT via 新建任务/新会话. Its TaskStarted /
+  // The session the user just LEFT via New Task / new session. Its TaskStarted /
   // sessionStarted events must not re-adopt it into the empty New Task view:
   // adoption at 2026-11-01 re-opened the closed conversation whenever the
   // still-running session (queued turn, scheduled run, external harness)
-  // emitted after the clear — the exact "新建 task 弹出旧会话" report.
+  // emitted after the clear — the exact "New Task pops the old session" report.
   const lastClosedSessionRef = useRef<string>('');
   const dropDiagTsRef = useRef(0);
   // New-task diagnostics (2026-11-01): one line per open/close/restore/adopt
@@ -7811,7 +7856,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // an execution reference (the review card itself closes on decision).
   const [lastPlan, setLastPlan] = useState<string | null>(null);
   const [planApproved, setPlanApproved] = useState(false);
-  // Doc-viewer panel (2026-11-10 方案): the panel is a multi-document viewer
+  // Doc-viewer panel (2026-11-10 design): the panel is a multi-document viewer
   // — plan tab + any number of diff tabs, zoomable, and hideable WITHOUT
   // dropping the open documents (the toolbar button brings it back).
   const [panelOpen, setPanelOpen] = useState(false);
@@ -7861,7 +7906,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     setPanelTab('file');
     setPanelOpen(true);
   };
-  /** 打开 (2026-11-11): the file-change row's external launch — configured
+  /** Open (2026-11-11): the file-change row's external launch — configured
    *  editor via openFileWithEditor, panel when none is set. */
   const openFileExternally = (path: string, text: string) => {
     void openFileWithEditor(path, text, {
@@ -8059,6 +8104,44 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   };
 
   const [approval, setApproval] = useState<{ tool: string; reason: string; params?: any; resolve: (allowed: boolean, remember?: boolean) => void } | null>(null);
+  // WI-247: mirror for non-reactive readers (the delayed live-loss recovery
+  // timer below) so a restored card is never set twice.
+  const approvalRef = useRef<{ tool: string; reason: string; params?: any; resolve: (allowed: boolean, remember?: boolean) => void } | null>(null);
+  useEffect(() => { approvalRef.current = approval; }, [approval]);
+  // WI-247: one delayed audit-log re-alignment per live tool call. A tool
+  // whose `approvalRequested` relay went missing (broadcast lag, missed
+  // re-arm) must not wedge the turn behind an invisible card — by the time
+  // this fires, a healthy relay has already set the panel (no-op) and a
+  // lost one gets restored from the host fold.
+  const approvalRecoverTimerRef = useRef<number | null>(null);
+  const armApprovalRecovery = useCallback(() => {
+    if (approvalRecoverTimerRef.current) clearTimeout(approvalRecoverTimerRef.current);
+    approvalRecoverTimerRef.current = window.setTimeout(() => {
+      approvalRecoverTimerRef.current = null;
+      if (approvalRef.current) return;
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      window.starriver.pendingApprovalState?.(sid).then((state) => {
+        if (approvalRef.current) return;
+        if (!state || !state.pending || !state.requestId) return;
+        if (sessionIdRef.current !== sid) return;
+        setApproval({
+          tool: state.toolName || '',
+          reason: state.reason || '',
+          params: state.arguments || {},
+          resolve: (allowed: boolean, remember?: boolean) => {
+            if (sessionIdRef.current) {
+              window.starriver.approve(sessionIdRef.current, allowed, remember ?? false).catch(console.error);
+            }
+            setApproval(null);
+          },
+        });
+      }).catch(() => {});
+    }, 1500);
+  }, []);
+  useEffect(() => () => {
+    if (approvalRecoverTimerRef.current) clearTimeout(approvalRecoverTimerRef.current);
+  }, []);
   // WI-67 user-questions: an agent ask surfaces here and renders as a
   // composer-side question card (options + free text).
   const [question, setQuestion] = useState<{
@@ -8163,6 +8246,40 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     return () => { stale = true; };
   }, [activeSessionId]);
 
+  // BUG-204: idle/remote-turn chat refresh must NOT depend on the execute
+  // send-callback (the `turnHandler` single slot in preload). When no local
+  // execute armed that slot — opening an existing session while a queued /
+  // remote / resumed turn runs, or another view's execute replaced the slot —
+  // the chat received no events and never re-fetched, so it froze while the
+  // trajectory (which re-fetches the ledger on mount) stayed current. Ride
+  // the runtime:event fan-out (`onEvent`, always alive regardless of the turn
+  // slot): on a traceSnapshot for the active session, replay the session
+  // history (debounced). Local turns keep optimistic rendering — the sending
+  // gate skips this. Single source of truth: the send-callback's
+  // `traceSnapshot` case no longer replays (it would double-fire when armed).
+  useEffect(() => {
+    const off = window.starriver.onEvent?.((envelope: any) => {
+      if (!envelope || envelope.type !== 'traceSnapshot') return;
+      const snapSid: string | undefined =
+        envelope.payload?.sessionId ?? envelope.payload?.session_id;
+      if (!snapSid || snapSid !== sessionIdRef2.current || sendingRef.current) return;
+      if (remoteResyncTimerRef.current == null) {
+        remoteResyncTimerRef.current = window.setTimeout(() => {
+          remoteResyncTimerRef.current = null;
+          const sid = sessionIdRef2.current;
+          if (sid && !sendingRef.current) void loadSessionMessages(sid);
+        }, 800);
+      }
+    });
+    return () => {
+      off?.();
+      if (remoteResyncTimerRef.current != null) {
+        clearTimeout(remoteResyncTimerRef.current);
+        remoteResyncTimerRef.current = null;
+      }
+    };
+  }, [loadSessionMessages]);
+
   // On mount, load the deployment default as the initial staged mode for new
  // sessions (binding: the mode locks per session at creation; the global
   // settings only pick the default for NEW sessions).
@@ -8230,7 +8347,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // switch / session remount Stop resolved to "" — the click armed the
     // 20s watchdog and NEVER sent a cancel (host log for session
     // e3d6121b on 2026-10-07: zero `cancel requested` all day while the
-    // user pressed 结束 twice).
+    // user pressed Stop twice).
     sessionIdRef.current = activeSessionId;
     // BUG-92: view state is per-session — reset it on EVERY switch (A→B
     // included), not only when leaving for the empty/new-task state. The
@@ -8262,7 +8379,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       // load, so a pending getSessionMessages for the session being closed
       // would resolve after this clear, pass the guard, and re-open the
       // conversation (setMessages + setActiveSessionId) over the New Task
-      // screen — the 2026-11-01 "新建 task 弹出旧会话" report. All of that
+      // screen — the 2026-11-01 "New Task pops the old session" report. All of that
       // callback's continuations re-check the guard, so one bump kills them.
       loadGenRef.current++;
       if (outgoing) lastClosedSessionRef.current = outgoing;
@@ -8272,7 +8389,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       // The chat-archive projection dies with the view too: displayMessages
       // merges `archiveMessages` under `messages`, so a surviving archive kept
       // rendering the closed session's transcript on the New Task screen
-      // (2026-11-02 "新建任务界面还是乱的" — hero + composer + the previous
+      // (2026-11-02 "the New Task screen is still messy" — hero + composer + the previous
       // conversation's markdown all stacked in one view). archiveSessionRef
       // resets with it so re-opening the same session refetches the archive
       // instead of skipping the load.
@@ -8288,14 +8405,42 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
     // turn task (and the slot) lives on. This is ALSO what keeps the
     // composer honest per OPEN session: `sending` is reset above (it
     // belonged to session A's execute), so an idle session B must show
-    // 发送 — the button keys on `sending || staleBusy`, and only the
+    // Send — the button keys on `sending || staleBusy`, and only the
     // backend slot registry knows whether B itself is running. staleBusy
     // deliberately keeps the composer in SEND mode (BUG-96/141 contract);
-    // it only swaps the button to 停止.
+    // it only swaps the button to Stop.
     window.starriver.listRunningSessions?.().then((ids: string[]) => {
       setStaleBusy(Array.isArray(ids) && ids.includes(activeSessionId));
     }).catch(() => {});
     refreshQueueRef.current(activeSessionId);
+    // WI-247: approval re-alignment. The block above cleared the approval
+    // card with the rest of the per-session state; a pending approval in
+    // THIS session must not stay invisible just because its live
+    // `approvalRequested` relay was missed (reconnect gap, app reload,
+    // missed turn re-arm). Re-derive it from the host's audit-log fold and
+    // restore the panel when the session still has an unanswered ask. A
+    // stale response (user already switched again) is dropped by the
+    // session check; a host that answers `pending:false` simply keeps the
+    // cleared state.
+    {
+      const alignSession = activeSessionId;
+      window.starriver.pendingApprovalState?.(alignSession).then((state: any) => {
+        if (sessionIdRef.current !== alignSession) return;
+        if (state && state.pending && state.requestId) {
+          setApproval({
+            tool: state.toolName || '',
+            reason: state.reason || '',
+            params: state.arguments || {},
+            resolve: (allowed: boolean, remember?: boolean) => {
+              if (sessionIdRef.current) {
+                window.starriver.approve(sessionIdRef.current, allowed, remember ?? false).catch(console.error);
+              }
+              setApproval(null);
+            },
+          });
+        }
+      }).catch(() => {});
+    }
     diag('open-load', { target: activeSessionId });
     void loadSessionMessages(activeSessionId);
   }, [activeSessionId, loadSessionMessages]);
@@ -8402,7 +8547,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // null → Ungrouped (the Chat Agent keeps no workspace binding).
   const [chatWorkspaceId, setChatWorkspaceId] = useState<string | null>(null);
 
-  // WI-152 v3 (dsh pattern): resolve the image gate from the staged agent's
+  // WI-152 v3 (per-model declaration): resolve the image gate from the staged agent's
   // active route. The active model's declaration decides; undeclared
   // defaults to permissive (a wrong claim surfaces the provider's error).
   const activeModelKey = stagedChat ? chatModelId : activeModelId;
@@ -8643,7 +8788,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
   // Fourth arg: cancel resolved false — the backend has no live turn for this
   // session, so the composer's Stop state is stale (the turn's terminal event
   // never reached this view). Drop the run state and flip back to Send
-  // instead of wedging until the user clicks 新建 task (2026-10-12 report).
+  // instead of wedging until the user clicks New Task (2026-10-12 report).
   // Both callbacks also backfill from the archive (2026-11-13): a dead event
   // tail means the ledger holds turns this view never rendered.
   const stopControl = useTaskStop(sessionIdRef, useCallback((text: string) => {
@@ -9314,8 +9459,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       // TaskStarted may pass — it re-engages its own session (and carries
       // session_id); anything else would pollute the open transcript with
       // another session's stream.
-      // 逐字节实时一致（开放回合快照流）：远端（手机/Web）发起的回合以
-      // 「重放会话历史」在桌面对齐——快照事件需穿过空闲门。
+      // Byte-for-byte live consistency (open-turn snapshot stream): turns started remotely (phone/Web) align on the
+      // desktop by "replaying session history" — snapshot events must pass the idle gate.
       if (!sendingRef.current
           && (event.type || event.eventType) !== 'TaskStarted'
           && (event.type || event.eventType) !== 'traceSnapshot') {
@@ -9343,7 +9488,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       // and a background session's stream (a still-running turn, queued or
       // scheduled run) must not paint over the hero screen: the first chunk
       // sets messages.length>0 and the view flips straight back into the
-      // closed conversation (2026-11-01 "新建任务弹出错误界面" — third
+      // closed conversation (2026-11-01 "New Task pops the wrong screen" — third
       // vector, after load-resurrection and event-adoption were shielded).
       if (eventSid && !sessionIdRef2.current && !sendingRef.current
           && eventType !== 'TaskStarted' && eventType !== 'sessionStarted') {
@@ -9357,7 +9502,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
       switch (event.type || event.eventType || '') {
         case 'TaskStarted':
           if (event.session_id) {
-            // Shield: the session the user just left (新建任务) must not pull
+            // Shield: the session the user just left (New Task) must not pull
             // itself back into the empty view when its next queued/scheduled
             // turn starts. Any OTHER session still adopts (the fresh session
             // created by a send from the New Task screen arrives this way).
@@ -9556,7 +9701,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           } else {
             // BUG-147 defense-in-depth: an unpaired OK result with no card
             // payload carries zero renderable information — the inline path
-            // would draw a bare "Tool ✓成功" ghost card (the compaction-prune
+            // would draw a bare "Tool ✓success" ghost card (the compaction-prune
             // leak's shape; the orphan path drops its output by
             // construction). The relay now filters prune rewrites at the
             // source; this catches anything that still slips through.
@@ -9706,19 +9851,12 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           }
           break;
         case 'traceSnapshot': {
-          // 逐字节实时一致（开放回合快照流）：远端（手机/Web）发起的回合，
-          // 桌面以「重放会话历史」对齐——用户消息/思考/context 全在快照反映的
-          // 历史里。桌面本地回合走乐观渲染（sending 门已挡掉），零影响。
-          const snapSid: string | undefined = event.sessionId ?? event.session_id;
-          if (snapSid && snapSid === sessionIdRef2.current && !sendingRef.current) {
-            if (remoteResyncTimerRef.current == null) {
-              remoteResyncTimerRef.current = window.setTimeout(() => {
-                remoteResyncTimerRef.current = null;
-                const sid = sessionIdRef2.current;
-                if (sid && !sendingRef.current) void loadSessionMessages(sid);
-              }, 800);
-            }
-          }
+          // BUG-204: the idle/remote-turn chat replay moved to the independent
+          // `onEvent` fan-out subscriber (see the effect above the mode
+          // defaults). It must not also run here: when the execute turn slot
+          // IS armed this would double-fire the debounced reload. Local turns
+          // render optimistically via assistantText (the sending gate); this
+          // case is intentionally inert.
           break;
         }
         case 'toolCall': {
@@ -9728,8 +9866,8 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           closeThinkingBubble();
           const tname = event.name || 'tool';
           const cmd = toolCommandOf(event.input);
-          // 完整参数回退：terminal_*/mcp_* 无已知显示键时展示完整 JSON（与
-          // 轨迹、历史重建一致），不再退化成裸工具名。
+          // Full-arguments fallback: terminal_*/mcp_* with no known display key show the full JSON (consistent
+          // with trajectory and history rebuild), no longer degrading to a bare tool name.
           const args = toolArgsJson(event.input);
           const tmid = addMessage('tool', cmd ? `🔧 ${tname}: ${cmd}` : args ? `🔧 ${tname}: ${args}` : `🔧 ${tname}...`, true, tname);
           toolMsgIdRef.current[event.id || ''] = tmid;
@@ -9742,7 +9880,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           // (terminal_wait/kill/list carry no command) must not show up as
           // bogus "terminal_wait" shell rows.
           if (cmd && /^bash$|^terminal/.test(tname)) {
-            // 面板完整显示命令（pre-wrap）：还原 toolCommandOf 为聊天行压平的换行。
+            // The panel shows the full command (pre-wrap): restore the newlines that toolCommandOf flattened for the chat row.
             shellCallsRef.current.set(event.id || '', { cmd: cmd.replace(/\\n/g, '\n'), startedAt });
             syncShellState();
           }
@@ -9750,6 +9888,10 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
           if (tname === 'subagent_spawn') {
             setMessages(prev => prev.map(m => m.id === tmid ? { ...m, isSubagent: true } : m));
           }
+          // WI-247: arm the delayed pending-approval re-alignment for this
+          // call — a lost `approvalRequested` relay recovers within ~1.5s
+          // instead of wedging the turn behind an invisible card.
+          armApprovalRecovery();
           break;
         }
         case 'toolResult': {
@@ -10585,7 +10727,7 @@ export function CodingView({ debugEnabled }: { debugEnabled: boolean }) {
             cwd={workspaces.find(w => w.id === activeWorkspaceId)?.path ?? null}
             onError={setErrorMsg}
           />
-          {/* Far-right corner: PERSISTENT side-panel toggle (常驻). Hide keeps
+          {/* Far-right corner: PERSISTENT side-panel toggle. Hide keeps
               every open tab; show restores the previous tab when still valid
               (plan needs lastPlan, file needs a doc), else the panel opens in
               its empty state. */}
@@ -11334,7 +11476,7 @@ interface WorkspaceCtx {
   /** CodingView registers a reset for view-local per-session flags (isolation toggle). */
   registerIsolationReset: (fn: (() => void) | null) => void;
   archiveSession: (sessionId: string) => Promise<void>;
-  /** Tasks-section rows (对话 / 定时运行): hard delete after the sidebar
+  /** Tasks-section rows (Conversations / Scheduled runs): hard delete after the sidebar
    *  confirmation modal. Mirrors archiveSession's active-session contract. */
   handleDeleteSession: (sessionId: string) => Promise<void>;
   handleUnarchive: (sessionId: string) => Promise<void>;
@@ -11665,7 +11807,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     await loadSessions();
   }, [activeSessionId, setActiveSessionId, loadSessions]);
 
-  // Tasks-section delete (对话 / 定时运行 rows): hard delete after the sidebar
+  // Tasks-section delete (Conversations / Scheduled runs rows): hard delete after the sidebar
   // confirmation modal. Same active-session contract as archive — deleting the
   // open session clears the stream via CodingView's sync effect.
   const handleDeleteSession = useCallback(async (sessionId: string) => {
@@ -11720,7 +11862,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, [loadWorkspaces, loadSessions]);
 
   // Diagnostics: route every EXTERNAL open through a stack-capturing wrapper —
-  // the 2026-11-01 flip-back (session re-opens ~2-16s after 新任务 with no
+  // the 2026-11-01 flip-back (session re-opens ~2-16s after New Task with no
   // adoption/shield log) must name its caller.
   const setActiveSessionIdTraced = useCallback((id: string) => {
     try {
@@ -12032,14 +12174,14 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
               stamp; legacy ungrouped rows fall back to chat). */}
           {(() => {
             const ungrouped = ws.sessions.filter(s => !s.workspaceId);
-            // WI-152: scheduled-run 分组 —— run_history 投影命中,或会话自带
-            // scheduled origin 戳;旧会话(记录已滚出)按任务名兜底(标题在
-            // 创建时被精确盖为任务名)。
+            // WI-152: scheduled-run grouping — a run_history projection hit, or the session carries its own
+            // scheduled origin stamp; old sessions (records rolled out) fall back to the task name (the title was
+            // stamped to exactly the task name at creation).
             const taskNames = new Set(Array.from(taskRuns.values()));
-            // 插件平台 P2:插件任务运行(origin=plugin:*)已在宿主侧从
-            // session.list 默认排除 —— 它们不是聊天,不进侧栏。P1 的
-            // 「插件任务」分组随之移除;审计走 pluginTask.list /
-            // session.list?origin=plugin:<name>(显式、不静默)。
+            // Plugin platform P2: plugin task runs (origin=plugin:*) are already excluded host-side from
+            // session.list by default — they are not chats and do not enter the sidebar. The P1
+            // "plugin tasks" grouping is removed accordingly; audit goes through pluginTask.list /
+            // session.list?origin=plugin:<name> (explicit, not silent).
             const isRun = (s: SessionInfo) =>
               taskRuns.has(s.id) || s.origin === 'scheduled' || (!!s.title && taskNames.has(s.title));
             const chats = ungrouped.filter(s => !isRun(s));
@@ -12161,19 +12303,19 @@ export function WorkspaceSection({ onOpenCoding }: { onOpenCoding: () => void })
 }
 
 
-/* ─── 界面定时锁（Scheduled UI Lock）───
- * 每日锁定期 + 每次随机 10 位字母数字口令的自律型锁屏。锁屏层只是
- * fixed 覆盖层：下方应用树保持挂载，daemon 会话与事件流不受影响
- * （"锁屏期间会话继续运行"）。纯逻辑见 ./uiLock；日程持久化在
- * localStorage（starriver.uiLock），tick 时重读；设置弹窗点「确定」会派发
- * UI_LOCK_APPLY_EVENT 立即重读生效（见 useUiLock）。
- * 定位是"继续使用的刻意摩擦"，不是安全边界：口令展示在锁屏上，
- * DevTools 移除覆盖层不在防御范围。 */
+/* ─── Scheduled UI Lock ───
+ * A self-discipline lock screen with a daily lock window + a random 10-char alphanumeric passcode each time. The lock layer is only a
+ * fixed overlay: the app tree underneath stays mounted, and daemon sessions and the event stream are unaffected
+ * ("sessions keep running while locked"). Pure logic lives in ./uiLock; the schedule is persisted in
+ * localStorage (starriver.uiLock) and re-read on tick; clicking OK in the settings dialog dispatches
+ * UI_LOCK_APPLY_EVENT to re-read and apply immediately (see useUiLock).
+ * It is positioned as "deliberate friction to continue using", not a security boundary: the passcode is shown on the lock screen,
+ * and removing the overlay via DevTools is out of scope for defense. */
 
-/** useUiLock：挂载即判定 + 15s tick + 聚焦/可见性补判定（休眠唤醒追上）。
- *  解锁记忆（unlockedOccurrence）持久化到 localStorage：跨启动生效——
- *  当天（同一 occurrence）解锁过就不再锁；日程变更或设置里重新点
- *  「确定」（UI_LOCK_APPLY_EVENT）时清除，重新武装。 */
+/** useUiLock: decide on mount + 15s tick + focus/visibility re-check (catch up after sleep/wake).
+ *  The unlock memory (unlockedOccurrence) is persisted to localStorage and survives restarts —
+ *  once unlocked for the day (same occurrence) it does not re-lock; it is cleared on a schedule change or re-clicking
+ *  OK in settings (UI_LOCK_APPLY_EVENT), re-arming. */
 function useUiLock(): { locked: boolean; code: string; start: string; end: string; unlock: () => void } {
   const [locked, setLocked] = useState(false);
   const [code, setCode] = useState('');
@@ -12181,11 +12323,11 @@ function useUiLock(): { locked: boolean; code: string; start: string; end: strin
     const s = loadUiLockSchedule();
     return { start: s.start, end: s.end };
   });
-  // 已解锁的 occurrence（本窗口内不再重锁）；当前口令所属 occurrence。
-  // 初值取持久化标记（undefined = 尚未从 localStorage 初始化的哨兵）。
+  // The unlocked occurrence (no re-lock within this window); the occurrence the current passcode belongs to.
+  // Initial value from the persisted marker (undefined = sentinel for not-yet-initialized from localStorage).
   const unlockedOccRef = useRef<string | null | undefined>(undefined);
   const currentOccRef = useRef<string | null>(null);
-  // null = 尚未读到过日程（首帧不清解锁记忆，否则持久化标记会被误清）。
+  // null = no schedule read yet (do not clear unlock memory on the first frame, else the persisted marker would be wrongly cleared).
   const lastScheduleRef = useRef<string | null>(null);
 
   const tick = useCallback(() => {
@@ -12195,7 +12337,7 @@ function useUiLock(): { locked: boolean; code: string; start: string; end: strin
     const changed = lastScheduleRef.current !== null && sig !== lastScheduleRef.current;
     lastScheduleRef.current = sig;
     if (changed) {
-      // 日程变更（设置里点「确定」/外部改动）：清空解锁记忆（含持久化），按新日程重新评估。
+      // Schedule change (OK in settings / external edit): clear unlock memory (including persisted), re-evaluate against the new schedule.
       unlockedOccRef.current = null;
       saveUiLockUnlockedOccurrence(null);
       currentOccRef.current = null;
@@ -12216,8 +12358,8 @@ function useUiLock(): { locked: boolean; code: string; start: string; end: strin
     const id = window.setInterval(tick, LOCK_TICK_MS);
     const catchUp = () => tick();
     const applyNow = () => {
-      // 「确定」= 重新设置/重新武装：清除已解锁标记（含持久化）后立即重判，
-      // 当前处于窗口内则立刻锁屏。
+      // OK = reconfigure / re-arm: clear the unlocked marker (including persisted) then re-decide immediately,
+      // locking right away if currently inside the window.
       unlockedOccRef.current = null;
       saveUiLockUnlockedOccurrence(null);
       tick();
@@ -12303,25 +12445,25 @@ export function LockOverlay({ code, start, end, onUnlock }: {
   );
 }
 
-/** App 三条返回路径（checking / error / shell 替换 / 主 shell）末尾统一挂载；
- *  未锁定时渲染 null，锁定时覆盖全屏。 */
+/** Mounted uniformly at the end of the App's return paths (checking / error / shell replacement / main shell);
+ *  renders null when unlocked, covers the full screen when locked. */
 export function UiLockGate() {
   const lock = useUiLock();
   if (!lock.locked) return null;
   return <LockOverlay code={lock.code} start={lock.start} end={lock.end} onUnlock={lock.unlock} />;
 }
 
-/** 定时锁配置：启用开关 + 起止时间 — macOS 惯例的草稿-确认模式。
- *  修改只更新本地草稿；点「确定」校验通过才持久化，并派发
- *  UI_LOCK_APPLY_EVENT 让 useUiLock 立即重判（当前处于锁定期内即刻锁屏，
- *  否则按日程在进入窗口时锁定）。无效/相同时间行内报错且不落库；
- *  Esc / 关闭按钮放弃草稿。挂在侧栏左下角锁形按钮弹出的 UiLockDialog 中。 */
+/** Scheduled-lock config: enable switch + start/end time — the macOS draft-then-confirm convention.
+ *  Edits only update the local draft; clicking OK persists only after validation passes, and dispatches
+ *  UI_LOCK_APPLY_EVENT so useUiLock re-decides immediately (locks at once if currently inside the lock window,
+ *  otherwise locks on entering the window per the schedule). Invalid/identical times show an inline error and are not persisted;
+ *  Esc / the close button discards the draft. Lives in the UiLockDialog opened by the sidebar bottom-left lock button. */
 export function UiLockScheduleSection() {
   const { t } = useI18n();
   const [schedule, setSchedule] = useState<UiLockSchedule>(() => {
     const s = loadUiLockSchedule();
-    // 兜底：本地存储可能被外部改坏 — 坏日程（start===end 等）回到默认，
-    // 让用户从已知状态重新配置。
+    // Fallback: local storage may be corrupted externally — a bad schedule (start===end etc.) falls back to the default,
+    // letting the user reconfigure from a known state.
     return s.start === s.end ? { ...DEFAULT_UI_LOCK_SCHEDULE } : s;
   });
   const [errKey, setErrKey] = useState<string | null>(null);
@@ -12443,9 +12585,9 @@ const copyBtn: React.CSSProperties = {
   background: 'var(--surface)', color: 'var(--text)', fontSize: 13, cursor: 'pointer',
 };
 
-/* ─── LAN chat (lan.* protocol family)：局域网实例互发消息 ───
- *  侧栏左下角消息图标打开；实例自动发现（Rust lan_chat UDP beacon），
- *  按 hostname 命名；点选实例互发文字/图片。数据走 window.starriver.invoke
+/* ─── LAN chat (lan.* protocol family): instances on the LAN message each other ───
+ *  Opened by the sidebar bottom-left messages icon; instances auto-discovered (Rust lan_chat UDP beacon),
+ *  named by hostname; pick an instance to exchange text/images. Data goes through window.starriver.invoke
  *  → lan.state / lan.messages / lan.send / lan.attachment / lan.markRead。 */
 
 interface LanPeer {
@@ -12542,8 +12684,8 @@ export function useLanChatUnread(): number {
   return unreadTotal;
 }
 
-/** 消息小程序对话框：左列实例列表（hostname 命名 + 在线点 + 未读数），
- *  右列会话（气泡 / data-URL 图片 / 输入行）。打开与选中时 markRead + probe。 */
+/** Messages mini-app dialog: left column instance list (hostname naming + online dot + unread count),
+ *  right column conversation (bubbles / data-URL images / input row). markRead + probe on open and on select. */
 export function LanChatDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const [state, setState] = useState<LanChatState | null>(null);
@@ -13247,13 +13389,13 @@ export function SettingsPluginsSection() {
 }
 
 /** Subagent delegation (Settings → Coding): enable a template and bind its
-    child model (DSH authorize-selectable-child-models parity). An enabled
+    child model (reference authorize-selectable-child-models parity). An enabled
     template without a bound model runs the child on the calling agent's
     route. Self-fetching: reads the config and model registry on mount. */
-/** Xcode 风格的代码高亮配色面板(2026-10-04 方案:配色可配置)。
- *  仅浅色一组 × 11 个 token,平铺无折叠(dark 组保留默认值渲染,不在设置里编辑);
- *  色块即改即生效(applyCodeTokens 注入覆盖 style),
- *  与默认值不同的行显示 ↺ 单行还原;localStorage 持久化,无保存按钮。 */
+/** Xcode-style code-highlight palette panel (2026-10-04 design: configurable colors).
+ *  Only the light group × 11 tokens, flat with no folding (the dark group keeps default rendering, not editable in settings);
+ *  color swatches apply as you change them (applyCodeTokens injects an override style),
+ *  rows differing from the default show a ↺ single-row reset; persisted in localStorage, no save button. */
 const CODE_TOKEN_ROWS: Array<{ key: CodeTokenKey; label: string }> = [
   { key: 'comment', label: 'codeToken.comment' },
   { key: 'keyword', label: 'codeToken.keyword' },
@@ -13385,8 +13527,8 @@ export function SubagentDelegationSection() {
   );
 }
 
-/** 退出行为：是否顺带停止后台服务（starriverd）。存 desktop-prefs.json（主进程
- *  userData），不走 settings.yaml —— 这是桌面应用自身的偏好，与协议后端无关。 */
+/** Exit behavior: whether to also stop the background service (starriverd). Stored in desktop-prefs.json (main process
+ *  userData), not settings.yaml — this is the desktop app's own preference, unrelated to the protocol backend. */
 function SettingsDaemonSection() {
   const { t } = useI18n();
   const [stopOnQuit, setStopOnQuit] = useState<boolean | null>(null);
@@ -13511,8 +13653,8 @@ function RemoteAccessDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** 定时锁配置对话框：侧栏左下角锁形按钮打开（独立入口，不再占用设置常规 tab）。
- *  macOS sheet 视觉：15px/600 标题 + 发丝分隔线，Esc 或 ✕ 关闭（放弃草稿）。 */
+/** Scheduled-lock config dialog: opened by the sidebar bottom-left lock button (a standalone entry, no longer a settings regular tab).
+ *  macOS sheet look: 15px/600 title + hairline divider, Esc or ✕ closes (discards the draft). */
 function UiLockDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   useEffect(() => {
@@ -13880,11 +14022,11 @@ export function SidebarNavItems({ tab, onNavigate, group = 'agent' }: { tab: Tab
             key={item.id}
             className={`nav-item ${tab === item.id ? 'active' : ''}`}
             onClick={() => {
-              // 新任务 is the item's LABEL — every click must land on the New
+              // New Task is the item's LABEL — every click must land on the New
               // Task screen, including the first click from another tab. The
               // old `tab === 'coding'` gate made the first click a bare tab
               // switch: CodingView remounted and RESTORED the last
-              // conversation (2026-11-01 "新建 task 弹出旧会话", still
+              // conversation (2026-11-01 "New Task pops the old session", still
               // reported after the resurrection fixes). Re-opening a past
               // conversation stays available by clicking its sidebar row.
               if (item.id === 'coding') {
@@ -13919,9 +14061,9 @@ function App() {
   };
   const [showSettings, setShowSettings] = useState(false);
   const [showRemoteAccess, setShowRemoteAccess] = useState(false);
-  // 定时锁配置入口：侧栏左下角锁形按钮（手机图标左侧）
+  // Scheduled-lock config entry: sidebar bottom-left lock button (left of the phone icon)
   const [showUiLock, setShowUiLock] = useState(false);
-  // LAN chat（消息小程序）：侧栏左下角消息图标打开
+  // LAN chat (messages mini-app): opened by the sidebar bottom-left messages icon
   const [showLanChat, setShowLanChat] = useState(false);
   const lanUnread = useLanChatUnread();
   // API Debug is currently off with no toggle surface (the Settings → Coding
@@ -14026,7 +14168,7 @@ function App() {
             <span className="nav-icon" dangerouslySetInnerHTML={{ __html: tabIcons.settings || "" }} />
             {t('nav.settings')}
           </button>
-          {/* 锁形（定时锁）+ 手机（远程配对）成组紧邻贴右缘 — 用户反馈两图标不应分开。
+          {/* Lock (scheduled lock) + phone (remote pairing) grouped tight against the right edge — user feedback said the two icons should not be separated.
               LAN chat 消息图标在最左，红点徽标显示未读总数。 */}
           <div className="sb-footer-icons">
             <button
@@ -14093,7 +14235,7 @@ function App() {
       )}
     </div>
     <OpenSessionBridge setTab={setTab} />
-    {/* 定时锁覆盖层：最后挂载、fixed 全屏 — 覆盖一切但不卸载应用树（会话继续运行） */}
+    {/* Scheduled-lock overlay: mounted last, fixed full-screen — covers everything but does not unmount the app tree (sessions keep running) */}
     <UiLockGate />
     </WorkspaceProvider>
   );

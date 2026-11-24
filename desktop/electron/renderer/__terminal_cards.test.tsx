@@ -47,8 +47,8 @@ describe('terminal tool cards (icon + args)', () => {
     expect(toolCommandOf(undefined)).toBe('');
   });
 
-  // 2026-10-26: 实时卡片的无键回退——terminal_*/mcp_* 无 command/path 等已知
-  // 显示键时展示完整参数 JSON（与轨迹、历史重建一致），2000 字符截断。
+  // 2026-10-26: the keyless fallback for live cards — terminal_*/mcp_* with no known display key like command/path
+  // show the full arguments JSON (consistent with trajectory and history rebuild), truncated at 2000 chars.
   it('toolArgsJson serializes the full input for keyless tools, byte-capped', () => {
     expect(toolArgsJson({ id: 't9' })).toBe('{"id":"t9"}');
     expect(toolArgsJson({ shell: 'bash' })).toBe('{"shell":"bash"}');

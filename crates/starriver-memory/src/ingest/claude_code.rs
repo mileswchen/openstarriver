@@ -1,10 +1,10 @@
-// history source.
+// Project-scoped session-history source.
 //
 // Layout: `~/.claude/projects/<encoded-cwd>/*.jsonl`. Each line is one event;
 // `type: "user" | "assistant"` lines carry `message.role` + `message.content`
 // (plain string or block array). Sidechain (subagent) entries are skipped.
 //
-// The encoded directory name is Claude's own munging (`/` → `-`); decoding is
+// The encoded directory name is the source tool's own munging (`/` → `-`); decoding is
 // heuristic and ambiguous for path components that genuinely contain `-`. We
 // validate the decode against the filesystem and fall back to `_global` when
 // it doesn't resolve.
@@ -100,7 +100,7 @@ impl HistorySource for ClaudeCodeSource {
     }
 }
 
-/// Decode a Claude project directory name (`-Users-x-foo-bar`) back to a path,
+/// Decode a source-tool project directory name (`-Users-x-foo-bar`) back to a path,
 /// accepting it only when the directory exists on this machine.
 fn decode_project_dir(dir: &Path) -> Option<PathBuf> {
     let name = dir.file_name()?.to_str()?;

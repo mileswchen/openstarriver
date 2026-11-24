@@ -208,11 +208,11 @@ pub struct ReactLoopAgent {
     reload_storm: Mutex<crate::tool_calls::ReloadStorm>,
     /// BUG-138: per-turn repeat guard for every NON-reload tool — consecutive
     /// identical-call failures and the turn's total non-reload calls. The
-    /// generalized version of the BUG-135防线: any tool stuck in the
+    /// generalized version of the BUG-135 guard: any tool stuck in the
     /// unavailable/failing/pattern-locked shape gets the turn terminated
     /// instead of looping ~7s/step forever.
     turn_repeat: Mutex<crate::tool_calls::TurnRepeatGuard>,
-    /// Advisory repeat-tool reminder (DSH parity): counts consecutive identical
+    /// Advisory repeat-tool reminder (reference parity): counts consecutive identical
     /// tool calls and injects a gentle→detailed notice at thresholds. Purely
     /// advisory — never blocks/skips/aborts; the hard backstops above remain
     /// the only early-turn terminators. Turn-scoped, cursor-preserving reset.
@@ -1166,7 +1166,7 @@ impl ReactLoopAgent {
                 // templated enumeration (paper cards, tables, bibtex, …) and
                 // silently killed those tasks. Loop hygiene now lives in the
                 // advisory action-identity guard (`repeat_tool_reminder`) plus
-                // the failure/budget breakers — see design/dsh-style-loop-guard.md.
+                // the failure/budget breakers — see the loop-guard design doc.
                 if abort.is_cancelled() {
                     self.append_interrupted_anchor(turn, step, &assembler, &chunk_seqs);
                     return Some(TurnEndReason::Aborted {
@@ -1396,7 +1396,7 @@ impl ReactLoopAgent {
                         .lock()
                         .unwrap()
                         .absorb_results(&self.session);
-                    // Advisory repeat reminder (DSH parity): count consecutive
+                    // Advisory repeat reminder (reference parity): count consecutive
                     // identical executed calls and, at a threshold, inject a
                     // notice that rides the next assembly. Purely advisory —
                     // it never blocks/skips/aborts this call; the hard breaker
@@ -1837,7 +1837,7 @@ impl ReactLoopAgent {
                 provider_retry_after_ms: None,
                 request_id: None,
             })?;
-        // dsh-pattern declaration enforcement: a variant declared text-only
+        // per-model declaration enforcement: a variant declared text-only
         // (`supports_vision: false` in settings) refuses any image block at
         // request assembly — user message, history after a mid-session model
         // switch, or tool output. The declaration is a claim about the
@@ -1914,7 +1914,7 @@ impl ReactLoopAgent {
     /// jittered backoff) was plumbed all the way into every request — and
     /// then never executed: the AgentRequestError waterfall has no production
     /// listener, so its default action ended the turn on the FIRST blip. A
-    /// provider 500 "网络错误，请稍后重试" killed a 5m45s turn mid-fix
+    /// provider 500 "network error, please retry later" killed a 5m45s turn mid-fix
     /// (session 72a13c58 turn 26, host.log 2026-10-04 05:29:31Z) with no
     /// error surface in the UI. The policy now executes here — the per-step
     /// attempt counter and the abort-aware backoff sleep live naturally in
@@ -2261,7 +2261,7 @@ enum RetryDecision {
 /// transport blip recovers on its own); from the Nth failure on, every retry
 /// must DIVERGE from the exact context/route that kept failing — re-sending
 /// the same poisoned 100k context five times is not a recovery strategy
-/// (2026-10-14 incident: 5 retries + repeated manual 「继续」 burned ~1M
+/// (2026-10-14 incident: 5 retries + repeated manual "continue" burned ~1M
 /// tokens on deterministic failures).
 const STEP_ESCALATION_THRESHOLD: u32 = 3;
 
@@ -6086,7 +6086,7 @@ mod tests {
         );
     }
 
-    /// BUG-138 反面: a first failure followed by a success resets the
+    /// BUG-138 counter-case: a first failure followed by a success resets the
     /// consecutive-error counter — legitimate re-runs after fixing inputs
     /// never trip the breaker.
     #[tokio::test]

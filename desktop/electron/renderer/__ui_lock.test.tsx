@@ -1,8 +1,8 @@
 /// <reference types="vitest/globals" />
-// 界面定时锁（Scheduled UI Lock）：纯逻辑（窗口判定/occurrence/口令）、
-// 设置分区（即时持久化/非法阻断）、锁屏 Gate（覆盖不卸载/解锁不重锁/跨窗口重锁）。
-// 组件测试用 vitest fake timers 完全控制时钟；tick 在 mount effect 同步执行，
-// render/act 返回后即可同步断言。
+// Scheduled UI Lock: pure logic (window decision / occurrence / passcode),
+// settings section (immediate persistence / invalid blocking), lock Gate (cover-not-unmount / no-relock-on-unlock / relock-across-windows).
+// Component tests use vitest fake timers to fully control the clock; the tick runs synchronously in the mount effect,
+// so assertions can be made synchronously right after render/act returns.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
@@ -78,16 +78,16 @@ describe('uiLock 纯逻辑', () => {
     expect(code).toHaveLength(LOCK_CODE_LENGTH);
     expect(code).toMatch(/^[A-Za-z0-9]{10}$/);
 
-    // 字符集索引基准：index 0→'A'、25→'Z'、52→'0'、61→'9'
+    // Charset index baseline: index 0→'A', 25→'Z', 52→'0', 61→'9'
     expect(UI_LOCK_CHARSET[0]).toBe('A');
     expect(UI_LOCK_CHARSET[25]).toBe('Z');
     expect(UI_LOCK_CHARSET[61]).toBe('9');
 
-    // [拒绝采样值, 0, 25, 62, 5..10, 0] → 'A'+'Z'+(62%62=0→'A')+'F'..'K'+'A'
+    // [rejection-sample value, 0, 25, 62, 5..10, 0] → 'A'+'Z'+(62%62=0→'A')+'F'..'K'+'A'
     const buf = new Uint32Array([0xFFFFFFFF, 0, 25, 62, 5, 6, 7, 8, 9, 10, 0, 0]);
     expect(generateLockCode(buf)).toBe('AZAFGHIJKA');
 
-    // 全部采样值落在拒绝区间且缓冲区耗尽 → 显式报错（而非死循环）
+    // All sample values fall in the rejection range and the buffer is exhausted → explicit error (not an infinite loop)
     expect(() => generateLockCode(new Uint32Array(LOCK_CODE_LENGTH).fill(0xFFFFFFFF))).toThrow();
   });
 
@@ -110,9 +110,9 @@ describe('uiLock 纯逻辑', () => {
     expect(evaluateUiLockTick(s, t1030, null, null)).toBeNull();
     const v1 = evaluateUiLockTick(s, t0930, null, null);
     expect(v1).toEqual({ relock: true, occurrenceId: '2026-03-01' });
-    // 同一 occurrence 已解锁 → 不锁
+    // Same occurrence already unlocked → do not lock
     expect(evaluateUiLockTick(s, t0930, '2026-03-01', '2026-03-01')).toBeNull();
-    // 已锁定但 currentOcc 丢失（如组件重挂载）→ 沿用不重生成
+    // Already locked but currentOcc lost (e.g. component remount) → reuse, do not regenerate
     const v2 = evaluateUiLockTick(s, t0930, null, '2026-03-01');
     expect(v2).toEqual({ relock: false, occurrenceId: '2026-03-01' });
   });
@@ -133,11 +133,11 @@ describe('UiLockScheduleSection — 设置分区', () => {
     expect(enabled.checked).toBe(true);
     expect(screen.getByTestId('ui-lock-error').textContent).toBe('');
 
-    // 草稿：改动不落库
+    // Draft: edits are not persisted
     fireEvent.change(start, { target: { value: '23:00' } });
     expect(readStore()).toEqual({ enabled: true, start: '22:00', end: '06:00' });
 
-    // 「确定」：校验通过才落库 + 派发 UI_LOCK_APPLY_EVENT（窗口内即刻锁屏的信号）
+    // OK: persist only after validation passes + dispatch UI_LOCK_APPLY_EVENT (the signal to lock at once inside the window)
     fireEvent.click(screen.getByRole('button', { name: /Done|确定/ }));
     expect(readStore()).toEqual({ enabled: true, start: '23:00', end: '06:00' });
     expect(applied).toHaveBeenCalledTimes(1);
@@ -154,7 +154,7 @@ describe('UiLockScheduleSection — 设置分区', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Done|确定/ }));
     expect(screen.getByTestId('ui-lock-error').textContent).not.toBe('');
-    // 非法变更不落库
+    // Invalid changes are not persisted
     expect(readStore()).toEqual({ enabled: true, start: '22:00', end: '06:00' });
   });
 });
@@ -165,9 +165,9 @@ describe('UiLockGate — 锁屏层', () => {
     store({ enabled: true, start: '09:00', end: '10:00' });
     render(<I18nProvider><><div data-testid="probe">app-shell</div><UiLockGate /></></I18nProvider>);
 
-    // mount effect 的首个 tick 同步锁定
+    // The first tick of the mount effect locks synchronously
     const overlay = screen.getByTestId('ui-lock-overlay');
-    // 会话继续运行的保证：锁屏只是覆盖层，探针（应用树）仍挂载
+    // Guarantee that sessions keep running: the lock is only an overlay; the probe (app tree) stays mounted
     expect(screen.getByTestId('probe').textContent).toBe('app-shell');
     const code = screen.getByTestId('ui-lock-code').textContent || '';
     expect(code).toMatch(/^[A-Za-z0-9]{10}$/);
@@ -194,7 +194,7 @@ describe('UiLockGate — 锁屏层', () => {
     expect(screen.getByTestId('ui-lock-overlay')).toBeTruthy();
     const code = screen.getByTestId('ui-lock-code').textContent || '';
 
-    // 错口令：错误提示 + 仍锁定
+    // Wrong passcode: error message + still locked
     const input = screen.getByLabelText(/口令以|passcode/i) as HTMLInputElement;
     const unlockBtn = screen.getByRole('button', { name: /解锁|unlock/i });
     fireEvent.change(input, { target: { value: 'wrong-pass' } });
@@ -202,16 +202,16 @@ describe('UiLockGate — 锁屏层', () => {
     expect(screen.getByTestId('ui-lock-error').textContent).not.toBe('');
     expect(screen.getByTestId('ui-lock-overlay')).toBeTruthy();
 
-    // 对口令：解锁
+    // Correct passcode: unlock
     fireEvent.change(input, { target: { value: code } });
     fireEvent.click(unlockBtn);
     expect(screen.queryByTestId('ui-lock-overlay')).toBeNull();
 
-    // 窗口内多次 tick：不重锁（occurrence 解锁记忆）
+    // Multiple ticks inside the window: no re-lock (occurrence unlock memory)
     act(() => { vi.advanceTimersByTime(LOCK_TICK_MS * 3); });
     expect(screen.queryByTestId('ui-lock-overlay')).toBeNull();
 
-    // 快进一天（跨窗口结束 + 次一 occurrence 到来）：自动重锁并生成新口令
+    // Fast-forward one day (cross the window end + next occurrence arrives): auto-relock and generate a new passcode
     act(() => { vi.advanceTimersByTime(24 * 60 * 60 * 1000); });
     expect(screen.getByTestId('ui-lock-overlay')).toBeTruthy();
     const code2 = screen.getByTestId('ui-lock-code').textContent || '';
@@ -238,7 +238,7 @@ describe('UiLockGate — 锁屏层', () => {
 
     fireEvent.click(screen.getByLabelText('ui-lock-enabled')); // 草稿启用
     fireEvent.click(screen.getByRole('button', { name: /Done|确定/ })); // 确定并应用
-    // 12:00 处于 11:00–13:00 窗口内：不推进时钟即已锁屏
+    // 12:00 is inside the 11:00–13:00 window: already locked without advancing the clock
     expect(screen.getByTestId('ui-lock-overlay')).toBeTruthy();
   });
 
@@ -248,21 +248,21 @@ describe('UiLockGate — 锁屏层', () => {
     const first = render(<I18nProvider><UiLockGate /></I18nProvider>);
     const code = screen.getByTestId('ui-lock-code').textContent || '';
 
-    // 解锁：标记按 occurrence（窗口起点日期）落盘
+    // Unlock: the marker is persisted per occurrence (window-start date)
     const input = screen.getByLabelText(/口令以|passcode/i) as HTMLInputElement;
     fireEvent.change(input, { target: { value: code } });
     fireEvent.click(screen.getByRole('button', { name: /解锁|unlock/i }));
     expect(screen.queryByTestId('ui-lock-overlay')).toBeNull();
     expect(localStorage.getItem(UI_LOCK_UNLOCKED_KEY)).toBe('2026-03-01');
 
-    // 模拟重启：卸载重挂，新进程从持久化标记恢复解锁记忆
+    // Simulate restart: unmount and remount; the new process restores unlock memory from the persisted marker
     first.unmount();
     render(<I18nProvider><UiLockGate /></I18nProvider>);
     expect(screen.queryByTestId('ui-lock-overlay')).toBeNull(); // 仍在窗口内，但不再锁
     act(() => { vi.advanceTimersByTime(LOCK_TICK_MS * 3); });
     expect(screen.queryByTestId('ui-lock-overlay')).toBeNull();
 
-    // 次日新 occurrence：自动重锁（过期的持久化标记不再抑制）
+    // Next-day new occurrence: auto-relock (the stale persisted marker no longer suppresses)
     act(() => { vi.advanceTimersByTime(24 * 60 * 60 * 1000); });
     expect(screen.getByTestId('ui-lock-overlay')).toBeTruthy();
   });
@@ -272,7 +272,7 @@ describe('UiLockGate — 锁屏层', () => {
     store({ enabled: true, start: '09:00', end: '10:00' });
     render(<I18nProvider><><UiLockScheduleSection /><UiLockGate /></></I18nProvider>);
 
-    // 锁定 → 解锁（标记落盘）
+    // Lock → unlock (marker persisted)
     const code = screen.getByTestId('ui-lock-code').textContent || '';
     const input = screen.getByLabelText(/口令以|passcode/i) as HTMLInputElement;
     fireEvent.change(input, { target: { value: code } });
@@ -280,7 +280,7 @@ describe('UiLockGate — 锁屏层', () => {
     expect(screen.queryByTestId('ui-lock-overlay')).toBeNull();
     expect(localStorage.getItem(UI_LOCK_UNLOCKED_KEY)).toBe('2026-03-01');
 
-    // 不改日程直接点「确定」= 重新设置/重新武装：清除解锁标记，窗口内立即再锁
+    // Clicking OK without changing the schedule = reconfigure / re-arm: clear the unlock marker, re-lock immediately inside the window
     fireEvent.click(screen.getByRole('button', { name: /Done|确定/ }));
     expect(screen.getByTestId('ui-lock-overlay')).toBeTruthy();
     expect(localStorage.getItem(UI_LOCK_UNLOCKED_KEY)).toBeNull();

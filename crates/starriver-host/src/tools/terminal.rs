@@ -67,8 +67,8 @@ impl ToolExecutor for TerminalStart {
                 .get("shell")
                 .and_then(|s| s.as_str())
                 .map(str::to_string);
-            // dsh 式归属：owner/cwd 来自执行上下文（agent_id 即 session id，
-            // cwd 即会话工作区根），模型无法伪造。
+            // Ownership semantics: owner/cwd come from the execution context (agent_id is the session id,
+            // cwd is the session workspace root); the model cannot forge them.
             let owner = ctx.execution.agent_id.clone();
             let cwd = ctx
                 .execution
@@ -260,8 +260,8 @@ impl ToolExecutor for TerminalList {
     ) -> cordis_rslite::BoxFuture<Result<Value, ToolError>> {
         let service = Arc::clone(&self.service);
         Box::pin(async move {
-            // dsh 授权语义：模型只看到本会话的终端——别的会话的 id 连出现
-            // 都不出现，kill 也就无从伪造。
+            // Authorization semantics: the model only sees terminals of its own session — ids of other
+            // sessions never even appear, so kill cannot be forged either.
             let owner = ctx.execution.agent_id.clone();
             let sessions: Vec<_> = service
                 .list()

@@ -68,7 +68,7 @@ pub struct AgentOptions {
     /// `None` = the loop's default (666); filled from
     /// `agent.turn_tool_call_budget` settings (same next-run semantics).
     pub turn_tool_call_budget: Option<u32>,
-    /// Advisory repeat-tool reminder (DSH repeat-tool-reminder parity): counts
+    /// Advisory repeat-tool reminder (repeat-tool-reminder parity): counts
     /// consecutive identical tool calls and injects a gentle→detailed notice at
     /// thresholds, never blocking. `None` = engine defaults (enabled,
     /// thresholds [3,5,8], no filters, 500-char preview); filled from
@@ -89,7 +89,7 @@ pub struct AgentOptions {
     pub compaction_tuning: Option<CompactionTuning>,
 }
 
-/// Advisory repeat-tool-reminder configuration (DSH repeat-tool-reminder
+/// Advisory repeat-tool-reminder configuration (reference repeat-tool-reminder
 /// parity). All `Option` — unset fields keep engine defaults: enabled,
 /// thresholds `[3,5,8]`, no include/exclude filters, 500-char argument
 /// preview. The reminder is purely advisory: it injects a notice at the
@@ -154,7 +154,7 @@ pub struct ImageProjectionConfig {
     /// text-only runs disable reload entirely: a pulled image would put
     /// image data on the wire, and cold placeholders must not advertise it.
     pub allow_reload: bool,
-    /// dsh-pattern per-model declaration: `true` = the activated variant is
+    /// per-model declaration: `true` = the activated variant is
     /// declared text-only. Request assembly rejects ANY image block (user
     /// message, history, tool output) with an explicit error naming the
     /// model, instead of putting image data on the wire.

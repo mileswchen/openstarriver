@@ -264,23 +264,23 @@ struct TerminalSession {
     /// are non-destructive views).
     consume: Arc<Mutex<Cursor>>,
     closed: Arc<AtomicBool>,
-    /// 最近一次标记命令（逐字节实时一致：dsh 式标记契约）——发送时置 running，
-    /// 输出流出现结束标记即记录退出码。None = 该会话未用标记发过命令。
+    /// The most recent marker command (byte-for-byte live consistency: marker contract) — set running on send,
+    /// record the exit code as soon as the end marker appears in the output stream. None = this session never sent a marker command.
     command: Arc<Mutex<Option<CommandRun>>>,
 }
 
-/// 一次标记命令的生命周期。
+/// The lifecycle of one marker command.
 #[derive(Debug, Clone)]
 pub struct CommandRun {
     pub started_ms: u64,
     pub finished_ms: Option<u64>,
     pub exit_code: Option<i64>,
-    /// 触发本次命令的文本（wrap 发送时的 input，截断保留）——面板「这个
-    /// 终端在跑什么」的直接答案。None = 未用标记发送过命令。
+    /// The text that triggered this command (the input at wrap-send, truncated) — the direct answer to
+    /// "what is this terminal running" in the panel. None = no marker command was ever sent.
     pub cmd: Option<String>,
-    /// 2026-10-26: 本命令的结束标记前缀（\x1b]633;D;{marker}:）。命令可能
-    /// 在没有任何 send 在扫描时完成（比如后续 terminal_wait 的静默窗间隙），
-    /// 把标记存进记录里，wait-only 发送也能认领它的完成。
+    /// 2026-10-26: the end-marker prefix for this command (\x1b]633;D;{marker}:). The command may
+    /// finish while no send is scanning (e.g. the quiet-window gap of a later terminal_wait);
+    /// storing the marker in the record lets a wait-only send claim its completion too.
     pub end_prefix: String,
 }
 
@@ -290,8 +290,8 @@ pub struct TerminalInfo {
     pub id: String,
     pub status: String,
     pub started_at_ms: u64,
-    /// Owning conversation (session id) — dsh 式归属：spawn 时从执行上下文
-    /// 注入，工具层按此校验 kill/list 权限，宿主按此在会话结束时回收。
+    /// Owning conversation (session id) — ownership semantics: injected from the execution context at
+    /// spawn; the tool layer validates kill/list permission against it, and the host reclaims on session end.
     pub owner: Option<String>,
     /// Session workspace root at spawn time (panel workspace filter).
     pub workspace: Option<String>,
@@ -375,9 +375,9 @@ impl TerminalService {
     }
 
     /// Start an interactive PTY session owned by `owner` (conversation
-    /// session id) in `cwd` (session workspace root). dsh 式归属：owner 从
-    /// 工具执行上下文注入而非模型参数，kill/list 权限与会话结束回收都以
-    /// 它为键。`cwd` 同时修正 spawn 目录（此前落在宿主进程 cwd 上）。
+    /// session id) in `cwd` (session workspace root). Ownership semantics: the owner is injected from
+    /// the tool execution context, not a model parameter; kill/list permission and session-end reclaim
+    /// are both keyed on it. `cwd` also fixes the spawn directory (previously landed on the host process cwd).
     pub fn start_owned(
         &self,
         owner: Option<String>,
@@ -418,7 +418,7 @@ impl TerminalService {
         #[cfg(windows)]
         let shell = resolve_windows_shell(&shell).unwrap_or_else(|| format!("{shell}.exe"));
         let mut cmd = CommandBuilder::new(shell);
-        // 会话工作区优先；None（host 入口/旧测试）保持宿主进程 cwd。
+        // Session workspace first; None (host entry / old tests) keeps the host process cwd.
         cmd.cwd(
             cwd.clone()
                 .map(std::path::PathBuf::from)
@@ -596,9 +596,9 @@ impl TerminalService {
         self.send_ex(id, input, wait_ms, idle_ms, false)
     }
 
-    /// 带标记契约的发送（逐字节一致面板版，dsh 式）：把命令包成
-    /// `printf 结束标记 + 退出码` 的形式写入 PTY，输出流一出现结束标记即刻
-    /// 记录命令完成与退出码——面板不再依赖 5 分钟静默推断。
+    /// Send with the marker contract (byte-for-byte consistent panel version): wrap the command as
+    /// `printf end-marker + exit-code` written to the PTY; as soon as the end marker appears in the output
+    /// stream, record command completion and exit code — the panel no longer relies on 5-minute silence inference.
     pub fn send_ex(
         &self,
         id: &str,
@@ -609,20 +609,20 @@ impl TerminalService {
     ) -> Result<SendOutcome, String> {
         let (writer, scrollback, child, _killer, consume, closed, last_activity) =
             self.session_parts(id)?;
-        // 每次发送的唯一标记 id：防历史/回显中的同形标记误匹配。
+        // Unique marker id per send: prevents false matches on same-shaped markers in history/echo.
         let marker_id = format!(
             "{}{}",
             now_ms(),
             &uuid::Uuid::new_v4().simple().to_string()[..8]
         );
         let end_prefix = format!("\x1b]633;D;{marker_id}:");
-        // 2026-10-26 修复：只有真正写入命令（input.is_some()）才创建/覆盖
-        // 命令记录。terminal_wait 这类 wait-only 发送此前会把进行中的记录
-        // 整个重置（started_ms 归零、cmd 丢失）——构建命令被后续 wait 打回
-        // 原形，面板只剩 "PTY · id" 回退文案和错误的首发时间。
+        // 2026-10-26 fix: only a real command write (input.is_some()) creates/overwrites the
+        // command record. Wait-only sends like terminal_wait used to reset the in-progress record
+        // entirely (started_ms zeroed, cmd lost) — a running build was knocked back by a later wait,
+        // leaving the panel with only the "PTY · id" fallback text and a wrong first-start time.
         if wrap && input.is_some() {
             if let Some(run) = self.command_of(id) {
-                // 面板显示用：保留触发命令的文本（截断，防超长行拖垮协议负载）。
+                // For panel display: keep the triggering command text (truncated, so huge lines do not drag down the protocol payload).
                 const CMD_SNIPPET_MAX: usize = 500;
                 let mut snippet: String = input
                     .unwrap_or_default()
@@ -641,8 +641,8 @@ impl TerminalService {
                 });
             }
         }
-        // 结束标记认领：优先认当前记录里存的标记（wait-only 发送没有自己的
-        // 包裹，却仍能认领在跑命令的完成）。
+        // End-marker claim: prefer the marker stored in the current record (a wait-only send has no
+        // wrapper of its own, yet can still claim the running command's completion).
         let active_end_prefix = if wrap {
             self.command_of(id).and_then(|run| {
                 run.lock()
@@ -655,10 +655,10 @@ impl TerminalService {
         };
         if let Some(input) = input {
             let payload = if wrap {
-                // 单引号转义保多行语义；eval 在当前 shell 执行（cd/exit 保留）。
+                // Single-quote escaping preserves multi-line semantics; eval runs in the current shell (cd/exit retained).
                 let quoted = format!("'{}'", input.replace('\'', r"'\''"));
-                // 标记转义走 $'\x..' ANSI-C 引导（bash/zsh/macOS sh 皆支持；
-                // printf 的 \\0NNN 八进制在 bash 语义下会被拆成 NUL+字面量）。
+                // Marker escaping uses the $'\x..' ANSI-C lead (bash/zsh/macOS sh all support it;
+                // printf's \\0NNN octal would be split into NUL+literal under bash semantics).
                 format!(
                     "printf '%s' $'\\x1b]633;C;{marker_id}\\x07'; eval -- {quoted}; __st_rc=$?; printf '%s%s' $'\\x1b]633;D;{marker_id}:' \"$__st_rc\" $'\\x07'; unset __st_rc\n"
                 )
@@ -692,7 +692,7 @@ impl TerminalService {
             if dropped_under {
                 truncated = true;
             }
-            // 标记扫描：结束标记一出现即记录命令完成与退出码（不等静默窗）。
+            // Marker scan: record command completion and exit code as soon as the end marker appears (no waiting for the quiet window).
             if wrap {
                 if let Some(prefix) = active_end_prefix.as_deref() {
                     if let Some(end_at) = delta.rfind(prefix) {
@@ -850,7 +850,7 @@ impl TerminalService {
     }
 
     /// Fresh snapshots (id + top-level status) in publication order.
-    /// 会话的标记命令状态（None = 会话不存在或未用标记发过命令）。
+    /// The session's marker-command state (None = session does not exist or never sent a marker command).
     fn command_of(&self, id: &str) -> Option<std::sync::Arc<Mutex<Option<CommandRun>>>> {
         let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.get(id).map(|s| std::sync::Arc::clone(&s.command))
@@ -897,7 +897,7 @@ impl TerminalService {
     }
 
     /// Kill every terminal owned by `owner` (conversation session id).
-    /// Session delete/archive 的回收入口；返回杀掉的个数。
+    /// Reclaim entry for session delete/archive; returns the number killed.
     pub fn kill_owner(&self, owner: &str) -> usize {
         let ids: Vec<String> = {
             let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
@@ -910,7 +910,7 @@ impl TerminalService {
         ids.iter().filter_map(|id| self.kill(id, None).ok()).count()
     }
 
-    /// Kill every live terminal — host shutdown 的最后防线。
+    /// Kill every live terminal — the last line of defense on host shutdown.
     pub fn kill_all(&self) -> usize {
         let ids: Vec<String> = {
             let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
@@ -921,8 +921,8 @@ impl TerminalService {
 
     /// Close a session: flag it (unblocking in-flight sends), kill the
     /// top-level shell, then remove it. `owner = None` is host-privileged
-    /// (UI ✕ / protocol / shutdown)；Some(session) 必须匹配归属，否则拒绝 —
-    /// dsh 式授权：模型工具只能杀自己会话的终端。
+    /// (UI ✕ / protocol / shutdown); Some(session) must match ownership, else refuse —
+    /// authorization semantics: a model tool can only kill terminals of its own session.
     /// Removal happens only after the child actually exits (bounded) so a
     /// just-killed terminal never lingers half-dead in the registry.
     pub fn kill(&self, id: &str, owner: Option<&str>) -> Result<(), String> {
@@ -944,7 +944,7 @@ impl TerminalService {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .kill();
-        // Quiescent removal (dsh parity): wait for the child to actually
+        // Quiescent removal (reference parity): wait for the child to actually
         // exit so the registry never shows a killed-but-alive session. The
         // killer is a hard kill, so this is usually one poll.
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1_500);
@@ -1411,8 +1411,8 @@ mod tests {
     }
 }
 
-/// 移除本条发送的标记序列（真实结束标记与开始标记；回显文本中的标记字面量
-/// 因含 `%s`/无数字不会匹配）。
+/// Remove this send's marker sequences (the real end marker and start marker; marker literals in echoed text
+/// do not match because they contain `%s` / no digits).
 fn strip_markers(text: &str, marker_id: &str, end_prefix: &str) -> String {
     let start_marker = format!("\x1b]633;C;{marker_id}\x07");
     let mut out = String::with_capacity(text.len());
@@ -1431,7 +1431,7 @@ fn strip_markers(text: &str, marker_id: &str, end_prefix: &str) -> String {
             out.push_str(&rest[..end_at]);
             rest = &rest[stop + 1..];
         } else {
-            // 非真实标记（如回显的格式串）：保留并跳过该命中。
+            // Not a real marker (e.g. an echoed format string): keep it and skip this hit.
             out.push_str(&rest[..digits_start]);
             rest = &rest[digits_start..];
         }
@@ -1440,8 +1440,8 @@ fn strip_markers(text: &str, marker_id: &str, end_prefix: &str) -> String {
     out.replace(&start_marker, "")
 }
 
-/// dsh 式标记契约：send_ex 包裹的命令在输出流出现结束标记即记 done 与
-/// 退出码，无需等 5 分钟静默；list() 携带该状态。
+/// Marker contract: a command wrapped by send_ex is recorded done with its exit code as soon as the end
+/// marker appears in the output stream, no need to wait 5 minutes of silence; list() carries that state.
 #[test]
 fn wrapped_send_records_command_completion() {
     let service = TerminalService::new();
@@ -1471,9 +1471,9 @@ fn wrapped_send_records_command_completion() {
     );
 }
 
-/// 2026-10-26 修复回归：wait-only 发送（terminal_wait，input None）不得
-/// 重置进行中的命令记录——此前它会把 started_ms 归零、cmd 清空，面板上
-/// 正在跑的构建只剩 "PTY · id" 回退文案和错误的首发时间。
+/// 2026-10-26 fix regression: a wait-only send (terminal_wait, input None) must not
+/// reset the in-progress command record — it used to zero started_ms and clear cmd, leaving a running
+/// build in the panel with only the "PTY · id" fallback text and a wrong first-start time.
 #[test]
 fn wait_only_send_preserves_the_running_command() {
     let service = TerminalService::new();
@@ -1490,7 +1490,7 @@ fn wait_only_send_preserves_the_running_command() {
         .expect("wrapped send records the command");
     assert_eq!(before.finished_ms, None, "sleep 2 outlives the 300ms wait");
     assert_eq!(before.cmd.as_deref(), Some("sleep 2\n"));
-    // wait-only 发送：不覆盖、不清空、不重置时间。
+    // Wait-only send: do not overwrite, do not clear, do not reset the time.
     let _ = service.send_ex(&id, None, 300, 100, true).expect("wait");
     let after = service
         .list()
@@ -1508,9 +1508,9 @@ fn wait_only_send_preserves_the_running_command() {
     assert_eq!(after.end_prefix, before.end_prefix);
 }
 
-/// 2026-10-26 修复回归：命令在没有任何 send 扫描的间隙里完成时，后续
-/// wait-only 发送通过记录里存的结束标记认领完成（此前只扫本次发送自己
-/// 的新标记，而 wait-only 没有包裹 → 完成永远无人认领）。
+/// 2026-10-26 fix regression: when a command finishes in a gap where no send is scanning, a later
+/// wait-only send claims completion via the end marker stored in the record (previously it only scanned
+/// this send's own new marker, and wait-only has no wrapper → completion was never claimed).
 #[test]
 fn wait_only_send_finalizes_on_the_stored_marker() {
     let service = TerminalService::new();
@@ -1518,7 +1518,7 @@ fn wait_only_send_finalizes_on_the_stored_marker() {
     let _ = service
         .send_ex(&id, Some("sleep 1\n"), 200, 100, true)
         .expect("send");
-    // sleep 在无人扫描的间隙里结束，结束标记落进 scrollback。
+    // sleep ends in a gap nobody is scanning; the end marker lands in the scrollback.
     std::thread::sleep(Duration::from_millis(1_400));
     let _ = service.send_ex(&id, None, 1_500, 200, true).expect("wait");
     let cmd = service
@@ -1536,8 +1536,8 @@ fn wait_only_send_finalizes_on_the_stored_marker() {
     assert_eq!(cmd.exit_code, Some(0), "`sleep` exits 0");
 }
 
-/// display_status：在跑命令只把 Idle 提升为 Running；Exited 保持真实，
-/// Running 原样。
+/// display_status: a running command only promotes Idle to Running; Exited stays truthful,
+/// Running passes through.
 #[test]
 fn display_status_promotes_only_idle() {
     use SessionStatus::{Exited, Idle, Running};
@@ -1564,7 +1564,7 @@ fn display_status_promotes_only_idle() {
     assert_eq!(TerminalService::display_status(Idle, false), Idle);
 }
 
-/// 无标记路径保持旧行为：write() 裸写不产生命令状态。
+/// The no-marker path keeps the old behavior: a bare write() produces no command state.
 #[test]
 fn raw_write_keeps_legacy_semantics() {
     let service = TerminalService::new();
@@ -1580,7 +1580,7 @@ fn raw_write_keeps_legacy_semantics() {
     assert!(cmd.is_none(), "raw writes stay marker-free");
 }
 
-/// dsh 式归属：spawn 记录 owner/workspace，list 原样发布。
+/// Ownership semantics: spawn records owner/workspace; list publishes them as-is.
 #[test]
 fn start_owned_publishes_owner_and_workspace() {
     let service = TerminalService::new();
@@ -1601,8 +1601,8 @@ fn start_owned_publishes_owner_and_workspace() {
     service.kill(&id, None).expect("kill");
 }
 
-/// dsh 式授权：B 会话杀 A 会话的终端被拒，且终端原样存活（先移出、
-/// 校验失败再放回——不能留半死状态也不能误杀）。
+/// Authorization semantics: session B killing session A's terminal is refused, and the terminal survives
+/// unchanged (removed first, put back on validation failure — no half-dead state and no wrongful kill).
 #[test]
 fn foreign_session_kill_is_rejected_and_terminal_survives() {
     let service = TerminalService::new();
@@ -1611,19 +1611,19 @@ fn foreign_session_kill_is_rejected_and_terminal_survives() {
         .expect("start");
     let err = service.kill(&id, Some("sess-b")).expect_err("must reject");
     assert!(err.contains("not owned"), "got: {err}");
-    // 终端还在，归属未变。
+    // The terminal is still there, ownership unchanged.
     let row = service
         .list()
         .into_iter()
         .find(|r| r.id == id)
         .expect("row");
     assert_eq!(row.owner.as_deref(), Some("sess-a"));
-    // 本主可以杀。
+    // The owner may kill.
     service.kill(&id, Some("sess-a")).expect("owner kill");
     assert!(service.list().is_empty());
 }
 
-/// kill_owner：按归属批量回收，别人的终端不受波及。
+/// kill_owner: batch reclaim by ownership; other sessions' terminals are unaffected.
 #[test]
 fn kill_owner_reaps_only_owned_terminals() {
     let service = TerminalService::new();
@@ -1640,7 +1640,7 @@ fn kill_owner_reaps_only_owned_terminals() {
     service.kill(&b, None).expect("cleanup");
 }
 
-/// kill_all：宿主 shutdown 最后防线，全量清空。
+/// kill_all: the last line of defense on host shutdown, clears everything.
 #[test]
 fn kill_all_clears_every_terminal() {
     let service = TerminalService::new();

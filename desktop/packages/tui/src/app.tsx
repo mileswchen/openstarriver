@@ -46,9 +46,9 @@ async function executeTask(runtime: any, task: string) {
     runtime.execute(task, (_err: any, event: any) => {
       if (!event) return;
       if (event.type === 'ApprovalRequired') {
-        // stdin 的 for-await 消费被 executeTask 阻塞，这里无法读取应答行；
-        // 打印真实的语义（超时自动拒绝），不再显示无法兑现的 [Y/n] 提示——
-        // 否则用户输入的 Y 会在任务结束后被当作新任务执行。
+        // The for-await consumption of stdin is blocked by executeTask, so the answer line cannot be read here;
+        // print the real semantics (auto-reject on timeout), no longer showing an unfulfillable [Y/n] prompt —
+        // otherwise a Y typed by the user would be executed as a new task after the task ends.
         process.stdout.write(`\n  ${clr('y', '\u26A0')}  ${event.tool}: ${event.reason}\n  ${clr('d', '\u5BA1\u6279\u5DF2\u8BF7\u6C42\uFF0C\u8D85\u65F6\u81EA\u52A8\u62D2\u7EDD')}\n`);
         return;
       }
@@ -72,7 +72,7 @@ async function handleCommand(cmd: string, runtime: any) {
       break;
     }
     case 'plan': {
-      // help 宣告的 /plan：切到 plan 执行模式后把描述作为任务执行。
+      // /plan as advertised by help: switch to plan execution mode, then run the description as a task.
       try {
         runtime.setExecutionMode('plan');
         console.log(clr('d', '  \u5DF2\u5207\u6362\u5230 plan \u6A21\u5F0F\uFF08\u53EA\u8BFB\u89C4\u5212\uFF09'));

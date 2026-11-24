@@ -1,4 +1,4 @@
-// history source.
+// CLI model-io session-history source.
 //
 // Layout: `~/./cli/rollout/model-io-sess_*.jsonl`. Each record is one
 // model round-trip: `request.body.messages` holds the conversation-so-far

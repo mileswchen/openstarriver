@@ -633,7 +633,7 @@ fn write_agent_md_model(dir: &std::path::Path, agent_name: &str, key: &str) -> a
 mod tests {
     use super::*;
 
-    /// dsh-pattern per-model declaration: `supports_vision` lives on the
+    /// per-model declaration: `supports_vision` lives on the
     /// variant, resolves per (provider, model), and unknown routes stay
     /// permissive. No provider-level table involved.
     #[test]

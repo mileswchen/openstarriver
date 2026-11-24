@@ -346,7 +346,7 @@ describe('Doc-viewer panel: multi-doc tabs, zoom, hide', () => {
 
   it('the toggle is persistent: opens an empty panel with a hint before any content exists', async () => {
     await sendInPlanSession();
-    // No plan, no documents yet — the button is ALWAYS there (常驻).
+    // No plan, no documents yet — the button is ALWAYS there (persistent).
     const toggle = screen.getByLabelText('plan-panel');
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
     expect(document.querySelector('.plan-panel')).toBeNull();

@@ -174,7 +174,7 @@ export function DiffView({
   return (
     <div className="diff-view">
       {files.map((f, fi) => {
-        // 文件路径扩展名 → 语言,供行级语法着色("read: A.java" 同一映射)
+        // File path extension → language, for line-level syntax coloring (same mapping as "read: A.java")
         const lang = langFromLabel(f.path);
         return (
         <div className="diff-file" key={fi}>
@@ -193,8 +193,8 @@ export function DiffView({
               {h.lines.map((l, li) => {
                 if (rendered >= maxLines) return null;
                 rendered += 1;
-                // 逐行按文件扩展名语法着色(WI-177 后续):diff 行都是完整源码行,
-                // 独立切分不会破坏相邻行;未闭合字符串只影响本行。
+                // Per-line syntax coloring by file extension (WI-177 follow-up): diff lines are all complete source lines,
+                // splitting them independently does not break adjacent lines; an unclosed string only affects its own line.
                 const rowHtml = highlightCodeHtml(l.text, lang);
                 return (
                   <div key={li} className={`diff-row ${l.kind}`}>

@@ -19,7 +19,7 @@ describe('code palette overrides (settings → 代码高亮配色)', () => {
     const css = styleEl()!.textContent!;
     expect(css).toContain('html:not([data-theme="dark"])');
     expect(css).toContain('--code-string: #123456');
-    // 未覆盖的 token 不出现在注入里(保持 CSS 默认)
+    // Uncovered tokens do not appear in the injection (keep the CSS default)
     expect(css).not.toContain('--code-keyword');
   });
 

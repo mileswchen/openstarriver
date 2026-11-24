@@ -226,7 +226,7 @@ pub enum ContextForm {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MessageSource {
     /// A human/browser-originated prompt. `rpc_id` is the submitter's
-    /// correlation id (WI-216, dsh rpcId / codex client_id parity): the
+    /// correlation id (WI-216, reference rpcId / client_id parity): the
     /// client that sent the turn echoes its id here so UIs can retire the
     /// optimistic echo when the durable message commits. `None` on host
     /// Generated inputs (scheduled runs, plugins, legacy callers) — those
@@ -1150,7 +1150,7 @@ impl BlockAssembler {
 
     /// The assembled assistant message over [`BlockAssembler::blocks`].
     /// An omitted source defaults to the assembler plugin attribution,
- /// matching default `{ kind: 'plugin', plugin: 'dsh-llm/assembler' }`.
+    /// matching default `{ kind: 'plugin', plugin: 'starriver-kernel/assembler' }`.
     pub fn message(&self, source: Option<MessageSource>) -> Message {
         let source = source.unwrap_or_else(|| MessageSource::Plugin {
             plugin: "starriver-kernel/assembler".into(),

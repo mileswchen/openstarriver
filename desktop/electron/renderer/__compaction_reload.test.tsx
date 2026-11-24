@@ -1,9 +1,9 @@
 /// <reference types="vitest/globals" />
-// 2026-10-26 回归守卫：压缩检查点（user/message Replace）遮蔽的历史 Turn 在
-// 重新进入会话时必须全部渲染。当天线上事故：5 个检查点吞掉 1648 条内容节点，
-// 重载后只剩检查点之后的 484 条。host 投影已钉住 seq 顺序
-// (sessions.rs::compacted_turns_stay_in_display_projection)；这里钉渲染端
-// 契约——复活的消息、折叠行、检查点之后的消息按序全部出现，一行不丢。
+// 2026-10-26 regression guard: history Turns shadowed by a compaction checkpoint (user/message Replace) must
+// all render when re-entering the session. Live incident that day: 5 checkpoints swallowed 1648 content nodes,
+// leaving only the 484 after the last checkpoint on reload. The host projection already pins seq order
+// (sessions.rs::compacted_turns_stay_in_display_projection); this pins the renderer
+// contract — revived messages, folded rows, and post-checkpoint messages all appear in order, not one row lost.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -11,7 +11,7 @@ import { I18nProvider } from './i18n';
 
 declare global { interface Window { starriver: any; } }
 
-// host getSessionMessages 的投影输出形状（ChatMessage[]，role 含 'compaction'）。
+// The projection output shape of host getSessionMessages (ChatMessage[], role includes 'compaction').
 const HISTORY = [
   { role: 'user', content: '压缩前的请求', seq: 0 },
   { role: 'assistant', content: '压缩前的回答', seq: 1 },
@@ -74,15 +74,15 @@ async function mountOpenSession(waitForText = '压缩前的请求') {
 describe('reloaded history after a compaction checkpoint (2026-10-26)', () => {
   it('renders resurrected turns, the fold row, and post-checkpoint turns — nothing dropped', async () => {
     await mountOpenSession();
-    // 五条内容全部在 DOM：被遮蔽的历史 + 检查点后的新内容。
+    // All five content pieces are in the DOM: the shadowed history + the new post-checkpoint content.
     expect(screen.getByText('压缩前的回答')).toBeTruthy();
     expect(screen.getByText('压缩后的请求')).toBeTruthy();
     expect(screen.getByText('压缩后的回答')).toBeTruthy();
-    // 折叠行渲染（🗜 CompactionRow），预览标题取结构化摘要首节首行。
+    // The folded row renders (🗜 CompactionRow); the preview title takes the first line of the first section of the structured summary.
     const fold = document.querySelector('[data-testid="compaction-row"]');
     expect(fold).toBeTruthy();
     expect(fold!.textContent).toContain('压缩摘要：修复终端面板');
-    // 顺序契约：折叠行夹在复活的历史与检查点后的内容之间。
+    // Order contract: the folded row sits between the revived history and the post-checkpoint content.
     const body = document.body.textContent ?? '';
     const iBefore = body.indexOf('压缩前的回答');
     const iFold = body.indexOf('压缩摘要：修复终端面板');
@@ -90,7 +90,7 @@ describe('reloaded history after a compaction checkpoint (2026-10-26)', () => {
     expect(iBefore).toBeGreaterThanOrEqual(0);
     expect(iFold).toBeGreaterThan(iBefore);
     expect(iAfter).toBeGreaterThan(iFold);
-    // 展开后完整结构化摘要可见。
+    // After expanding, the full structured summary is visible.
     fireEvent.click(fold!.querySelector('.compaction-button')!);
     await waitFor(() => expect(document.body.textContent).toContain('Primary Request and Intent'));
   });
@@ -105,7 +105,7 @@ describe('reloaded history after a compaction checkpoint (2026-10-26)', () => {
     expect(screen.getByText('后')).toBeTruthy();
     const fold = document.querySelector('[data-testid="compaction-row"]') as HTMLElement | null;
     expect(fold).toBeTruthy();
-    // 空摘要不可展开（按钮 disabled）。
+    // An empty summary cannot be expanded (button disabled).
     expect((fold!.querySelector('.compaction-button') as HTMLButtonElement).disabled).toBe(true);
   });
 });

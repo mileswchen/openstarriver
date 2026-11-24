@@ -599,7 +599,7 @@ impl TurnRepeatGuard {
 
 /// Deep-key-sorted canonical JSON of a tool's arguments: object keys are
 /// sorted recursively so property-order variants of the same call serialize
-/// identically (DSH repeat-tool-reminder parity). Array order is preserved
+/// identically (repeat-tool-reminder parity). Array order is preserved
 /// (semantically meaningful); string contents are preserved verbatim — unlike
 /// the old whitespace-stripping normalization, which incorrectly merged
 /// `"a b"` with `"ab"`.

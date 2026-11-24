@@ -1,40 +1,40 @@
 /**
- * 界面定时锁（Scheduled UI Lock）— 纯逻辑模块。
+ * Scheduled UI Lock — pure-logic module.
  *
- * 这是一个 renderer 侧的自律/防沉迷摩擦功能：用户配置每日锁定期
- * （开始/结束 HH:MM），锁定期内 App 全屏覆盖锁屏层，必须键入本次随机
- * 生成的 10 位字母+数字口令才能解锁。锁屏层只覆盖不卸载应用树，
- * 后台会话（daemon 流式任务）不受影响。
+ * This is a renderer-side self-discipline / anti-addiction friction feature: the user configures a daily lock window
+ * (start/end HH:MM); during the window the App is covered by a full-screen lock layer, and a randomly generated
+ * 10-char letter+digit passcode for this occurrence must be typed to unlock. The lock layer only covers, never unmounts the app tree;
+ * background sessions (daemon streaming tasks) are unaffected.
  *
- * 设计决策：
- * - 持久化走 localStorage（`starriver.uiLock`），与 renderer 侧 UI 偏好
- *   （trajMode 等）同一模式：纯窗口级 UI 偏好，embedded/daemon 零差异。
- * - 非安全边界：口令展示在锁屏上（防无意识继续使用，而非防他人）；
- *   DevTools 移除覆盖层不在防御范围。
- * - "occurrence"（一次锁定窗口实例）= 当前窗口起点的日期（跨午夜窗口
- *   凌晨时段回溯到昨日起点）。解锁按 occurrence 记忆：本窗口内不再
- *   重锁，下一次 occurrence 到来自动重锁并生成新口令。自 2026-10-16
- *   （用户决策）起，解锁记忆持久化到 localStorage（`starriver.uiLock.unlocked`），
- *   跨启动生效——当天解锁过就不再锁；重新设置（设置弹窗点「确定」）
- *   或次日新 occurrence 自动恢复锁定。
+ * Design decisions:
+ * - Persistence uses localStorage (`starriver.uiLock`), the same pattern as renderer-side UI preferences
+ *   (trajMode etc.): a pure window-level UI preference, zero difference between embedded/daemon.
+ * - Not a security boundary: the passcode is shown on the lock screen (guards against mindless continued use, not against others);
+ *   removing the overlay via DevTools is out of scope for defense.
+ * - An "occurrence" (one lock-window instance) = the date of the current window's start (a cross-midnight window's
+ *   early-morning part traces back to yesterday's start). Unlock is remembered per occurrence: no re-lock within this
+ *   window; the next occurrence auto-relocks and generates a new passcode. Since 2026-10-16
+ *   (user decision), the unlock memory is persisted to localStorage (`starriver.uiLock.unlocked`),
+ *   surviving restarts — once unlocked for the day it does not re-lock; reconfiguring (OK in the settings dialog)
+ *   or the next day's new occurrence automatically restores the lock.
  */
 
 export interface UiLockSchedule {
   enabled: boolean;
-  /** 开始时间，格式 HH:MM（24 小时制） */
+  /** Start time, format HH:MM (24-hour) */
   start: string;
-  /** 结束时间，格式 HH:MM（24 小时制）；与 start 相同视为无效日程 */
+  /** End time, format HH:MM (24-hour); equal to start is treated as an invalid schedule */
   end: string;
 }
 
 export const UI_LOCK_STORAGE_KEY = 'starriver.uiLock';
 export const LOCK_CODE_LENGTH = 10;
-/** 主循环 tick：锁进入/退出的最大感知延迟 */
+/** Main-loop tick: the maximum perceived latency for lock enter/exit */
 export const LOCK_TICK_MS = 15_000;
-/** 设置弹窗点「确定」后派发：useUiLock 监听并立即重判（窗口内即刻锁屏，不必等 15s tick）。 */
+/** Dispatched after clicking OK in the settings dialog: useUiLock listens and re-decides immediately (locks at once inside the window, no need to wait for the 15s tick). */
 export const UI_LOCK_APPLY_EVENT = 'starriver.uiLock-apply';
-/** 持久化"本 occurrence 已解锁"标记（用户决策 2026-10-16）：解锁后跨启动不再重锁；
- *  重新设置（弹窗点「确定」）或次日新 occurrence 自动恢复锁定。 */
+/** Persist the "this occurrence unlocked" marker (user decision 2026-10-16): after unlock, no re-lock across restarts;
+ *  reconfiguring (OK in the dialog) or the next day's new occurrence automatically restores the lock. */
 export const UI_LOCK_UNLOCKED_KEY = 'starriver.uiLock.unlocked';
 
 export const UI_LOCK_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -45,21 +45,21 @@ export const DEFAULT_UI_LOCK_SCHEDULE: UiLockSchedule = {
   end: '06:00',
 };
 
-/** HH:MM（24 小时制）格式校验 */
+/** HH:MM (24-hour) format validation */
 export function isValidTime(t: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 }
 
-/** "HH:MM" → 当日分钟数 */
+/** "HH:MM" → minutes since midnight */
 export function minutesOfDay(t: string): number {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
 }
 
 /**
- * now 是否处于锁定期内。支持跨午夜窗口（start > end 视为跨越 00:00，
- * 如 22:00–06:00 覆盖 22:00–24:00 与 00:00–06:00）。
- * start === end 或时间非法一律视为不在窗口（避免永锁）。
+ * Whether now is inside the lock window. Supports cross-midnight windows (start > end means crossing 00:00,
+ * e.g. 22:00–06:00 covers 22:00–24:00 and 00:00–06:00).
+ * start === end or invalid times are always treated as outside the window (avoids a permanent lock).
  */
 export function isInLockWindow(now: Date, start: string, end: string): boolean {
   if (!isValidTime(start) || !isValidTime(end) || start === end) return false;
@@ -70,9 +70,9 @@ export function isInLockWindow(now: Date, start: string, end: string): boolean {
 }
 
 /**
- * 当前锁定期 occurrence 的身份标识（窗口起点所在日期 YYYY-MM-DD），
- * 窗外返回 null。跨午夜窗口的凌晨时段回溯到昨日起点，保证同一次
- * 窗口实例在午夜前后身份稳定（解锁记忆因此跨午夜有效）。
+ * The identity of the current lock-window occurrence (the date YYYY-MM-DD of the window start),
+ * null outside the window. A cross-midnight window's early-morning part traces back to yesterday's start, so the
+ * same window instance has a stable identity across midnight (the unlock memory is therefore valid across midnight).
  */
 export function lockOccurrenceId(now: Date, start: string, end: string): string | null {
   if (!isInLockWindow(now, start, end)) return null;
@@ -85,9 +85,9 @@ export function lockOccurrenceId(now: Date, start: string, end: string): string 
 }
 
 /**
- * 生成 10 位字母+数字口令。使用 crypto.getRandomValues + 拒绝采样
- * （62 不整除 2^32，取模直接截断会带来轻微偏差）。
- * `bytes` 参数仅供测试注入确定性随机源。
+ * Generate a 10-char letter+digit passcode. Uses crypto.getRandomValues + rejection sampling
+ * (62 does not divide 2^32; a direct modulo truncation would introduce a slight bias).
+ * The `bytes` parameter is only for tests to inject a deterministic random source.
  */
 export function generateLockCode(bytes?: Uint32Array): string {
   const buf = bytes ?? new Uint32Array(LOCK_CODE_LENGTH);
@@ -96,7 +96,7 @@ export function generateLockCode(bytes?: Uint32Array): string {
     if (!g?.getRandomValues) throw new Error('crypto.getRandomValues unavailable');
     g.getRandomValues(buf);
   }
-  // 拒绝采样上限：62 * 69,088,469 ≈ 2^32（取小于 2^32 的最大 62 倍数）
+  // Rejection-sampling ceiling: 62 * 69,088,469 ≈ 2^32 (the largest multiple of 62 below 2^32)
   const limit = Math.floor(0x1_0000_0000 / UI_LOCK_CHARSET.length) * UI_LOCK_CHARSET.length;
   let out = '';
   let i = 0;
@@ -108,7 +108,7 @@ export function generateLockCode(bytes?: Uint32Array): string {
   return out;
 }
 
-/** 读取本地日程；缺失/损坏/字段不全时回退默认（禁用）。 */
+/** Read the local schedule; fall back to the default (disabled) when missing/corrupt/incomplete. */
 export function loadUiLockSchedule(storage?: Storage): UiLockSchedule {
   const store = storage ?? globalThis.localStorage;
   try {
@@ -124,22 +124,22 @@ export function loadUiLockSchedule(storage?: Storage): UiLockSchedule {
       return { enabled: parsed.enabled, start: String(parsed.start), end: String(parsed.end) };
     }
   } catch {
-    /* storage 不可用或 JSON 损坏 — 回退默认 */
+    /* storage unavailable or JSON corrupt — fall back to default */
   }
   return { ...DEFAULT_UI_LOCK_SCHEDULE };
 }
 
-/** 写入本地日程；storage 不可用时静默（与现有 localStorage 偏好的防御一致）。 */
+/** Write the local schedule; silent when storage is unavailable (consistent with existing localStorage-preference defenses). */
 export function saveUiLockSchedule(schedule: UiLockSchedule, storage?: Storage): void {
   const store = storage ?? globalThis.localStorage;
   try {
     store?.setItem(UI_LOCK_STORAGE_KEY, JSON.stringify(schedule));
   } catch {
-    /* storage 不可用 — 忽略 */
+    /* storage unavailable — ignore */
   }
 }
 
-/** 读取持久化的"本 occurrence 已解锁"标记；缺失/格式非法回退 null。 */
+/** Read the persisted "this occurrence unlocked" marker; fall back to null when missing/invalid. */
 export function loadUiLockUnlockedOccurrence(storage?: Storage): string | null {
   const store = storage ?? globalThis.localStorage;
   try {
@@ -150,24 +150,24 @@ export function loadUiLockUnlockedOccurrence(storage?: Storage): string | null {
   }
 }
 
-/** 写入/清除"本 occurrence 已解锁"标记；occ 为 null 即清除。storage 不可用时静默。 */
+/** Write/clear the "this occurrence unlocked" marker; occ null means clear. Silent when storage is unavailable. */
 export function saveUiLockUnlockedOccurrence(occ: string | null, storage?: Storage): void {
   const store = storage ?? globalThis.localStorage;
   try {
     if (occ == null) store?.removeItem(UI_LOCK_UNLOCKED_KEY);
     else store?.setItem(UI_LOCK_UNLOCKED_KEY, occ);
   } catch {
-    /* storage 不可用 — 忽略 */
+    /* storage unavailable — ignore */
   }
 }
 
 /**
- * 一次锁屏 tick 的判定：给定日程与当前时间，返回应处的锁屏状态。
- * - 返回 null：不锁定。
- * - 返回 { relock, occurrenceId }：应锁定；`relock` 表示进入了一个
- *   新的 occurrence（需要生成新口令），否则沿用当前口令。
- * 调用方（useUiLock）持有 `unlockedOccurrence` 与 `currentOcc` 记忆：
- * occurrence === 已解锁的那个 → 不锁；occurrence 变化 → 重锁。
+ * The decision of one lock tick: given the schedule and the current time, return the lock state to be in.
+ * - Return null: do not lock.
+ * - Return { relock, occurrenceId }: should lock; `relock` means a new occurrence was entered
+ *   (a new passcode must be generated), otherwise reuse the current passcode.
+ * The caller (useUiLock) holds the `unlockedOccurrence` and `currentOcc` memory:
+ * occurrence === the unlocked one → do not lock; occurrence changed → re-lock.
  */
 export function evaluateUiLockTick(
   schedule: UiLockSchedule | null,

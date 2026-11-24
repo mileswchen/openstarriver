@@ -8,9 +8,9 @@ import { I18nProvider } from './i18n';
 
 const w = (ui: React.ReactElement) => render(<I18nProvider>{ui}</I18nProvider>);
 
-/** Xcode 配色的代码块语法高亮(2026-10-04 方案):
- *  颜色本体是 styles.css --code-* → hljs-* 的 CSS 映射,这里只验证 DOM 里
- *  hljs token span 的存在性与回退路径(纯文本、超长跳过、未知语言不崩)。 */
+/** Xcode-palette code-block syntax highlighting (2026-10-04 design):
+ *  the colors themselves are the styles.css --code-* → hljs-* CSS mapping; here we only verify the presence of
+ *  hljs token spans in the DOM and the fallback paths (plain text, over-length skip, unknown language does not crash). */
 describe('code block syntax highlighting (Xcode palette)', () => {
   it('highlights the numbered bash command block with hljs spans', () => {
     const { container } = w(<ToolRow content={'🔧 bash: echo "hi" # greet'} />);
@@ -102,7 +102,7 @@ describe('code block syntax highlighting (Xcode palette)', () => {
   });
 
   it('BUG-143: multi-line node -e string stays colored across lines (no re-tokenization)', () => {
-    // 历史存储形态:多行命令以字面 \n 扁平化存在 content 里,CodeBlock 渲染前还原
+    // Historical storage shape: multi-line commands are flattened into content with literal \n; CodeBlock restores them before rendering
     const { container } = w(
       <ToolRow content={'🔧 bash: node -e "const a=1;\\nconsole.log(a)"'} collapsible />,
     );
@@ -111,7 +111,7 @@ describe('code block syntax highlighting (Xcode palette)', () => {
     const s1 = lines[0].querySelector('.hljs-string');
     const s2 = lines[1].querySelector('.hljs-string');
     expect(s1?.textContent).toContain('const a=1;');
-    // 续行仍是同一字符串:console.log 不得被重新切分成 built_in
+    // The continuation line is still the same string: console.log must not be re-split into built_in
     expect(s2?.textContent).toContain('console.log(a)');
     expect(lines[1].querySelector('.hljs-built_in')).toBeNull();
   });
@@ -133,8 +133,8 @@ describe('code block syntax highlighting (Xcode palette)', () => {
   });
 
   it('hljs 调色板作用域覆盖 .diff-text(会话 edit 块/Review/IDE 面板的 diff 行)', () => {
-    // DiffView 把 hljs token span 渲染进 .diff-text;styles.css 的着色规则若不把
-    // .diff-text 纳入 :is(...) 作用域,span 无色 → diff 行退化成纯文本(2026-10-05)。
+    // DiffView renders hljs token spans into .diff-text; if the styles.css coloring rules do not include
+    // .diff-text in the :is(...) scope, the spans are colorless → diff rows degrade to plain text (2026-10-05).
     const css = readFileSync('renderer/styles.css', 'utf8'); // cwd = vitest 根(desktop/electron)
     const stale = css.match(/:is\(\.md-content pre code, \.tool-row-code\)(?!, \.diff-text)/g) || [];
     expect(stale).toEqual([]);

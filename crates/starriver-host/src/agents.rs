@@ -971,7 +971,7 @@ impl HostRuntime {
         true
     }
 
-    /// Send Now (queue dock 「立即」): abort the live turn, if any, and hand
+    /// Send Now (queue dock "Now"): abort the live turn, if any, and hand
     /// the durable queue to the driver in ONE host call. Cancel FIRST, flush
     /// SECOND: `cancel(keep_inbox=true)` parks the queue and aborts the
     /// running turn; `pending_flush` then unparks and wakes, so the parked
@@ -1012,8 +1012,8 @@ impl HostRuntime {
         inner.agent.terminal_service.list()
     }
 
-    /// WI-93: kill one background terminal by id. UI 入口走宿主权限
-    /// （owner = None），不受会话归属限制。
+    /// WI-93: kill one background terminal by id. The UI entry uses host permission
+    /// (owner = None), not subject to session-ownership limits.
     pub fn terminal_kill(&self, id: String) -> bool {
         let inner = self.inner.blocking_lock();
         let Some(inner) = inner.as_ref() else {

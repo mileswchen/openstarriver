@@ -84,18 +84,18 @@ describe('background terminals in the composer (WI-150)', () => {
     ]);
     window.starriver.listTerminals = vi.fn().mockResolvedValue({
       terminals: [
-        // 本工作区：命令 + 用途 + 归属会话标题可见。
+        // This workspace: command + purpose + owning session title visible.
         { id: 't-1', status: 'running', startedAtMs: Date.now() - 10_000, ownerSessionId: 's-1', workspace: '/ws/a', command: { startedAtMs: Date.now() - 9_000, cmd: 'npm run dev' } },
-        // 别的工作区：不显示。
+        // Other workspaces: not shown.
         { id: 't-2', status: 'idle', startedAtMs: Date.now() - 10_000, ownerSessionId: 's-2', workspace: '/ws/other', command: { startedAtMs: Date.now() - 5_000, finishedAtMs: Date.now(), exitCode: 0, cmd: 'tail -f app.log' } },
-        // 无 workspace 字段（旧数据）：照常显示，不藏数据。
+        // No workspace field (old data): still shown, no data hidden.
         { id: 't-3', status: 'running', startedAtMs: Date.now() - 30_000 },
       ],
     });
     await mount();
 
-    // 激活工作区 w1（composer 的 workspace picker → 选中 ws-a；侧栏同名
-    // 节点也存在，取按钮型匹配）。
+    // Activate workspace w1 (the composer workspace picker → select ws-a; a same-named
+    // sidebar node also exists, so take the button-type match).
     fireEvent.click(screen.getByLabelText('workspace'));
     const wsItem = screen.getAllByTitle('/ws/a')
       .map(el => el.closest('button.composer-approval-item'))
@@ -105,16 +105,16 @@ describe('background terminals in the composer (WI-150)', () => {
 
     fireEvent.click(screen.getByLabelText('background-terminals'));
     const panel = screen.getByTestId('terminals-panel');
-    // 命令文本 + 用途标签（dev server 识别）+ 会话标题。
+    // Command text + purpose label (dev server recognized) + session title.
     expect(panel.textContent).toContain('npm run dev');
     expect(panel.textContent).toContain('Dev server');
     expect(panel.textContent).toContain('Fix login');
-    // 他工作区终端被过滤；无 workspace 的旧行保留。
+    // Other-workspace terminals are filtered; old rows without workspace are kept.
     expect(panel.textContent).not.toContain('tail -f');
     expect(panel.textContent).toContain('PTY · t-3');
-    // 计数 = 2（本工作区 1 + 旧数据 1），不含 t-2。
+    // Count = 2 (this workspace 1 + old data 1), excluding t-2.
     expect(panel.querySelector('.terminals-count')?.textContent).toBe('2');
-    // tooltip 携带归属会话与完整命令。
+    // The tooltip carries the owning session and the full command.
     const row = panel.querySelector('.terminal-row') as HTMLElement;
     expect(row.getAttribute('title')).toContain('Fix login');
     expect(row.getAttribute('title')).toContain('npm run dev');
@@ -183,11 +183,11 @@ describe('background terminals in the composer (WI-150)', () => {
     await waitFor(() => expect(screen.queryByLabelText('background-terminals')).toBeNull());
   });
 
-  // ── 2026-10-26: PTY 行的 Table 列与命令生命周期显示 ──
-  // 当天线上 bug：构建命令在跑，但面板行只剩 "PTY · id" 回退文案、idle 状态、
-  // 错误的首发时间。渲染端契约：command.cmd 存在就必须显示命令文本；
-  // finishedAtMs=null → running，有值 → done · exit N；无命令记录才回退
-  // PTY · <id 前 8 位> 并透传 host 状态。
+  // ── 2026-10-26: PTY row Table columns and command-lifecycle display ──
+  // Live bug that day: a build command was running, but the panel row showed only the "PTY · id" fallback text, idle state,
+  // and a wrong first-start time. Renderer contract: if command.cmd exists the command text must be shown;
+  // finishedAtMs=null → running, a value → done · exit N; only with no command record fall back to
+  // PTY · <first 8 chars of id> and pass through the host state.
   const ptyRow = (command: any, status = 'running') => ({
     id: 'e0b34f93-4270-41be-84e0-92d59684cdab',
     status,

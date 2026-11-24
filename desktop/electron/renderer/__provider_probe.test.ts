@@ -247,7 +247,7 @@ describe('provider probe — BUG-P4…P13 regressions', () => {
   it('BUG-P7: multi-byte UTF-8 split across chunks must not mojibake model names', async () => {
     const full = JSON.stringify({ data: [{ id: 'm1', display_name: '模型🚀' }] });
     const buf = Buffer.from(full, 'utf8');
-    // Cut inside the first byte sequence of '模' (3-byte char).
+    // Cut inside the first byte sequence of the 3-byte CJK test codepoint.
     const charStart = Buffer.byteLength(full.slice(0, full.indexOf('模')), 'utf8');
     const split = charStart + 1;
     const port = await start((req, res) => {

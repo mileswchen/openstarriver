@@ -5050,7 +5050,7 @@ fn session_messages_project_file_changes_from_persisted_log() {
 }
 
 mod vision_degrade_e2e {
-    //! Image gating (dsh pattern): a declared text-only route fails the turn
+    //! Image gating (per-model declaration): a declared text-only route fails the turn
     //! at request assembly with an explicit error; undeclared routes ride
     //! images and the provider's own rejection (CapturingAdapter's
     //! `reject_images`) is the arbiter.
@@ -5192,7 +5192,7 @@ fn vision_model_still_receives_image_blocks() {
     });
 }
 
-/// dsh pattern: a variant declared text-only (`supports_vision: false`)
+/// per-model declaration: a variant declared text-only (`supports_vision: false`)
 /// fails the turn at request assembly — the adapter is never called and the
 /// error names the model. The image stays in the logged message (history
 /// renders it); nothing is silently stripped.

@@ -61,7 +61,7 @@ describe('useTaskStop', () => {
 
   // 2026-10-12 report: the turn had ended long before (host log 09:02 —
   // both Stop clicks resolved "no live agent"), yet the composer stayed on
-  // Stop until the user clicked 新建 task. cancel=false must surface to the
+  // Stop until the user clicked New Task. cancel=false must surface to the
   // owning view so it can drop its stale run state and flip back to Send.
   it('cancel=false fires onNotRunning so a stale Stop state can heal', async () => {
     (window as any).starriver.cancel = vi.fn().mockResolvedValue(false);

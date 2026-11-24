@@ -76,8 +76,8 @@ impl ToolExecutor for BrowserStart {
                 ),
                 None => None,
             };
-            // dsh 式归属：owner 来自执行上下文（agent_id 即 session id），
-            // 模型无法伪造 — terminal_start 同款约束。
+            // Ownership semantics: owner comes from the execution context (agent_id is the session id);
+            // the model cannot forge it — the same constraint as terminal_start.
             let info = service
                 .start(StartOptions {
                     owner: ctx.execution.agent_id.clone(),

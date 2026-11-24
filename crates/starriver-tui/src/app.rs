@@ -1264,7 +1264,7 @@ impl AppState {
                 self.mode = Mode::Approval;
                 Ok(false)
             }
-            // 逐字节实时一致（开放回合快照流）：TUI 同机富客户端，忽略。
+            // Byte-for-byte live consistency (open-turn snapshot stream): TUI is a same-machine rich client; ignore.
             UiEvent::TraceSnapshot { .. } => Ok(false),
 
         }

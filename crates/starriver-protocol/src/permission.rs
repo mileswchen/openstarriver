@@ -24,6 +24,11 @@ pub const PERM_TASK_RUN: &str = "task:run";
 /// (`pluginTask.wait` / `.messages` / `.list`). Decoupled from `session:read`
 /// so a plugin can run tasks without any access to user chats.
 pub const PERM_TASK_READ: &str = "task:read";
+/// WI-252: plugin egress network (`pluginTask.proxyFetch` / `.netPolicy`).
+/// Declared in the plugin manifest's `permissions` to open the bridge for
+/// that frame; the URL-level authority is the separate `net.allow` grant the
+/// host enforces per request. The frame CSP stays `connect-src 'none'`.
+pub const PERM_PLUGIN_NET: &str = "plugin:net";
 pub const PERM_MODELS_READ: &str = "models:read";
 pub const PERM_MODELS_WRITE: &str = "models:write";
 pub const PERM_CREDENTIALS_WRITE: &str = "credentials:write";

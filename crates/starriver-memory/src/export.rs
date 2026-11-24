@@ -60,8 +60,8 @@ pub fn merge_marked_section(content: &str, section: &str) -> Option<String> {
 }
 
 /// Export a project's memories (+ `_global`) into both instruction files in
-/// `dir` (AGENTS.md preferred for -class tools, CLAUDE.md for Claude
-/// Code). Missing files are created containing only the marked section.
+/// `dir` (AGENTS.md preferred for most tools, CLAUDE.md for tools that read
+/// that convention). Missing files are created containing only the marked section.
 /// Returns which files were written.
 pub fn export_to_instruction_files(
     store: &MemoryStore,

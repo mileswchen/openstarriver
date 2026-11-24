@@ -361,7 +361,7 @@ impl LlmProviderSettings {
 pub struct LlmVariantSettings {
     pub id: String,
     pub name: String,
-    /// Per-model image-input declaration (dsh pattern): `None`/`Some(true)`
+    /// Per-model image-input declaration (per-model declaration): `None`/`Some(true)`
     /// = undeclared or declared-vision → requests ride images and the
     /// provider's own error is the arbiter; `Some(false)` = declared
     /// text-only → the request assembly fails loudly when any image block
@@ -510,7 +510,7 @@ impl Settings {
                 );
             }
         }
-        // Advisory repeat-reminder config is fail-loud (DSH rejects bad config
+        // Advisory repeat-reminder config is fail-loud (bad config is rejected
         // at load): catch empty / sub-2 / duplicate thresholds and a zero
         // preview cap here so a bad patch is rejected wholesale instead of
         // panicking at agent construction.

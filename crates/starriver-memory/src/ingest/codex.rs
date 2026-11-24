@@ -1,9 +1,9 @@
-// (Desktop & CLI) history source.
+// Desktop & CLI session-history source.
 //
 // Layout: `~/.sessions/YYYY/MM/DD/rollout-*.jsonl`. Each line is an
 // event; `session_meta` carries the cwd, `response_item` events with
 // `payload.type == "message"` carry the turns. `developer`/`system` roles are
-// 's own instruction plumbing and are skipped.
+// the harness's own instruction plumbing and are skipped.
 
 use std::path::{Path, PathBuf};
 

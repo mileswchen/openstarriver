@@ -1,4 +1,4 @@
-// stopDaemonAndCleanup: explicit user stop ("停止后台服务并退出" / macOS 卸载).
+// stopDaemonAndCleanup: explicit user stop ("Stop background service and quit" / macOS uninstall).
 // No build-identity check — the daemon stops regardless of build. Covers:
 // nothing running; stale info file (port closed); graceful --shutdown success;
 // refusal → SIGTERM/SIGKILL escalation + manual hint; no bundled binary →

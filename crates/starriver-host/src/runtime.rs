@@ -50,8 +50,9 @@ pub struct HostRuntime {
     /// once per process, shared by both extraction pipelines, read out by
     /// `memory.status`.
     pub(crate) memory_budget: Arc<starriver_memory::TokenBudget>,
-    /// 逐字节实时一致（开放回合快照流）：per-session 投影世代
-    /// （compaction/fork/回滚 +1；客户端 epoch 不一致即全量重拉）。
+    /// Byte-for-byte live consistency (open-turn snapshot stream): per-session
+    /// projection generation (+1 on compaction/fork/rollback; a client epoch
+    /// mismatch triggers a full re-pull).
     pub(crate) trace_epochs: Arc<StdMutex<HashMap<String, u64>>>,
     pub(crate) runtime_handle: tokio::runtime::Handle,
     /// BUG-5: start_scheduler_tick idempotence guard.
@@ -62,6 +63,13 @@ pub struct HostRuntime {
     pub(crate) running_sessions: Arc<StdMutex<std::collections::HashSet<String>>>,
     /// BUG-156: turn-end signals backing `session.waitTurn`.
     pub(crate) turn_signals: Arc<TurnSignals>,
+    /// WI-249/BUG-205: boot approval-reconciliation completion gate. The
+    /// reconciliation runs in the background — it never blocks runtime
+    /// construction nor holds the inner lock (a full-log scan across every
+    /// session would otherwise serialize the UI's workspace/session listing).
+    /// `execute` awaits this before starting a turn, preserving the
+    /// "reconcile before anything can execute" invariant.
+    pub(crate) approval_reconciled: tokio::sync::watch::Receiver<bool>,
     /// Agent-scoped reasoning effort overrides ("off"|"low"|"high"|"max").
     /// Session-scoped (not persisted): absent entry = follow the provider's
     /// configured effort. Routes are registered per provider, so two agents
@@ -488,6 +496,7 @@ impl HostRuntime {
         let memory_store = Arc::new(MemoryStore::new(memory_root, MemoryConfig::default()));
         let memory_budget = Arc::new(starriver_memory::TokenBudget::from_env());
         let trace_epochs = Arc::new(StdMutex::new(HashMap::new()));
+        let (approval_reconcile_tx, approval_reconciled) = tokio::sync::watch::channel(false);
         let runtime = Self {
             scheduler_tick_started: Default::default(),
             inner: Arc::new(Mutex::new(Some(RuntimeInner {
@@ -497,6 +506,7 @@ impl HostRuntime {
                 agent,
                 persistence,
                 host_store,
+                plugin_net: Arc::new(crate::plugin_net::PluginNetGuard::new()),
             }))),
             hub,
             provider_registry,
@@ -516,11 +526,38 @@ impl HostRuntime {
             runtime_handle,
             running_sessions: Arc::new(StdMutex::new(std::collections::HashSet::new())),
             turn_signals: Arc::new(TurnSignals::default()),
+            approval_reconciled,
             subagent_tool_handle: Arc::new(StdMutex::new(None)),
         };
         // LLP §4.4: declare every configured provider in the kernel directory
         // and wire discovery even before any route is activated.
         runtime.register_llm_directory();
+        // WI-249/BUG-205: boot reconciliation — close `approval/asked` pairs
+        // left dangling by the previous process. Backgrounded: the scan
+        // decompresses every session's full log, so it must NOT block runtime
+        // construction (the first workspace/session listing) nor hold the
+        // inner lock (which would serialize that listing — both list APIs lock
+        // inner). Clone the persistence handle under a brief lock, then scan
+        // lock-free. `execute` awaits `approval_reconciled` before any turn,
+        // preserving "reconcile before anything can execute".
+        {
+            let inner = runtime.inner.clone();
+            let handle = runtime.runtime_handle.clone();
+            handle.spawn(async move {
+                let persistence = {
+                    let l = inner.lock().await;
+                    match l.as_ref() {
+                        Some(inner) => inner.persistence.clone(),
+                        None => {
+                            let _ = approval_reconcile_tx.send(true);
+                            return;
+                        }
+                    }
+                };
+                crate::sessions::reconcile_dangling_approvals(&persistence).await;
+                let _ = approval_reconcile_tx.send(true);
+            });
+        }
         // subagent parity: the in-process subagent driver tool.
         runtime.install_subagent_tool();
         // WI-67 user-questions: the agent can ask the user mid-run.
@@ -1420,7 +1457,7 @@ impl HostRuntime {
             .unwrap_or_else(|| "mock".into())
     }
 
-    /// Per-model image-input declaration (dsh pattern): does this route's
+    /// Per-model image-input declaration (per-model declaration): does this route's
     /// variant declare itself text-only? `false` = undeclared or declared
     /// vision — images ride the wire and the provider's own error is the
     /// arbiter. Unknown providers/variants are permissive.
@@ -1612,6 +1649,15 @@ impl HostRuntime {
         }
         let model_override = config.model.clone();
         let model_id = config.model_id.clone();
+        // WI-254: the kernel re-derives the provider from the model key
+        // (provider_entry_for); a bare variant id falls back to a
+        // settings-order scan and lands on the WRONG provider when two
+        // catalogs list the same variant (qwen4-max under both the `qwen`
+        // preset and a custom `bailian` → turns rode `qwen`, whose adapter
+        // this run never activated → NO_ADAPTER). Forward the profile's
+        // composite `providerId/variantId` so the exact BUG-43 match wins.
+        let kernel_model_key =
+            resolve_kernel_model_key(model_id.as_deref(), model_override.as_deref());
         let project_id = config.project_id.clone();
         let working_dir = config.working_dir.clone();
         // Isolation for this run: the caller's per-session toggle wins, the
@@ -1775,7 +1821,7 @@ impl HostRuntime {
         }
 
         let (event_tx, event_rx) = tokio::sync::broadcast::channel::<serde_json::Value>(1024);
-        // P2 precheck (dsh pattern): the activated model variant's
+        // P2 precheck (per-model declaration): the activated model variant's
         // declaration is a claim about the endpoint, not a check of it.
         // Undeclared/true → images ride the wire and the provider's own
         // error arbitrates; declared text-only (`supports_vision: false`) →
@@ -1809,13 +1855,20 @@ impl HostRuntime {
         let running_guard = running_guard;
         let spawn_agent_preset = agent_preset;
         let spawn_agent_name = agent_name.clone();
-        // 逐字节实时一致：快照上下文在 spawn 前构建（避免借用逃逸）。
+        let approval_reconciled = self.approval_reconciled.clone();
+        // Byte-for-byte live consistency: build the snapshot context before the
+        // spawn (avoids a borrow escaping).
         let trace_ctx = Some(crate::plugin_kernel::TraceSnapContext {
             inner: Arc::clone(&inner_arc),
             epochs: Arc::clone(&self.trace_epochs),
         });
         handle.spawn(async move {
             let mut running_guard = running_guard;
+            // WI-249/BUG-205: no turn runs before boot approval reconciliation
+            // closes the previous process's dangling asks. The gate is a watch
+            // channel — it holds no inner lock, so the UI's workspace/session
+            // listing stays responsive while the background scan finishes.
+            await_approval_reconcile(approval_reconciled.clone()).await;
             let kernel = {
                 let l = inner_arc.lock().await;
                 l.as_ref().map(|i| i.agent.clone())
@@ -2056,12 +2109,12 @@ impl HostRuntime {
                     .execute_with_meta_in(
                         round_task.clone(),
                         Some(sid.clone()),
-                        model_override.clone(),
+                        kernel_model_key.clone(),
                         event_tx.clone(),
                         cancel.clone(),
                         Some(crate::plugin_kernel::HostSessionMeta {
                             title: Some(crate::helpers::truncate_title(&round_task, 40)),
-                            // Declared-text-only model (dsh pattern): the
+                            // Declared-text-only model (per-model declaration): the
                             // request-assembly projection rejects any image
                             // block with an explicit error instead of
                             // putting image data on the wire.
@@ -2260,17 +2313,19 @@ impl HostRuntime {
         // The runtime lives as long as HostRuntime itself.
         let l = self.inner.lock().await;
         if let Some(inner) = l.as_ref() {
-            // 最后防线：宿主退出前回收全部后台终端。否则只能指望 OS 在
-            // 进程退出时对 PTY 前台进程组发 SIGHUP——孤儿化的后台进程组
-            // （不响应 HUP 的 dev server 等）会活过宿主生命周期。
-            // kill 是 bounded-quiescent 的（SIGKILL 后通常一次轮询即退出），
-            // 放在最终 flush 前不影响退出路径。
+            // Last line of defense: reclaim every background terminal before the
+            // host exits. Otherwise we can only hope the OS sends SIGHUP to the
+            // PTY foreground process group on exit — orphaned background process
+            // groups (dev servers that ignore HUP, etc.) would outlive the host.
+            // kill is bounded-quiescent (after SIGKILL it usually exits within one
+            // poll), so running it before the final flush does not affect exit.
             let killed = inner.agent.terminal_service.kill_all();
             if killed > 0 {
                 tracing::info!(killed, "background terminals reaped at host shutdown");
             }
-            // 浏览器会话回收：headless Chrome 子进程与 profile 目录不会
-            // 随宿主退出自动清理，必须在最终 flush 前显式收割。
+            // Browser session reclaim: headless Chrome child processes and their
+            // profile dirs are not cleaned up automatically on host exit; reap them
+            // explicitly before the final flush.
             let reaped = inner.agent.browser_service.kill_all().await;
             if reaped > 0 {
                 tracing::info!(reaped, "browser sessions reaped at host shutdown");
@@ -2298,9 +2353,142 @@ fn validate_api_format(api_format: &str) -> Result<(), String> {
     }
 }
 
+/// WI-254/BUG-203: decide the model key handed to the kernel. The kernel
+/// re-derives the owning provider from this key (`provider_entry_for`); a bare
+/// variant id falls back to a settings-order scan and lands on the WRONG
+/// provider when two catalogs list the same variant. When the profile names a
+/// provider (`model_id`) and the override is a bare variant, forward the
+/// composite `providerId/variantId` so the exact BUG-43 match wins. Any other
+/// shape passes the override through unchanged (already composite, or no
+/// provider/override to combine).
+pub(crate) fn resolve_kernel_model_key(
+    model_id: Option<&str>,
+    model_override: Option<&str>,
+) -> Option<String> {
+    match (model_id, model_override) {
+        (Some(pid), Some(vid)) if !vid.contains('/') => Some(format!("{pid}/{vid}")),
+        _ => model_override.map(str::to_string),
+    }
+}
+
+/// WI-249/BUG-205: await the boot approval-reconciliation completion gate.
+/// Returns immediately once the background scan has signalled `true`; if the
+/// sender is dropped before completion (runtime teardown) the `changed()`
+/// error breaks the wait so a turn is never wedged forever. Holds no inner
+/// lock — the UI's workspace/session listing stays responsive throughout.
+pub(crate) async fn await_approval_reconcile(mut rx: tokio::sync::watch::Receiver<bool>) {
+    while !*rx.borrow_and_update() {
+        if rx.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── BUG-203 (WI-254): composite model-key forwarding ──────────────
+
+    #[test]
+    fn kernel_key_combines_named_provider_and_bare_variant() {
+        assert_eq!(
+            resolve_kernel_model_key(Some("bailian"), Some("qwen4-max")),
+            Some("bailian/qwen4-max".to_string())
+        );
+    }
+
+    #[test]
+    fn kernel_key_passes_through_an_already_composite_override() {
+        // The override already names a provider — never double-prefix it.
+        assert_eq!(
+            resolve_kernel_model_key(Some("bailian"), Some("zhipu/glm-5.3")),
+            Some("zhipu/glm-5.3".to_string())
+        );
+    }
+
+    #[test]
+    fn kernel_key_without_a_named_provider_passes_the_override() {
+        assert_eq!(
+            resolve_kernel_model_key(None, Some("qwen4-max")),
+            Some("qwen4-max".to_string())
+        );
+    }
+
+    #[test]
+    fn kernel_key_without_an_override_stays_none() {
+        assert_eq!(resolve_kernel_model_key(Some("bailian"), None), None);
+        assert_eq!(resolve_kernel_model_key(None, None), None);
+    }
+
+    #[test]
+    fn kernel_key_guard_is_only_on_the_variant_slash() {
+        // An empty provider id is still `Some`; the match guard inspects only
+        // whether the variant contains '/'. Pins the exact branch condition.
+        assert_eq!(
+            resolve_kernel_model_key(Some(""), Some("m")),
+            Some("/m".to_string())
+        );
+    }
+
+    #[test]
+    fn kernel_key_forwards_an_empty_variant_as_a_trailing_slash() {
+        // An empty override is still `Some` and contains no '/', so the guard
+        // builds `pid/`; the kernel's BUG-143 fill later resolves the default.
+        assert_eq!(
+            resolve_kernel_model_key(Some("bailian"), Some("")),
+            Some("bailian/".to_string())
+        );
+    }
+
+    // ── BUG-205 (WI-249): boot reconciliation completion gate ─────────
+
+    #[tokio::test]
+    async fn reconcile_gate_returns_immediately_when_already_complete() {
+        let (tx, rx) = tokio::sync::watch::channel(true);
+        // Already signalled: the gate must not wait.
+        await_approval_reconcile(rx).await;
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn reconcile_gate_waits_until_the_scan_signals_completion() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let waiter = tokio::spawn(await_approval_reconcile(rx));
+        // Not complete yet — the waiter must still be pending.
+        assert!(!waiter.is_finished());
+        tx.send(true).unwrap();
+        waiter.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconcile_gate_releases_when_the_sender_is_dropped() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let waiter = tokio::spawn(await_approval_reconcile(rx));
+        assert!(!waiter.is_finished());
+        // Teardown before completion: changed() errors and the wait breaks,
+        // so a turn is never wedged forever.
+        drop(tx);
+        waiter.await.unwrap();
+    }
+
+    #[test]
+    fn boot_reconciliation_completes_in_the_background_and_signals_the_gate() {
+        crate::testutil::with_temp_home(|home| {
+            std::fs::create_dir_all(home.join(".starriver")).unwrap();
+            let rt = HostRuntime::new(None).expect("runtime constructs");
+            // BUG-205: construction must NOT block on the scan; the background
+            // task signals completion afterwards. Await the gate here (empty
+            // store → the scan finishes almost immediately).
+            let mut rx = rt.approval_reconciled.clone();
+            rt.runtime_handle.block_on(async move {
+                while !*rx.borrow_and_update() {
+                    rx.changed().await.expect("sender stays alive until completion");
+                }
+            });
+            assert!(*rt.approval_reconciled.borrow(), "the boot gate must end signalled");
+        });
+    }
 
     /// 2026-10-04 regression: initial MCP discovery must stay off the
     /// `HostRuntime::new` critical path. Inline discovery made the Electron

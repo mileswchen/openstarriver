@@ -28,6 +28,7 @@ pub mod plan_mode;
 pub mod plan_review_bridge;
 pub mod plugin;
 pub mod plugin_kernel;
+pub mod plugin_net;
 pub mod plugin_task;
 pub mod preset;
 pub mod prompt_override;
@@ -136,6 +137,9 @@ pub struct RuntimeInner {
     pub persistence: Arc<starriver_session_persistence::SqliteSessionPersistence>,
     /// Host-owned session metadata: workspace registry + fail-soft projection.
     pub host_store: Arc<crate::host_store::HostStore>,
+    /// WI-252: plugin egress network state (shared client + kill switches +
+    /// rate windows). Arc so proxyFetch can drop the runtime lock before IO.
+    pub plugin_net: Arc<crate::plugin_net::PluginNetGuard>,
     /// WI-97: goal state per session (objective-driven autonomous loop).
     pub goals: std::sync::Mutex<std::collections::HashMap<String, GoalState>>,
 }

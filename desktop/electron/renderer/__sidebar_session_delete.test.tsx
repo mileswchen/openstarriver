@@ -1,5 +1,5 @@
 /// <reference types="vitest/globals" />
-// Tasks-section session delete: the 对话 (Chats) and 定时运行 (Scheduled runs)
+// Tasks-section session delete: the Chats and Scheduled runs
 // rows must let the user hard-delete a session — trash button arms a
 // confirmation modal, confirm fires session.delete, cancel is a no-op.
 // A live run's session is not deletable until the run settles (the button

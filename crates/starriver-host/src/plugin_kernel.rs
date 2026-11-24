@@ -29,17 +29,19 @@ pub struct WebToolOverrides {
     pub web_search: Option<ToolDefinition>,
 }
 
-/// 逐字节实时一致（开放回合快照流）：由 host 注入的快照上下文。
-/// `inner` 走与 session.trace 完全相同的账本读取路径（load_projection_parts）；
-/// `epochs` 是 per-session 投影世代表（compaction/fork/回滚时递增，中继亦会
-/// 在见到 Compaction 事件时递增）。
+/// Byte-for-byte live consistency (open-turn snapshot stream): the snapshot
+/// context injected by the host. `inner` uses exactly the same ledger read
+/// path as session.trace (load_projection_parts); `epochs` is the per-session
+/// projection-generation table (bumped on compaction/fork/rollback, and also
+/// by the relay when it sees a Compaction event).
 #[derive(Clone)]
 pub struct TraceSnapContext {
     pub inner: Arc<tokio::sync::Mutex<Option<crate::RuntimeInner>>>,
     pub epochs: Arc<StdMutex<HashMap<String, u64>>>,
 }
 
-/// 每次运行的快照源（id 在 execute_with_meta_in 内才确定，故运行时构建）。
+/// Per-run snapshot source (the id is only fixed inside execute_with_meta_in,
+/// so this is built at run time).
 struct TraceSnapSource {
     session_id: String,
     ctx: TraceSnapContext,
@@ -63,8 +65,8 @@ impl TraceSnapSource {
         map.insert(self.session_id.clone(), next);
     }
 
-    /// 结构事件后计算开放回合快照：无 user 条目（回合未开始）或内容与上次
-    /// 相同 → None。
+    /// Compute the open-turn snapshot after a structural event: no user entry
+    /// (turn not started) or content identical to last time → None.
     async fn compute(&mut self) -> Option<UiEvent> {
         let inner = self.ctx.inner.clone();
         let session_id = self.session_id.clone();
@@ -82,7 +84,7 @@ impl TraceSnapSource {
             slice,
             &tool_names,
         )?;
-        // 相同内容跳过：对序列化文本做哈希。
+        // Identical-content skip: hash the serialized text.
         use std::hash::{Hash, Hasher};
         let text = serde_json::to_string(&event).ok()?;
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -101,7 +103,7 @@ impl TraceSnapSource {
 pub struct HostSessionMeta {
     /// Display title; the host derives it from the task when absent.
     pub title: Option<String>,
-    /// dsh-pattern per-model declaration: `true` when the activated variant
+    /// per-model declaration: `true` when the activated variant
     /// declares itself text-only (`supports_vision: false` in settings).
     /// Request assembly then rejects any image block with an explicit error
     /// naming the model, instead of putting image data on the wire.
@@ -226,7 +228,7 @@ pub fn coding_preset(settings: &crate::settings::Settings) -> AgentOptions {
         max_parallel_tool_calls: settings.agent.max_parallel_tool_calls,
         // BUG-138: per-turn tool-call budget (repeat breaker) from settings.
         turn_tool_call_budget: settings.agent.turn_tool_call_budget,
-        // Advisory repeat-tool reminder (DSH parity) from settings; unset
+        // Advisory repeat-tool reminder (reference parity) from settings; unset
         // keeps engine defaults. Purely advisory — never blocks a call.
         repeat_reminder: settings.agent.repeat_reminder_options(),
         // WI-1: projection config/resolver are injected per-run in
@@ -702,7 +704,7 @@ impl PluginKernel {
         let _factory_handle = registry
             .set_factory(Arc::clone(&loop_service) as Arc<dyn AgentFactory>)
             .unwrap();
-        // Approvals wait indefinitely (dsh/codex parity): a request settles
+        // Approvals wait indefinitely (reference parity): a request settles
         // only on an answer or a dropped client channel — never a clock.
         let approval_bridge = Arc::new(crate::approval_bridge::ApprovalBridge::new(Arc::clone(
             &registry,
@@ -1756,8 +1758,9 @@ impl PluginKernel {
         images: Vec<starriver_kernel::llm::ContentBlock>,
         agent_preset: Option<String>,
         permission_preset: Option<crate::preset::Preset>,
-        // 逐字节实时一致（开放回合快照流）：Some 时中继对结构事件计算
-        // 开放回合投影并广播 TraceSnapshot；None 保持既有行为。
+        // Byte-for-byte live consistency (open-turn snapshot stream): when Some,
+        // the relay computes the open-turn projection on structural events and
+        // broadcasts TraceSnapshot; None keeps the existing behavior.
         trace: Option<TraceSnapContext>,
         // WI-216: the submitter's correlation id — rides the logged user
         // message (`MessageSource::User { rpc_id }`) so the UiEvent bridge
@@ -1770,7 +1773,7 @@ impl PluginKernel {
             .map(SessionId)
             .unwrap_or_else(|| SessionId(uuid::Uuid::new_v4().to_string()));
         let mut agent_options = self.default_agent_options(model);
-        // Declared-text-only model (dsh pattern): request assembly must
+        // Declared-text-only model (per-model declaration): request assembly must
         // reject any image block with an explicit error — the declaration is
         // a claim about the endpoint, and this enforces it before the wire.
         // The budgets are inert here (the reject check short-circuits before
@@ -2028,7 +2031,8 @@ impl PluginKernel {
         // Register listeners synchronously so no event is missed between the
         // publication above and the followup below.
         let mut stream = bridge::subscribe_ui_events(&bus, &agent);
-        // 逐字节实时一致：结构事件后把开放回合投影作为快照广播（Some 时）。
+        // Byte-for-byte live consistency: broadcast the open-turn projection as
+        // a snapshot after structural events (when Some).
         let mut snap_source = trace.as_ref().map(|ctx| TraceSnapSource {
             session_id: id.0.clone(),
             ctx: ctx.clone(),
@@ -2066,8 +2070,9 @@ impl PluginKernel {
                                     break;
                                 }
                             }
-                            // Compaction 重写历史：递增投影世代（客户端据此全量重拉），
-                            // 本事件自身不产快照。
+                            // Compaction rewrites history: bump the projection
+                            // generation (clients full-repull on it); this event
+                            // itself produces no snapshot.
                             if matches!(event, UiEvent::Compaction { .. }) {
                                 if let Some(s) = snap_source.as_mut() {
                                     s.bump_epoch();
@@ -2124,9 +2129,11 @@ impl PluginKernel {
                 }
             }
         });
-        // 逐字节实时一致：独立会话账本快照任务（user/message 即时、250ms 去抖、
-        // turn/end 终帧）——UiEvent 中继触发不到 user/message，会让用户消息与
-        // 首个思考行延迟到首个工具/正文事件（实测 30s+）。
+        // Byte-for-byte live consistency: an independent session-ledger snapshot
+        // task (user/message immediate, 250ms debounce, turn/end final frame) —
+        // the UiEvent relay never fires for user/message, which would delay the
+        // user message and first thinking row until the first tool/text event
+        // (measured 30s+).
         if let Some(ctx) = trace {
             tokio::spawn(Self::run_trace_snapshot_task(
                 bus.clone(),
@@ -2157,11 +2164,13 @@ impl PluginKernel {
         Ok(KernelExecution { handle })
     }
 
-    /// 逐字节实时一致：会话账本变更 → 开放回合投影快照（250ms 去抖广播）。
-    /// 独立于 UiEvent 中继：user/message 等账本事件不产生 UiEvent（translate
-    /// 丢弃），中继触发会让「用户消息+首个思考行」延迟到首个工具/正文事件
-    /// （实测 30s+）。这里以会话总线为准，250ms 内的变更合并为一次快照；
-    /// turn/end 发终帧后退出。
+    /// Byte-for-byte live consistency: session-ledger change → open-turn
+    /// projection snapshot (250ms debounced broadcast). Independent of the
+    /// UiEvent relay: ledger events like user/message produce no UiEvent
+    /// (translate drops them), so relay-triggering would delay the user message
+    /// + first thinking row until the first tool/text event (measured 30s+).
+    /// This rides the session bus instead, coalescing changes within 250ms into
+    /// one snapshot; it exits after emitting the turn/end final frame.
     #[allow(clippy::too_many_arguments)]
     async fn run_trace_snapshot_task(
         bus: cordis_rslite::EventBus,
@@ -2283,9 +2292,15 @@ impl PluginKernel {
             provider_entry_for(&settings, m).map(|p| p.id.clone())
         });
         options.provider = Some(owning_provider.unwrap_or_else(|| self.default_provider()));
+        // WI-254: the composite `providerId/variantId` key named the provider
+        // (exact BUG-43 match above); the wire model must stay the bare
+        // variant — strip the prefix once the provider is resolved.
+        if let Some((_, variant)) = model.as_deref().and_then(|m| m.split_once('/')) {
+            options.model = Some(variant.to_string());
+        }
         // BUG-143: a null-model run used to carry the caller/preset's literal
         // "mock" to the wire (provider = first registered → the provider
-        // answered "model not found", e.g. Zhipu 1211 模型不存在 on scheduled
+        // answered "model not found", e.g. Zhipu 1211 "model does not exist" on scheduled
         // Run Now). A run that reaches the wire without a concrete model now
         // resolves its provider's default model; the literal placeholder only
         // survives for the mock provider itself (tests).
@@ -2329,12 +2344,20 @@ impl PluginKernel {
         // exactly the preset-era behavior.
         if options.context_window.is_none() {
             let settings = crate::settings::load_settings();
-            if let Some(model_id) = options.model.as_deref() {
-                if let Some(window) = provider_entry_for(&settings, model_id)
-                    .map(|p| p.generation_config().context_window)
-                {
-                    options.context_window = Some(window as u64);
-                }
+            // WI-254: prefer the caller's composite key (exact provider) —
+            // the normalized options.model is a bare variant and the
+            // settings-order scan may name a different catalog that lists
+            // the same variant. Bare/None callers fall back to the
+            // BUG-143-filled effective model.
+            let route_key = model
+                .as_deref()
+                .filter(|m| m.contains('/'))
+                .or(options.model.as_deref());
+            if let Some(window) = route_key
+                .and_then(|m| provider_entry_for(&settings, m))
+                .map(|p| p.generation_config().context_window)
+            {
+                options.context_window = Some(window as u64);
             }
         }
         let mcp_names = self.mcp_tool_names();
@@ -2753,7 +2776,7 @@ pub mod bridge {
                 // shadowing the original, which stays in the log). That is
                 // not new activity: forwarding it as a fresh
                 // `UiEvent::ToolResult` made the desktop render an orphan
-                // "Tool / 成功" card no live ToolCallStart could pair with.
+                // "Tool / success" card no live ToolCallStart could pair with.
                 // Fresh results ride `Some(Append)` and keep flowing.
                 if matches!(
                     event.surface_op,
@@ -2930,7 +2953,7 @@ mod tests {
     /// BUG-147: compaction prune rewrites an old tool result in place
     /// (SurfaceOp::Replace). The relay must not surface that rewrite as a
     /// fresh UiEvent::ToolResult — the desktop rendered it as an orphan
-    /// "Tool / 成功" card no live ToolCallStart could pair with. Fresh
+    /// "Tool / success" card no live ToolCallStart could pair with. Fresh
     /// (Append) results keep flowing with their call identity.
     #[test]
     fn translate_drops_prune_rewritten_tool_results() {
@@ -3273,6 +3296,296 @@ mod tests {
         // unknown variant, both fall through to the preset default.
         assert_eq!(settings_max_tokens_for(&settings, "m1"), None);
         assert_eq!(settings_max_tokens_for(&settings, "nope"), None);
+    }
+
+    /// WI-254 regression: the same variant id listed under TWO providers
+    /// (built-in `qwen` preset first, custom `bailian` second). The host
+    /// execute path forwards the agent profile's composite
+    /// `providerId/variantId`; the kernel must exact-match the named
+    /// provider (BUG-43), ride ITS adapter, keep the bare variant on the
+    /// wire, and take max_tokens/context_window from the named entry —
+    /// not from whichever catalog happens to list the variant first.
+    #[tokio::test]
+    async fn composite_model_key_binds_the_named_provider() {
+        crate::testutil::with_temp_home(|home| {
+            let dir = home.join(".starriver");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("settings.yaml"),
+                "---\nllm:\n  providers:\n    - id: qwen\n      name: QWen\n      model_type: cloud\n      provider_type: openai-compat\n      base_url: https://q.example/v1\n      default_model: qwen3.8-max\n      models:\n        - id: qwen3.8-max\n          name: qwen3.8-max\n        - id: qwen4-max\n          name: qwen4-max\n    - id: bailian\n      name: bailian\n      model_type: cloud\n      provider_type: openai-compat\n      base_url: https://b.example/v1\n      default_model: qwen4-max\n      max_tokens: 128000\n      context_window: 1000000\n      models:\n        - id: qwen4-max\n          name: qwen4-max\n",
+            )
+            .unwrap();
+
+            let (bus, ctx) = bus_and_ctx();
+            let persistence = temp_persistence(&bus);
+            let kernel = PluginKernel::new(ctx, bus, persistence);
+
+            // Composite key: the profile-named provider wins.
+            let options = kernel.default_agent_options(Some("bailian/qwen4-max".into()));
+            assert_eq!(options.provider.as_deref(), Some("bailian"));
+            assert_eq!(options.model.as_deref(), Some("qwen4-max"));
+            assert_eq!(options.max_tokens, Some(128000));
+            assert_eq!(options.context_window, Some(1000000));
+
+            // Bare variant keeps the legacy settings-order scan fallback.
+            let options = kernel.default_agent_options(Some("qwen4-max".into()));
+            assert_eq!(options.provider.as_deref(), Some("qwen"));
+            assert_eq!(options.model.as_deref(), Some("qwen4-max"));
+        });
+    }
+
+    /// BUG-203 (WI-254) branch matrix fixture: TWO catalogs list the same
+    /// variant `qwen4-max` — built-in `qwen` FIRST (max_tokens 4096, window
+    /// 200000), custom `bailian` SECOND (max_tokens 128000, window 1000000).
+    /// A bare variant must ride the settings-order winner (`qwen`); a
+    /// composite `bailian/...` must ride the named provider instead.
+    const TWO_CATALOG_SETTINGS: &str = "---\nllm:\n  providers:\n    - id: qwen\n      name: QWen\n      model_type: cloud\n      provider_type: openai-compat\n      base_url: https://q.example/v1\n      default_model: qwen3.8-max\n      max_tokens: 4096\n      context_window: 200000\n      models:\n        - id: qwen3.8-max\n          name: qwen3.8-max\n        - id: qwen4-max\n          name: qwen4-max\n    - id: bailian\n      name: bailian\n      model_type: cloud\n      provider_type: openai-compat\n      base_url: https://b.example/v1\n      default_model: qwen4-max\n      max_tokens: 128000\n      context_window: 1000000\n      models:\n        - id: qwen4-max\n          name: qwen4-max\n";
+
+    fn write_settings(home: &std::path::Path, yaml: &str) {
+        let dir = home.join(".starriver");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.yaml"), yaml).unwrap();
+    }
+
+    fn make_kernel() -> PluginKernel {
+        let (bus, ctx) = bus_and_ctx();
+        let persistence = temp_persistence(&bus);
+        PluginKernel::new(ctx, bus, persistence)
+    }
+
+    #[tokio::test]
+    async fn composite_key_binds_named_provider_and_strips_the_wire_model() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            let options = kernel.default_agent_options(Some("bailian/qwen4-max".into()));
+            // Named provider wins over the first-listed catalog...
+            assert_eq!(options.provider.as_deref(), Some("bailian"));
+            // ...and the wire model is the BARE variant (prefix stripped).
+            assert_eq!(options.model.as_deref(), Some("qwen4-max"));
+        });
+    }
+
+    #[tokio::test]
+    async fn composite_key_takes_max_tokens_from_the_named_provider() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            let options = kernel.default_agent_options(Some("bailian/qwen4-max".into()));
+            // bailian's 128000, not qwen's 4096 (the settings-order winner).
+            assert_eq!(options.max_tokens, Some(128000));
+        });
+    }
+
+    #[tokio::test]
+    async fn composite_key_takes_context_window_from_the_named_provider() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            let options = kernel.default_agent_options(Some("bailian/qwen4-max".into()));
+            // The composite route_key resolves bailian's window, not the
+            // bare-variant scan's qwen window.
+            assert_eq!(options.context_window, Some(1000000));
+        });
+    }
+
+    #[tokio::test]
+    async fn bare_variant_keeps_the_settings_order_scan() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            let options = kernel.default_agent_options(Some("qwen4-max".into()));
+            // No provider named → first catalog listing the variant wins.
+            assert_eq!(options.provider.as_deref(), Some("qwen"));
+            assert_eq!(options.model.as_deref(), Some("qwen4-max"));
+            assert_eq!(options.max_tokens, Some(4096));
+            assert_eq!(options.context_window, Some(200000));
+        });
+    }
+
+    #[tokio::test]
+    async fn composite_with_unknown_provider_falls_back_to_the_variant_scan() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            // `nosuch` is not a configured provider: provider_entry_for's
+            // exact match misses, so the variant-only scan picks qwen; the
+            // prefix is still stripped off the wire model.
+            let options = kernel.default_agent_options(Some("nosuch/qwen4-max".into()));
+            assert_eq!(options.provider.as_deref(), Some("qwen"));
+            assert_eq!(options.model.as_deref(), Some("qwen4-max"));
+        });
+    }
+
+    #[tokio::test]
+    async fn composite_multi_slash_variant_strips_only_the_first_segment() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            // split_once('/') peels exactly one segment: provider `bailian`,
+            // wire model `a/b`. provider_entry_for's exact id match still wins.
+            let options = kernel.default_agent_options(Some("bailian/a/b".into()));
+            assert_eq!(options.provider.as_deref(), Some("bailian"));
+            assert_eq!(options.model.as_deref(), Some("a/b"));
+        });
+    }
+
+    #[tokio::test]
+    async fn none_model_does_not_strip_and_defaults_the_provider() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            // No override → nothing to split; the provider falls back to the
+            // first registered route (none here → "mock").
+            let options = kernel.default_agent_options(None);
+            assert_eq!(options.provider.as_deref(), Some("mock"));
+        });
+    }
+
+    #[tokio::test]
+    async fn bare_variant_unique_to_one_provider_binds_it() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            // qwen3.8-max lives only in the qwen catalog — unambiguous.
+            let options = kernel.default_agent_options(Some("qwen3.8-max".into()));
+            assert_eq!(options.provider.as_deref(), Some("qwen"));
+            assert_eq!(options.model.as_deref(), Some("qwen3.8-max"));
+        });
+    }
+
+    #[tokio::test]
+    async fn composite_empty_variant_resolves_the_provider_default_model() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            // `bailian/` splits to an empty wire model; the provider is still
+            // named exactly, and BUG-143 fills the empty model with bailian's
+            // default rather than sending a blank model to the wire.
+            let options = kernel.default_agent_options(Some("bailian/".into()));
+            assert_eq!(options.provider.as_deref(), Some("bailian"));
+            assert_eq!(options.model.as_deref(), Some("qwen4-max"));
+        });
+    }
+
+    #[tokio::test]
+    async fn composite_mock_variant_resolves_the_provider_default_model() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let kernel = make_kernel();
+            // A literal `mock` variant on a real provider is the BUG-143
+            // placeholder: strip names bailian, then the default replaces it.
+            let options = kernel.default_agent_options(Some("bailian/mock".into()));
+            assert_eq!(options.provider.as_deref(), Some("bailian"));
+            assert_eq!(options.model.as_deref(), Some("qwen4-max"));
+        });
+    }
+
+    // ── provider_entry_for: exact-match vs variant-scan decision ──────
+
+    #[test]
+    fn provider_entry_for_composite_exact_match_beats_settings_order() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let settings = crate::settings::load_settings();
+            assert_eq!(
+                provider_entry_for(&settings, "bailian/qwen4-max").map(|p| p.id.as_str()),
+                Some("bailian")
+            );
+        });
+    }
+
+    #[test]
+    fn provider_entry_for_bare_variant_uses_settings_order() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let settings = crate::settings::load_settings();
+            assert_eq!(
+                provider_entry_for(&settings, "qwen4-max").map(|p| p.id.as_str()),
+                Some("qwen")
+            );
+        });
+    }
+
+    #[test]
+    fn provider_entry_for_unknown_provider_falls_back_to_the_variant_scan() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let settings = crate::settings::load_settings();
+            assert_eq!(
+                provider_entry_for(&settings, "nosuch/qwen4-max").map(|p| p.id.as_str()),
+                Some("qwen")
+            );
+        });
+    }
+
+    #[test]
+    fn provider_entry_for_composite_still_names_a_provider_with_an_unlisted_variant() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let settings = crate::settings::load_settings();
+            // The exact provider-id match wins even if the variant is not in
+            // its catalog — the key NAMES the provider.
+            assert_eq!(
+                provider_entry_for(&settings, "bailian/not-listed").map(|p| p.id.as_str()),
+                Some("bailian")
+            );
+        });
+    }
+
+    #[test]
+    fn provider_entry_for_unknown_variant_and_provider_is_none() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, TWO_CATALOG_SETTINGS);
+            let settings = crate::settings::load_settings();
+            assert!(provider_entry_for(&settings, "nosuch/not-listed").is_none());
+            assert!(provider_entry_for(&settings, "no-such-model").is_none());
+        });
+    }
+
+    // ── BUG-203: generation-config routing edge branches ──────────────
+
+    /// Explicit `settings.agent.context_window` is forwarded by the preset,
+    /// so the `context_window.is_none()` route-key block is SKIPPED entirely.
+    const EXPLICIT_WINDOW_SETTINGS: &str = "---\nagent:\n  context_window: 55555\nllm:\n  providers:\n    - id: bailian\n      name: bailian\n      model_type: cloud\n      provider_type: openai-compat\n      base_url: https://b.example/v1\n      default_model: qwen4-max\n      context_window: 1000000\n      models:\n        - id: qwen4-max\n          name: qwen4-max\n";
+
+    #[tokio::test]
+    async fn explicit_settings_context_window_outranks_the_provider_route() {
+        crate::testutil::with_temp_home(|home| {
+            write_settings(home, EXPLICIT_WINDOW_SETTINGS);
+            let kernel = make_kernel();
+            let options = kernel.default_agent_options(Some("bailian/qwen4-max".into()));
+            // The preset already carried 55555 → the provider's 1000000 must
+            // NOT override it.
+            assert_eq!(options.context_window, Some(55555));
+        });
+    }
+
+    #[tokio::test]
+    async fn provider_without_a_window_gets_the_platform_default() {
+        crate::testutil::with_temp_home(|home| {
+            // A custom provider (not a builtin zhipu/glm route) that declares
+            // no window falls back to the platform default, not None.
+            write_settings(home, "---\nllm:\n  providers:\n    - id: custom\n      name: custom\n      model_type: cloud\n      provider_type: openai-compat\n      base_url: https://c.example/v1\n      default_model: m1\n      models:\n        - id: m1\n          name: m1\n");
+            let kernel = make_kernel();
+            let options = kernel.default_agent_options(Some("custom/m1".into()));
+            assert_eq!(
+                options.context_window,
+                Some(starriver_kernel::llm::DEFAULT_MODEL_CONTEXT_WINDOW as u64)
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn absent_provider_max_tokens_leaves_the_preset_value() {
+        crate::testutil::with_temp_home(|home| {
+            // bailian here declares NO max_tokens → settings_max_tokens_for
+            // returns None and the preset's value is not replaced by 128000.
+            write_settings(home, EXPLICIT_WINDOW_SETTINGS);
+            let kernel = make_kernel();
+            let options = kernel.default_agent_options(Some("bailian/qwen4-max".into()));
+            assert_ne!(options.max_tokens, Some(128000));
+        });
     }
 
     /// BUG-43 regression: a `providerId/variantId` composite key NAMES its

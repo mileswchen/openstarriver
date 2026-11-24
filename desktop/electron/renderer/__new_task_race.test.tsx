@@ -1,5 +1,5 @@
 /// <reference types="vitest/globals" />
-// 2026-11-01 "新建 task 弹出旧会话": leaving a session via 新建任务 must land
+// 2026-11-01 "New Task pops the old session": leaving a session via New Task must land
 // on the New Task screen and STAY there. Two resurrection vectors were live:
 //   1. An in-flight getSessionMessages for the closed session resolved after
 //      the clear — its generation guard is only advanced by a NEWER load, so
@@ -99,7 +99,7 @@ describe('new task: the closed session must not pop back up', () => {
     fireEvent.click(screen.getByText('Task A'));
     await waitFor(() => expect(window.starriver.getSessionMessages).toHaveBeenCalledWith('s-a'));
 
-    // Leave via 新建任务 while the load is still pending.
+    // Leave via New Task while the load is still pending.
     await clickNewConversation();
 
     // The stale load lands now — with the guard bump it must be ignored.
@@ -118,7 +118,7 @@ describe('new task: the closed session must not pop back up', () => {
 
     // Arm the event stream: one throwaway send on the fresh New Task view.
     await send('warm the stream');
-    // Open A, then leave it via 新建任务.
+    // Open A, then leave it via New Task.
     fireEvent.click(screen.getByText('Task A'));
     await waitFor(() => expect(window.starriver.getSessionMessages).toHaveBeenCalledWith('s-a'));
     await clickNewConversation();
@@ -162,7 +162,7 @@ describe('new task: the closed session must not pop back up', () => {
     await waitFor(() => expect(screen.getByText('Task A')).toBeTruthy());
 
     // Open session A (its conversation fills the view), then click the
-    // 新任务 nav item. The old `tab === 'coding'` gate turned this click into
+    // New Task nav item. The old `tab === 'coding'` gate turned this click into
     // a bare tab switch and CodingView's remount restored the conversation.
     fireEvent.click(screen.getByText('Task A'));
     await waitFor(() => expect(window.starriver.getSessionMessages).toHaveBeenCalledWith('s-a'));
@@ -196,7 +196,7 @@ describe('new task: the closed session must not pop back up', () => {
     await waitFor(() => expect(window.starriver.getSessionArchiveMessages).toHaveBeenCalledWith('s-a'));
     await waitFor(() => expect(screen.getByText('A-archive-body')).toBeTruthy());
 
-    // Leave via 新建任务: the hero screen shows, and the old transcript must
+    // Leave via New Task: the hero screen shows, and the old transcript must
     // be gone — not stacked below the composer as before the fix.
     await clickNewConversation();
     expect(document.querySelector('.message-list.new-task')).toBeTruthy();
